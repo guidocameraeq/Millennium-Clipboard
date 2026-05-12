@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Millennium Clipboard // GRID</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&family=Audiowide&family=Share+Tech+Mono&family=JetBrains+Mono:wght@400;500;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Background layers (fixed, behind everything) -->
+  <div class="bg-grid" aria-hidden="true"></div>
+  <div class="bg-horizon" aria-hidden="true">
+    <div class="horizon-floor"></div>
+  </div>
+  <div class="bg-vignette" aria-hidden="true"></div>
+  <div class="scanline" aria-hidden="true"></div>
+  <div class="noise" aria-hidden="true"></div>
+
+  <div class="app">
+    <!-- TOP HUD ============================================================ -->
+    <header class="hud">
+      <div class="hud-left">
+        <div class="logo">
+          <span class="logo-mark">◣◢</span>
+          <span class="logo-text">MILLENNIUM</span>
+          <span class="logo-sub">CLIPBOARD // v0.1</span>
+        </div>
+      </div>
+      <div class="hud-center">
+        <div class="hud-stat">
+          <span class="hud-label">HOST</span>
+          <span class="hud-value" id="hud-host">TOBY-WS</span>
+        </div>
+        <div class="hud-stat">
+          <span class="hud-label">NODE</span>
+          <span class="hud-value mono" id="hud-ip">192.168.1.42:53319</span>
+        </div>
+        <div class="hud-stat">
+          <span class="hud-label">UPTIME</span>
+          <span class="hud-value mono" id="hud-uptime">00:00:00</span>
+        </div>
+      </div>
+      <div class="hud-right">
+        <button class="hud-btn" data-action="refresh" title="Rescan network">
+          <span class="hud-btn-glyph">↻</span>SCAN
+        </button>
+        <button class="hud-btn" data-action="history" title="Past transfers">
+          <span class="hud-btn-glyph">≡</span>LOG
+        </button>
+        <button class="hud-btn" data-action="settings" title="Settings">
+          <span class="hud-btn-glyph">⚙</span>CONF
+        </button>
+      </div>
+    </header>
+
+    <!-- MAIN GRID ========================================================== -->
+    <main class="grid">
+      <!-- LEFT: PEERS PANEL -->
+      <section class="card peers">
+        <div class="card-corners">
+          <span></span><span></span><span></span><span></span>
+        </div>
+        <header class="card-head">
+          <h2 class="card-title">
+            <span class="card-pulse"></span>PEERS DETECTED
+          </h2>
+          <div class="card-meta">
+            <span class="badge" id="peer-count">04</span>
+          </div>
+        </header>
+
+        <div class="filter-bar">
+          <button class="filter-btn active" data-filter="all">ALL</button>
+          <button class="filter-btn" data-filter="favorites">FAVORITES</button>
+          <div class="filter-spacer"></div>
+          <span class="filter-hint" id="filter-hint">04 visible</span>
+        </div>
+
+        <ul class="peer-list" id="peer-list">
+          <li class="peer-item selected" data-name="TOBY-NOTEBOOK" data-favorite="true" data-status="online" data-hex="0x4F:A2:E1">
+            <div class="peer-icon" data-type="desktop">
+              <svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none">
+                <rect x="3" y="4" width="18" height="12" rx="1" />
+                <line x1="2" y1="20" x2="22" y2="20" />
+                <line x1="10" y1="16" x2="10" y2="20" />
+                <line x1="14" y1="16" x2="14" y2="20" />
+              </svg>
+            </div>
+            <div class="peer-info">
+              <div class="peer-name-row">
+                <span class="peer-name">TOBY-NOTEBOOK</span>
+                <button class="fav-btn" data-favorite="true" aria-label="Toggle favorite">★</button>
+              </div>
+              <div class="peer-meta">
+                <span class="peer-hex mono">0x4F:A2:E1</span>
+                <span class="peer-ip mono">192.168.1.43</span>
+              </div>
+              <div class="peer-status online">
+                <span class="status-dot"></span>ONLINE
+              </div>
+            </div>
+          </li>
+
+          <li class="peer-item" data-name="GALAXY-S22" data-favorite="true" data-status="online" data-hex="0x9C:1B:F0">
+            <div class="peer-icon" data-type="phone">
+              <svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none">
+                <rect x="7" y="2" width="10" height="20" rx="2" />
+                <line x1="10" y1="19" x2="14" y2="19" />
+              </svg>
+            </div>
+            <div class="peer-info">
+              <div class="peer-name-row">
+                <span class="peer-name">GALAXY-S22</span>
+                <button class="fav-btn" data-favorite="true" aria-label="Toggle favorite">★</button>
+              </div>
+              <div class="peer-meta">
+                <span class="peer-hex mono">0x9C:1B:F0</span>
+                <span class="peer-ip mono">192.168.1.57</span>
+              </div>
+              <div class="peer-status online">
+                <span class="status-dot"></span>ONLINE
+              </div>
+            </div>
+          </li>
+
+          <li class="peer-item" data-name="OFFICE-DESKTOP" data-favorite="false" data-status="online" data-hex="0x2A:88:7D">
+            <div class="peer-icon" data-type="desktop">
+              <svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none">
+                <rect x="3" y="4" width="18" height="12" rx="1" />
+                <line x1="2" y1="20" x2="22" y2="20" />
+                <line x1="10" y1="16" x2="10" y2="20" />
+                <line x1="14" y1="16" x2="14" y2="20" />
+              </svg>
+            </div>
+            <div class="peer-info">
+              <div class="peer-name-row">
+                <span class="peer-name">OFFICE-DESKTOP</span>
+                <button class="fav-btn" data-favorite="false" aria-label="Toggle favorite">☆</button>
+              </div>
+              <div class="peer-meta">
+                <span class="peer-hex mono">0x2A:88:7D</span>
+                <span class="peer-ip mono">192.168.1.71</span>
+              </div>
+              <div class="peer-status online">
+                <span class="status-dot"></span>ONLINE
+              </div>
+            </div>
+          </li>
+
+          <li class="peer-item" data-name="IPAD-LUCIA" data-favorite="false" data-status="away" data-hex="0xE3:55:12">
+            <div class="peer-icon" data-type="tablet">
+              <svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none">
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <line x1="10" y1="18" x2="14" y2="18" />
+              </svg>
+            </div>
+            <div class="peer-info">
+              <div class="peer-name-row">
+                <span class="peer-name">IPAD-LUCIA</span>
+                <button class="fav-btn" data-favorite="false" aria-label="Toggle favorite">☆</button>
+              </div>
+              <div class="peer-meta">
+                <span class="peer-hex mono">0xE3:55:12</span>
+                <span class="peer-ip mono">192.168.1.88</span>
+              </div>
+              <div class="peer-status away">
+                <span class="status-dot"></span>AWAY
+              </div>
+            </div>
+          </li>
+        </ul>
+      </section>
+
+      <!-- RIGHT: COMPOSER -->
+      <section class="card composer">
+        <div class="card-corners">
+          <span></span><span></span><span></span><span></span>
+        </div>
+        <header class="card-head">
+          <h2 class="card-title">
+            <span class="card-arrow">▸</span>TRANSMIT TO
+            <span class="target" id="target-name">TOBY-NOTEBOOK</span>
+          </h2>
+          <div class="target-hex mono" id="target-hex">0x4F:A2:E1</div>
+        </header>
+
+        <div class="mode-switch">
+          <button class="mode-btn active" data-mode="text">
+            <span class="mode-glyph">A</span>TEXT
+          </button>
+          <button class="mode-btn" data-mode="file">
+            <span class="mode-glyph">⬢</span>FILE
+          </button>
+        </div>
+
+        <div class="mode-panel active" id="mode-text">
+          <div class="textarea-wrap">
+            <textarea
+              id="text-composer"
+              spellcheck="false"
+              placeholder=""
+            ></textarea>
+            <div class="textarea-grid"></div>
+          </div>
+          <div class="composer-meta">
+            <span class="mono"><span id="char-count">0000</span> CHARS</span>
+            <span class="mono">CTRL+ENTER → TRANSMIT</span>
+          </div>
+        </div>
+
+        <div class="mode-panel" id="mode-file" hidden>
+          <div class="dropzone" id="dropzone">
+            <div class="dropzone-icon">⬢</div>
+            <div class="dropzone-text">
+              DROP FILES TO QUEUE
+              <small>or click to browse</small>
+            </div>
+            <div class="dropzone-corners">
+              <span></span><span></span><span></span><span></span>
+            </div>
+          </div>
+          <ul class="file-queue" id="file-queue" hidden></ul>
+        </div>
+
+        <div class="send-section">
+          <div class="progress-block" id="progress-block" hidden>
+            <div class="progress-label mono">
+              <span id="progress-text">TRANSMITTING //</span>
+              <span class="progress-pct mono" id="progress-pct">0%</span>
+            </div>
+            <div class="progress-segments" id="progress-segments"></div>
+          </div>
+
+          <button class="transmit-btn" id="send-btn">
+            <span class="transmit-arrow">▸</span>
+            <span class="transmit-text">TRANSMIT</span>
+            <span class="transmit-arrow">◂</span>
+          </button>
+        </div>
+      </section>
+    </main>
+
+    <!-- BOTTOM HUD ========================================================= -->
+    <footer class="status-strip">
+      <div class="status-item">
+        <span class="status-dot active"></span>
+        <span class="status-text mono" id="status-msg">SYS READY · awaiting input</span>
+      </div>
+      <div class="status-item">
+        <span class="status-key">PEERS</span>
+        <span class="status-val mono">04</span>
+      </div>
+      <div class="status-item">
+        <span class="status-key">FAV</span>
+        <span class="status-val mono">02</span>
+      </div>
+      <div class="status-item">
+        <span class="status-key">PROTO</span>
+        <span class="status-val mono">mDNS+HTTPS</span>
+      </div>
+      <div class="status-item">
+        <label class="sound-toggle">
+          <input type="checkbox" id="sound-toggle" />
+          <span class="sound-track"><span class="sound-thumb"></span></span>
+          <span class="status-key">CLACK</span>
+        </label>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Toast / alert (futuristic) -->
+  <div class="alert" id="toast" hidden>
+    <div class="alert-corners">
+      <span></span><span></span><span></span><span></span>
+    </div>
+    <div class="alert-head">
+      <span class="alert-glyph">▸</span>
+      <span class="alert-title">TRANSMIT OK</span>
+    </div>
+    <div class="alert-body" id="toast-text"></div>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>
