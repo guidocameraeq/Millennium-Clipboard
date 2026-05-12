@@ -473,6 +473,24 @@ html, body {
 .peer-list::-webkit-scrollbar-thumb { background: var(--neon-cyan-soft); }
 .peer-list::-webkit-scrollbar-track { background: transparent; }
 
+.peer-loading,
+.peer-empty {
+  list-style: none;
+  text-align: center;
+  padding: 28px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 3px;
+  color: var(--text-mute);
+  border: 1px dashed var(--neon-cyan-soft);
+  animation: pulse-soft 1.6s ease-in-out infinite;
+}
+
+.peer-empty {
+  animation: none;
+  color: var(--text-dim);
+}
+
 .peer-item {
   display: flex;
   align-items: flex-start;

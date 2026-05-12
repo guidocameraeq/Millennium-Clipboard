@@ -1,10 +1,14 @@
-// Millennium Clipboard // GRID — mockup behavior
-// No network code. Animations, interactions, and mock data only.
+// Millennium Clipboard // GRID — frontend
+// Fase 2: peers and local info come from the Rust backend via Tauri's
+// invoke bridge. Send is wired to send_text / send_files (still mocked
+// on the Rust side until Fase 5).
 
 (() => {
   'use strict';
 
-  // ---------- Refs ----------------------------------------------------------
+  const { invoke } = window.__TAURI__.core;
+
+  // ---------- DOM refs -----------------------------------------------------
   const textarea = document.getElementById('text-composer');
   const charCount = document.getElementById('char-count');
   const peerList = document.getElementById('peer-list');
@@ -13,6 +17,12 @@
   const statusMsg = document.getElementById('status-msg');
   const peerCount = document.getElementById('peer-count');
   const filterHint = document.getElementById('filter-hint');
+  const statusPeers = document.getElementById('status-peers');
+  const statusFav = document.getElementById('status-fav');
+  const hudHost = document.getElementById('hud-host');
+  const hudIp = document.getElementById('hud-ip');
+  const hudUptime = document.getElementById('hud-uptime');
+  const hudVersion = document.getElementById('hud-version');
   const sendBtn = document.getElementById('send-btn');
   const progressBlock = document.getElementById('progress-block');
   const progressSegments = document.getElementById('progress-segments');
@@ -23,9 +33,17 @@
   const dropzone = document.getElementById('dropzone');
   const fileQueue = document.getElementById('file-queue');
   const soundToggle = document.getElementById('sound-toggle');
-  const hudUptime = document.getElementById('hud-uptime');
 
-  // ---------- Build the segmented progress bar -----------------------------
+  // ---------- App state ----------------------------------------------------
+  const state = {
+    peers: [],
+    selectedPeerId: null,
+    filter: 'all',
+    mode: 'text',
+    queuedFiles: [], // mock for now; Fase 7 wires real paths
+  };
+
+  // ---------- Progress bar segments ----------------------------------------
   const SEGMENTS = 28;
   for (let i = 0; i < SEGMENTS; i++) {
     const s = document.createElement('div');
@@ -34,17 +52,29 @@
   }
   const segs = [...progressSegments.children];
 
+  function setProgress(pct) {
+    const filled = Math.round((pct / 100) * SEGMENTS);
+    segs.forEach((s, i) => s.classList.toggle('on', i < filled));
+    progressPct.textContent = `${pct}%`;
+  }
+
+  // ---------- Status helpers -----------------------------------------------
+  function setStatus(msg) { statusMsg.textContent = msg; }
+  function showToast(text) {
+    toastText.textContent = text;
+    toast.hidden = false;
+    setTimeout(() => (toast.hidden = true), 3800);
+  }
+
   // ---------- Uptime ticker -------------------------------------------------
   const t0 = Date.now();
-  function tickUptime() {
+  setInterval(() => {
     const s = Math.floor((Date.now() - t0) / 1000);
     const hh = String(Math.floor(s / 3600)).padStart(2, '0');
     const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
     const ss = String(s % 60).padStart(2, '0');
     hudUptime.textContent = `${hh}:${mm}:${ss}`;
-  }
-  setInterval(tickUptime, 1000);
-  tickUptime();
+  }, 1000);
 
   // ---------- Typewriter placeholder rotator -------------------------------
   const placeholderLines = [
@@ -54,12 +84,10 @@
     'NO CLOUD. NO ACCOUNT. JUST THE GRID.',
     'mDNS DISCOVERY · TLS PINNED · LAN ONLY.',
   ];
-
   let phTimer = null;
   let phIdx = 0;
 
   function typePh(line, i = 0) {
-    if (!textarea) return;
     textarea.placeholder = line.slice(0, i) + (i < line.length ? '▌' : '');
     if (i <= line.length) {
       phTimer = setTimeout(() => typePh(line, i + 1), 35 + Math.random() * 45);
@@ -73,33 +101,23 @@
       }, 600);
     }
   }
-
   function stopPh() {
     if (phTimer) { clearTimeout(phTimer); phTimer = null; }
     textarea.placeholder = '';
   }
-
   typePh(placeholderLines[0]);
-
-  textarea.addEventListener('focus', () => {
-    if (!textarea.value) stopPh();
-  });
-
+  textarea.addEventListener('focus', () => { if (!textarea.value) stopPh(); });
   textarea.addEventListener('blur', () => {
-    if (!textarea.value) {
-      phIdx = 0;
-      typePh(placeholderLines[0]);
-    }
+    if (!textarea.value) { phIdx = 0; typePh(placeholderLines[0]); }
   });
 
-  // ---------- Character counter (0000 format) ------------------------------
+  // ---------- Character counter --------------------------------------------
   function updateCharCount() {
-    const n = textarea.value.length;
-    charCount.textContent = String(n).padStart(4, '0');
+    charCount.textContent = String(textarea.value.length).padStart(4, '0');
   }
   textarea.addEventListener('input', updateCharCount);
 
-  // ---------- Click-clack synth (only synth — retro audio cue) ------------
+  // ---------- Audio (click-clack + blips) ----------------------------------
   let audioCtx = null;
   function ctx() {
     if (!audioCtx) {
@@ -108,11 +126,9 @@
     }
     return audioCtx;
   }
-
   function clack() {
     if (!soundToggle.checked) return;
-    const ac = ctx();
-    if (!ac) return;
+    const ac = ctx(); if (!ac) return;
     const now = ac.currentTime;
     const buf = ac.createBuffer(1, 0.04 * ac.sampleRate, ac.sampleRate);
     const d = buf.getChannelData(0);
@@ -120,91 +136,150 @@
       const env = Math.pow(1 - i / d.length, 3);
       d[i] = (Math.random() * 2 - 1) * env * 0.55;
     }
-    const src = ac.createBufferSource();
-    src.buffer = buf;
+    const src = ac.createBufferSource(); src.buffer = buf;
     const flt = ac.createBiquadFilter();
-    flt.type = 'bandpass';
-    flt.frequency.value = 2400;
-    flt.Q.value = 2.5;
-    const g = ac.createGain();
-    g.gain.value = 0.5;
+    flt.type = 'bandpass'; flt.frequency.value = 2400; flt.Q.value = 2.5;
+    const g = ac.createGain(); g.gain.value = 0.5;
     src.connect(flt); flt.connect(g); g.connect(ac.destination);
     src.start(now);
   }
-
   function blip(freq = 880, dur = 0.08) {
     if (!soundToggle.checked) return;
-    const ac = ctx();
-    if (!ac) return;
+    const ac = ctx(); if (!ac) return;
     const now = ac.currentTime;
     const osc = ac.createOscillator();
-    osc.type = 'square';
-    osc.frequency.value = freq;
+    osc.type = 'square'; osc.frequency.value = freq;
     const g = ac.createGain();
     g.gain.setValueAtTime(0.001, now);
     g.gain.exponentialRampToValueAtTime(0.15, now + 0.005);
     g.gain.exponentialRampToValueAtTime(0.001, now + dur);
     osc.connect(g); g.connect(ac.destination);
-    osc.start(now);
-    osc.stop(now + dur);
+    osc.start(now); osc.stop(now + dur);
   }
-
   textarea.addEventListener('keydown', (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    if (e.key.length === 1 || e.key === 'Backspace' || e.key === 'Enter') {
-      clack();
-    }
+    if (e.key.length === 1 || e.key === 'Backspace' || e.key === 'Enter') clack();
   });
 
-  // ---------- Peer list interactions ---------------------------------------
-  function selectPeer(item) {
-    document.querySelectorAll('.peer-item').forEach((el) => el.classList.remove('selected'));
-    item.classList.add('selected');
-    targetName.textContent = item.dataset.name;
-    targetHex.textContent = item.dataset.hex;
-    setStatus(`PEER LOCKED · ${item.dataset.name}`);
-    blip(660, 0.06);
+  // ---------- Peer rendering -----------------------------------------------
+  const ICON_SVG = {
+    desktop: `<svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none"><rect x="3" y="4" width="18" height="12" rx="1" /><line x1="2" y1="20" x2="22" y2="20" /><line x1="10" y1="16" x2="10" y2="20" /><line x1="14" y1="16" x2="14" y2="20" /></svg>`,
+    phone: `<svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none"><rect x="7" y="2" width="10" height="20" rx="2" /><line x1="10" y1="19" x2="14" y2="19" /></svg>`,
+    tablet: `<svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none"><rect x="3" y="3" width="18" height="18" rx="2" /><line x1="10" y1="18" x2="14" y2="18" /></svg>`,
+  };
+
+  function renderPeers() {
+    const filtered = state.peers.filter((p) =>
+      state.filter === 'all' ? true : p.favorite,
+    );
+
+    peerList.innerHTML = '';
+
+    if (state.peers.length === 0) {
+      const li = document.createElement('li');
+      li.className = 'peer-empty';
+      li.textContent = '— NO PEERS ON THE GRID —';
+      peerList.appendChild(li);
+    } else if (filtered.length === 0) {
+      const li = document.createElement('li');
+      li.className = 'peer-empty';
+      li.textContent = '— NO FAVORITES —';
+      peerList.appendChild(li);
+    } else {
+      filtered.forEach((p) => peerList.appendChild(buildPeerItem(p)));
+    }
+
+    const favCount = state.peers.filter((p) => p.favorite).length;
+    peerCount.textContent = String(state.peers.length).padStart(2, '0');
+    statusPeers.textContent = String(state.peers.length).padStart(2, '0');
+    statusFav.textContent = String(favCount).padStart(2, '0');
+    filterHint.textContent = `${String(filtered.length).padStart(2, '0')} visible`;
   }
 
-  peerList.addEventListener('click', (e) => {
-    const fav = e.target.closest('.fav-btn');
-    if (fav) {
+  function buildPeerItem(p) {
+    const li = document.createElement('li');
+    li.className = 'peer-item';
+    if (p.id === state.selectedPeerId) li.classList.add('selected');
+    li.dataset.id = p.id;
+
+    li.innerHTML = `
+      <div class="peer-icon">${ICON_SVG[p.iconType] || ICON_SVG.desktop}</div>
+      <div class="peer-info">
+        <div class="peer-name-row">
+          <span class="peer-name"></span>
+          <button class="fav-btn" aria-label="Toggle favorite"></button>
+        </div>
+        <div class="peer-meta">
+          <span class="peer-hex mono"></span>
+          <span class="peer-ip mono"></span>
+        </div>
+        <div class="peer-status">
+          <span class="status-dot"></span><span class="status-label"></span>
+        </div>
+      </div>
+    `;
+
+    li.querySelector('.peer-name').textContent = p.name;
+    li.querySelector('.peer-hex').textContent = p.hexId;
+    li.querySelector('.peer-ip').textContent = p.ip;
+
+    const favBtn = li.querySelector('.fav-btn');
+    favBtn.textContent = p.favorite ? '★' : '☆';
+    favBtn.dataset.favorite = p.favorite ? 'true' : 'false';
+
+    const statusEl = li.querySelector('.peer-status');
+    statusEl.classList.add(p.status);
+    li.querySelector('.status-label').textContent = p.status.toUpperCase();
+
+    return li;
+  }
+
+  function selectPeer(id) {
+    const peer = state.peers.find((p) => p.id === id);
+    if (!peer) return;
+    state.selectedPeerId = id;
+    targetName.textContent = peer.name;
+    targetHex.textContent = peer.hexId;
+    sendBtn.disabled = false;
+    setStatus(`PEER LOCKED · ${peer.name}`);
+    blip(660, 0.06);
+    document.querySelectorAll('.peer-item').forEach((el) => {
+      el.classList.toggle('selected', el.dataset.id === id);
+    });
+  }
+
+  // ---------- Peer list events (delegated) ---------------------------------
+  peerList.addEventListener('click', async (e) => {
+    const favBtn = e.target.closest('.fav-btn');
+    if (favBtn) {
       e.stopPropagation();
-      const isFav = fav.dataset.favorite === 'true';
-      const next = !isFav;
-      fav.dataset.favorite = next ? 'true' : 'false';
-      fav.textContent = next ? '★' : '☆';
-      const item = fav.closest('.peer-item');
-      if (item) item.dataset.favorite = next ? 'true' : 'false';
-      applyFilter();
-      blip(next ? 1320 : 440, 0.05);
+      const item = favBtn.closest('.peer-item');
+      const id = item?.dataset.id;
+      if (!id) return;
+      const peer = state.peers.find((p) => p.id === id);
+      if (!peer) return;
+      const next = !peer.favorite;
+      try {
+        await invoke('toggle_favorite', { peerId: id, value: next });
+        peer.favorite = next;
+        renderPeers();
+        blip(next ? 1320 : 440, 0.05);
+      } catch (err) {
+        setStatus(`ERR toggle_favorite · ${err}`);
+      }
       return;
     }
     const item = e.target.closest('.peer-item');
-    if (item) selectPeer(item);
+    if (item && item.dataset.id) selectPeer(item.dataset.id);
   });
 
-  // ---------- Filter buttons (ALL / FAVORITES) -----------------------------
-  function applyFilter() {
-    const active = document.querySelector('.filter-btn.active');
-    const mode = active ? active.dataset.filter : 'all';
-    let visible = 0;
-    document.querySelectorAll('.peer-item').forEach((item) => {
-      const isFav = item.dataset.favorite === 'true';
-      const show = mode === 'all' || isFav;
-      item.style.display = show ? '' : 'none';
-      if (show) visible++;
-    });
-    filterHint.textContent = `${String(visible).padStart(2, '0')} visible`;
-    const total = document.querySelectorAll('.peer-item').length;
-    peerCount.textContent = String(total).padStart(2, '0');
-  }
-
+  // ---------- Filter buttons -----------------------------------------------
   document.querySelectorAll('.filter-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.filter-btn').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
-      applyFilter();
+      state.filter = btn.dataset.filter;
+      renderPeers();
       blip(880, 0.05);
     });
   });
@@ -212,11 +287,11 @@
   // ---------- Mode switch (TEXT / FILE) ------------------------------------
   document.querySelectorAll('.mode-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
-      const mode = btn.dataset.mode;
+      state.mode = btn.dataset.mode;
       document.querySelectorAll('.mode-btn').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
       document.querySelectorAll('.mode-panel').forEach((p) => {
-        const active = p.id === `mode-${mode}`;
+        const active = p.id === `mode-${state.mode}`;
         p.classList.toggle('active', active);
         p.hidden = !active;
       });
@@ -224,19 +299,18 @@
     });
   });
 
-  // ---------- File dropzone (visual only) ----------------------------------
+  // ---------- File dropzone (mock paths — Fase 7 wires real paths) --------
   function mockAddFile(name, size) {
     fileQueue.hidden = false;
     const li = document.createElement('li');
     li.textContent = `▸ ${name}  //  ${size}`;
     fileQueue.appendChild(li);
+    state.queuedFiles.push(name);
   }
-
   dropzone.addEventListener('click', () => {
     mockAddFile('proyecto-borrador.docx', '142 KB');
     blip(1100, 0.05);
   });
-
   dropzone.addEventListener('dragover', (e) => {
     e.preventDefault();
     dropzone.style.background = 'rgba(0, 240, 255, 0.08)';
@@ -252,80 +326,93 @@
     blip(1320, 0.05);
   });
 
-  // ---------- Send / transmit ----------------------------------------------
-  function setStatus(msg) { statusMsg.textContent = msg; }
+  // ---------- Transmit / send ----------------------------------------------
+  async function simulateTransmit() {
+    if (!state.selectedPeerId) {
+      setStatus('ERR · no peer selected.');
+      blip(220, 0.12);
+      return;
+    }
 
-  function showToast(text) {
-    toastText.textContent = text;
-    toast.hidden = false;
-    setTimeout(() => (toast.hidden = true), 3800);
-  }
-
-  function setProgress(pct) {
-    const filled = Math.round((pct / 100) * SEGMENTS);
-    segs.forEach((s, i) => s.classList.toggle('on', i < filled));
-    progressPct.textContent = `${pct}%`;
-  }
-
-  function simulateTransmit() {
-    const activeMode = document.querySelector('.mode-btn.active').dataset.mode;
-    let payload;
-
-    if (activeMode === 'text') {
+    let payloadDesc;
+    if (state.mode === 'text') {
       if (!textarea.value.trim()) {
         setStatus('ERR · empty payload. Type something first.');
         blip(220, 0.12);
         return;
       }
-      payload = `${textarea.value.length} CHARS`;
+      payloadDesc = `${textarea.value.length} CHARS`;
     } else {
-      if (fileQueue.children.length === 0) {
+      if (state.queuedFiles.length === 0) {
         setStatus('ERR · queue empty. Drop a file first.');
         blip(220, 0.12);
         return;
       }
-      payload = `${fileQueue.children.length} FILE(S)`;
+      payloadDesc = `${state.queuedFiles.length} FILE(S)`;
     }
 
+    const peer = state.peers.find((p) => p.id === state.selectedPeerId);
     sendBtn.disabled = true;
     progressBlock.hidden = false;
     setProgress(0);
-    progressText.textContent = `TRANSMITTING // ${targetName.textContent}`;
-    setStatus(`TX → ${targetName.textContent}...`);
+    progressText.textContent = `TRANSMITTING // ${peer.name}`;
+    setStatus(`TX → ${peer.name}...`);
     blip(880, 0.05);
 
+    // Local animation runs while the real invoke happens. In Fase 5+ the
+    // backend will emit transfer-progress events that drive this instead.
     let pct = 0;
-    const tick = () => {
-      pct = Math.min(100, pct + Math.floor(4 + Math.random() * 12));
+    let animDone = false;
+    const animate = () => {
+      pct = Math.min(95, pct + Math.floor(4 + Math.random() * 12));
       setProgress(pct);
-      if (soundToggle.checked && pct < 100) blip(660 + pct * 6, 0.02);
-      if (pct < 100) {
-        setTimeout(tick, 90 + Math.random() * 110);
-      } else {
-        progressText.textContent = 'COMPLETE';
-        blip(1760, 0.12);
-        setTimeout(() => blip(2200, 0.16), 130);
-        setTimeout(() => {
-          progressBlock.hidden = true;
-          sendBtn.disabled = false;
-          setProgress(0);
-          setStatus(`OK · delivered to ${targetName.textContent}.`);
-          showToast(`${targetName.textContent} · ${payload} · ACK`);
-          if (activeMode === 'text') {
-            textarea.value = '';
-            updateCharCount();
-          } else {
-            fileQueue.innerHTML = '';
-            fileQueue.hidden = true;
-          }
-        }, 700);
-      }
+      if (soundToggle.checked && pct < 95) blip(660 + pct * 6, 0.02);
+      if (!animDone) setTimeout(animate, 90 + Math.random() * 110);
     };
-    tick();
+    animate();
+
+    try {
+      if (state.mode === 'text') {
+        await invoke('send_text', {
+          peerId: state.selectedPeerId,
+          text: textarea.value,
+        });
+      } else {
+        await invoke('send_files', {
+          peerId: state.selectedPeerId,
+          filePaths: state.queuedFiles,
+        });
+      }
+      animDone = true;
+      setProgress(100);
+      progressText.textContent = 'COMPLETE';
+      blip(1760, 0.12);
+      setTimeout(() => blip(2200, 0.16), 130);
+      setTimeout(() => {
+        progressBlock.hidden = true;
+        sendBtn.disabled = false;
+        setProgress(0);
+        setStatus(`OK · delivered to ${peer.name}.`);
+        showToast(`${peer.name} · ${payloadDesc} · ACK`);
+        if (state.mode === 'text') {
+          textarea.value = '';
+          updateCharCount();
+        } else {
+          fileQueue.innerHTML = '';
+          fileQueue.hidden = true;
+          state.queuedFiles = [];
+        }
+      }, 700);
+    } catch (err) {
+      animDone = true;
+      setProgress(0);
+      progressBlock.hidden = true;
+      sendBtn.disabled = false;
+      setStatus(`ERR transmit · ${err}`);
+      blip(220, 0.2);
+    }
   }
-
   sendBtn.addEventListener('click', simulateTransmit);
-
   textarea.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault();
@@ -335,31 +422,70 @@
 
   // ---------- HUD action buttons -------------------------------------------
   document.querySelectorAll('.hud-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       const action = btn.dataset.action;
       blip(880, 0.06);
       if (action === 'refresh') {
-        setStatus('SCAN · probing 192.168.1.0/24...');
-        document.querySelectorAll('.peer-item').forEach((item, i) => {
-          item.style.opacity = '0';
-          item.style.transform = 'translateY(-6px)';
-          setTimeout(() => {
-            item.style.transition = 'all 0.25s ease-out';
-            item.style.opacity = '';
-            item.style.transform = '';
-          }, 200 + i * 100);
-        });
-        setTimeout(() => setStatus('OK · 4 peers locked on grid.'), 900);
+        setStatus('SCAN · probing the network...');
+        try {
+          const peers = await invoke('rescan_peers');
+          state.peers = peers;
+          if (state.selectedPeerId && !peers.find((p) => p.id === state.selectedPeerId)) {
+            state.selectedPeerId = peers[0]?.id || null;
+            if (state.selectedPeerId) selectPeer(state.selectedPeerId);
+          }
+          renderPeers();
+          setStatus(`OK · ${peers.length} peer(s) on the grid.`);
+        } catch (err) {
+          setStatus(`ERR rescan · ${err}`);
+        }
       } else if (action === 'history') {
-        setStatus('LOG · 0 records (TODO)');
+        setStatus('LOG · panel TBD (Fase 6+)');
       } else if (action === 'settings') {
         setStatus('CONF · panel TBD');
       }
     });
   });
 
-  // ---------- Init pulse ----------------------------------------------------
-  setTimeout(() => setStatus('GRID ONLINE · 4 peers detected.'), 500);
-  setTimeout(() => setStatus('SYS READY · awaiting input'), 2400);
-  updateCharCount();
+  // ---------- Boot ----------------------------------------------------------
+  async function boot() {
+    try {
+      const info = await invoke('get_local_info');
+      hudHost.textContent = info.alias;
+      hudIp.textContent = `${info.ip}:${info.port}`;
+      hudVersion.textContent = `v${info.version}`;
+    } catch (err) {
+      hudHost.textContent = 'ERR';
+      setStatus(`ERR get_local_info · ${err}`);
+      console.error(err);
+      return;
+    }
+
+    try {
+      const peers = await invoke('list_peers');
+      state.peers = peers;
+      if (peers.length > 0) {
+        state.selectedPeerId = peers[0].id;
+      }
+      renderPeers();
+      if (state.selectedPeerId) selectPeer(state.selectedPeerId);
+      setStatus(`GRID ONLINE · ${peers.length} peer(s) detected.`);
+    } catch (err) {
+      setStatus(`ERR list_peers · ${err}`);
+      console.error(err);
+    }
+
+    updateCharCount();
+    setTimeout(() => {
+      if (statusMsg.textContent.startsWith('GRID ONLINE')) {
+        setStatus('SYS READY · awaiting input');
+      }
+    }, 2200);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
 })();

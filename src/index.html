@@ -30,17 +30,17 @@
         <div class="logo">
           <span class="logo-mark">◣◢</span>
           <span class="logo-text">MILLENNIUM</span>
-          <span class="logo-sub">CLIPBOARD // v0.1</span>
+          <span class="logo-sub">CLIPBOARD // <span id="hud-version">v0.0</span></span>
         </div>
       </div>
       <div class="hud-center">
         <div class="hud-stat">
           <span class="hud-label">HOST</span>
-          <span class="hud-value" id="hud-host">TOBY-WS</span>
+          <span class="hud-value" id="hud-host">—</span>
         </div>
         <div class="hud-stat">
           <span class="hud-label">NODE</span>
-          <span class="hud-value mono" id="hud-ip">192.168.1.42:53319</span>
+          <span class="hud-value mono" id="hud-ip">—</span>
         </div>
         <div class="hud-stat">
           <span class="hud-label">UPTIME</span>
@@ -72,7 +72,7 @@
             <span class="card-pulse"></span>PEERS DETECTED
           </h2>
           <div class="card-meta">
-            <span class="badge" id="peer-count">04</span>
+            <span class="badge" id="peer-count">00</span>
           </div>
         </header>
 
@@ -80,101 +80,11 @@
           <button class="filter-btn active" data-filter="all">ALL</button>
           <button class="filter-btn" data-filter="favorites">FAVORITES</button>
           <div class="filter-spacer"></div>
-          <span class="filter-hint" id="filter-hint">04 visible</span>
+          <span class="filter-hint" id="filter-hint">scanning...</span>
         </div>
 
         <ul class="peer-list" id="peer-list">
-          <li class="peer-item selected" data-name="TOBY-NOTEBOOK" data-favorite="true" data-status="online" data-hex="0x4F:A2:E1">
-            <div class="peer-icon" data-type="desktop">
-              <svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none">
-                <rect x="3" y="4" width="18" height="12" rx="1" />
-                <line x1="2" y1="20" x2="22" y2="20" />
-                <line x1="10" y1="16" x2="10" y2="20" />
-                <line x1="14" y1="16" x2="14" y2="20" />
-              </svg>
-            </div>
-            <div class="peer-info">
-              <div class="peer-name-row">
-                <span class="peer-name">TOBY-NOTEBOOK</span>
-                <button class="fav-btn" data-favorite="true" aria-label="Toggle favorite">★</button>
-              </div>
-              <div class="peer-meta">
-                <span class="peer-hex mono">0x4F:A2:E1</span>
-                <span class="peer-ip mono">192.168.1.43</span>
-              </div>
-              <div class="peer-status online">
-                <span class="status-dot"></span>ONLINE
-              </div>
-            </div>
-          </li>
-
-          <li class="peer-item" data-name="GALAXY-S22" data-favorite="true" data-status="online" data-hex="0x9C:1B:F0">
-            <div class="peer-icon" data-type="phone">
-              <svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none">
-                <rect x="7" y="2" width="10" height="20" rx="2" />
-                <line x1="10" y1="19" x2="14" y2="19" />
-              </svg>
-            </div>
-            <div class="peer-info">
-              <div class="peer-name-row">
-                <span class="peer-name">GALAXY-S22</span>
-                <button class="fav-btn" data-favorite="true" aria-label="Toggle favorite">★</button>
-              </div>
-              <div class="peer-meta">
-                <span class="peer-hex mono">0x9C:1B:F0</span>
-                <span class="peer-ip mono">192.168.1.57</span>
-              </div>
-              <div class="peer-status online">
-                <span class="status-dot"></span>ONLINE
-              </div>
-            </div>
-          </li>
-
-          <li class="peer-item" data-name="OFFICE-DESKTOP" data-favorite="false" data-status="online" data-hex="0x2A:88:7D">
-            <div class="peer-icon" data-type="desktop">
-              <svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none">
-                <rect x="3" y="4" width="18" height="12" rx="1" />
-                <line x1="2" y1="20" x2="22" y2="20" />
-                <line x1="10" y1="16" x2="10" y2="20" />
-                <line x1="14" y1="16" x2="14" y2="20" />
-              </svg>
-            </div>
-            <div class="peer-info">
-              <div class="peer-name-row">
-                <span class="peer-name">OFFICE-DESKTOP</span>
-                <button class="fav-btn" data-favorite="false" aria-label="Toggle favorite">☆</button>
-              </div>
-              <div class="peer-meta">
-                <span class="peer-hex mono">0x2A:88:7D</span>
-                <span class="peer-ip mono">192.168.1.71</span>
-              </div>
-              <div class="peer-status online">
-                <span class="status-dot"></span>ONLINE
-              </div>
-            </div>
-          </li>
-
-          <li class="peer-item" data-name="IPAD-LUCIA" data-favorite="false" data-status="away" data-hex="0xE3:55:12">
-            <div class="peer-icon" data-type="tablet">
-              <svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none">
-                <rect x="3" y="3" width="18" height="18" rx="2" />
-                <line x1="10" y1="18" x2="14" y2="18" />
-              </svg>
-            </div>
-            <div class="peer-info">
-              <div class="peer-name-row">
-                <span class="peer-name">IPAD-LUCIA</span>
-                <button class="fav-btn" data-favorite="false" aria-label="Toggle favorite">☆</button>
-              </div>
-              <div class="peer-meta">
-                <span class="peer-hex mono">0xE3:55:12</span>
-                <span class="peer-ip mono">192.168.1.88</span>
-              </div>
-              <div class="peer-status away">
-                <span class="status-dot"></span>AWAY
-              </div>
-            </div>
-          </li>
+          <li class="peer-loading">⌛ SCANNING NETWORK...</li>
         </ul>
       </section>
 
@@ -186,9 +96,9 @@
         <header class="card-head">
           <h2 class="card-title">
             <span class="card-arrow">▸</span>TRANSMIT TO
-            <span class="target" id="target-name">TOBY-NOTEBOOK</span>
+            <span class="target" id="target-name">—</span>
           </h2>
-          <div class="target-hex mono" id="target-hex">0x4F:A2:E1</div>
+          <div class="target-hex mono" id="target-hex">—</div>
         </header>
 
         <div class="mode-switch">
@@ -238,7 +148,7 @@
             <div class="progress-segments" id="progress-segments"></div>
           </div>
 
-          <button class="transmit-btn" id="send-btn">
+          <button class="transmit-btn" id="send-btn" disabled>
             <span class="transmit-arrow">▸</span>
             <span class="transmit-text">TRANSMIT</span>
             <span class="transmit-arrow">◂</span>
@@ -251,15 +161,15 @@
     <footer class="status-strip">
       <div class="status-item">
         <span class="status-dot active"></span>
-        <span class="status-text mono" id="status-msg">SYS READY · awaiting input</span>
+        <span class="status-text mono" id="status-msg">INITIALIZING...</span>
       </div>
       <div class="status-item">
         <span class="status-key">PEERS</span>
-        <span class="status-val mono">04</span>
+        <span class="status-val mono" id="status-peers">00</span>
       </div>
       <div class="status-item">
         <span class="status-key">FAV</span>
-        <span class="status-val mono">02</span>
+        <span class="status-val mono" id="status-fav">00</span>
       </div>
       <div class="status-item">
         <span class="status-key">PROTO</span>
