@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Millennium Clipboard 2000</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Special+Elite&family=VT323&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="https://unpkg.com/98.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="desktop">
+  <div class="crt-overlay"></div>
+
+  <div class="window main-window">
+    <div class="title-bar">
+      <div class="title-bar-text">
+        <span class="title-icon" aria-hidden="true">📋</span>
+        Millennium Clipboard 2000
+      </div>
+      <div class="title-bar-controls">
+        <button aria-label="Minimize"></button>
+        <button aria-label="Maximize"></button>
+        <button aria-label="Close"></button>
+      </div>
+    </div>
+
+    <ul role="menubar" class="menu-bar">
+      <li role="menuitem"><u>F</u>ile</li>
+      <li role="menuitem"><u>E</u>dit</li>
+      <li role="menuitem"><u>V</u>iew</li>
+      <li role="menuitem"><u>D</u>evices</li>
+      <li role="menuitem"><u>H</u>elp</li>
+    </ul>
+
+    <div class="toolbar">
+      <button class="toolbar-btn" title="Scan the network again">
+        <span class="tb-icon">📡</span> Refresh
+      </button>
+      <button class="toolbar-btn" title="Open settings">
+        <span class="tb-icon">⚙</span> Settings
+      </button>
+      <button class="toolbar-btn" title="View past transfers">
+        <span class="tb-icon">📜</span> History
+      </button>
+      <div class="toolbar-spacer"></div>
+      <label class="sound-toggle" title="Toggle click-clack typewriter sound">
+        <input type="checkbox" id="sound-toggle" />
+        Sound
+      </label>
+    </div>
+
+    <div class="window-body main-body">
+      <fieldset class="panel device-panel">
+        <legend>Devices on network</legend>
+
+        <div class="filter-row">
+          <label>
+            <input type="radio" name="device-filter" value="all" checked />
+            All
+          </label>
+          <label>
+            <input type="radio" name="device-filter" value="favorites" />
+            Favorites only
+          </label>
+          <span class="device-counter" id="device-counter">4 found</span>
+        </div>
+
+        <ul class="device-list" id="device-list">
+          <li class="device-item selected" data-name="Toby-Notebook" data-favorite="true" data-status="online">
+            <span class="device-icon" aria-hidden="true">🖥️</span>
+            <div class="device-info">
+              <div class="device-name-row">
+                <span class="device-name">Toby-Notebook</span>
+                <span class="favorite-star" title="Favorite">★</span>
+              </div>
+              <div class="device-meta">
+                <span class="device-status online">● Online</span>
+                <span class="device-ip">192.168.1.43</span>
+              </div>
+            </div>
+          </li>
+          <li class="device-item" data-name="Galaxy-S22" data-favorite="true" data-status="online">
+            <span class="device-icon" aria-hidden="true">📱</span>
+            <div class="device-info">
+              <div class="device-name-row">
+                <span class="device-name">Galaxy-S22</span>
+                <span class="favorite-star" title="Favorite">★</span>
+              </div>
+              <div class="device-meta">
+                <span class="device-status online">● Online</span>
+                <span class="device-ip">192.168.1.57</span>
+              </div>
+            </div>
+          </li>
+          <li class="device-item" data-name="Office-Desktop" data-favorite="false" data-status="online">
+            <span class="device-icon" aria-hidden="true">🖥️</span>
+            <div class="device-info">
+              <div class="device-name-row">
+                <span class="device-name">Office-Desktop</span>
+                <span class="favorite-star empty" title="Click to favorite">☆</span>
+              </div>
+              <div class="device-meta">
+                <span class="device-status online">● Online</span>
+                <span class="device-ip">192.168.1.71</span>
+              </div>
+            </div>
+          </li>
+          <li class="device-item" data-name="iPad-de-Lucia" data-favorite="false" data-status="away">
+            <span class="device-icon" aria-hidden="true">📲</span>
+            <div class="device-info">
+              <div class="device-name-row">
+                <span class="device-name">iPad-de-Lucia</span>
+                <span class="favorite-star empty" title="Click to favorite">☆</span>
+              </div>
+              <div class="device-meta">
+                <span class="device-status away">● Away</span>
+                <span class="device-ip">192.168.1.88</span>
+              </div>
+            </div>
+          </li>
+        </ul>
+      </fieldset>
+
+      <fieldset class="panel composer-panel">
+        <legend>Send to <span id="target-name">Toby-Notebook</span></legend>
+
+        <menu role="tablist" class="tabs">
+          <button role="tab" aria-selected="true" aria-controls="tab-text" data-tab="text">
+            Text
+          </button>
+          <button role="tab" aria-selected="false" aria-controls="tab-file" data-tab="file">
+            File
+          </button>
+        </menu>
+
+        <div role="tabpanel" id="tab-text" class="tab-panel active">
+          <textarea
+            id="text-composer"
+            class="typewriter-text"
+            placeholder=""
+            spellcheck="false"
+          ></textarea>
+          <div class="composer-meta">
+            <span class="char-count"><span id="char-count">0</span> characters</span>
+            <span class="composer-hint">Ctrl+Enter to send</span>
+          </div>
+        </div>
+
+        <div role="tabpanel" id="tab-file" class="tab-panel" hidden>
+          <div class="dropzone" id="dropzone">
+            <div class="dropzone-icon">📁</div>
+            <div class="dropzone-text">
+              Drop files here<br />
+              <small>or click to browse</small>
+            </div>
+          </div>
+          <ul class="file-queue" id="file-queue" hidden></ul>
+        </div>
+
+        <div class="send-bar">
+          <div class="progress-wrap" id="progress-wrap" hidden>
+            <div class="progress-bar">
+              <div class="progress-fill" id="progress-fill"></div>
+            </div>
+            <span class="progress-text" id="progress-text">Sending… 0%</span>
+          </div>
+          <button class="send-btn" id="send-btn">
+            <span class="send-label">⏎ Send</span>
+          </button>
+        </div>
+      </fieldset>
+    </div>
+
+    <div class="status-bar">
+      <p class="status-bar-field" id="status-msg">Ready.</p>
+      <p class="status-bar-field">4 devices · 2 favorites</p>
+      <p class="status-bar-field">Listening on 192.168.1.42:53319</p>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" hidden>
+    <div class="toast-arrow"></div>
+    <div class="toast-body">
+      <div class="toast-title">✓ Sent successfully</div>
+      <div class="toast-text" id="toast-text"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
