@@ -7,6 +7,7 @@
   'use strict';
 
   const { invoke } = window.__TAURI__.core;
+  const { listen } = window.__TAURI__.event;
 
   // ---------- DOM refs -----------------------------------------------------
   const textarea = document.getElementById('text-composer');
@@ -463,24 +464,58 @@
 
     try {
       const peers = await invoke('list_peers');
-      state.peers = peers;
-      if (peers.length > 0) {
-        state.selectedPeerId = peers[0].id;
-      }
-      renderPeers();
-      if (state.selectedPeerId) selectPeer(state.selectedPeerId);
-      setStatus(`GRID ONLINE · ${peers.length} peer(s) detected.`);
+      applyPeers(peers, /* initial = */ true);
     } catch (err) {
       setStatus(`ERR list_peers · ${err}`);
       console.error(err);
     }
 
+    // Live updates from the mDNS daemon (Fase 3+)
+    await listen('peers-changed', (event) => {
+      applyPeers(event.payload, /* initial = */ false);
+    });
+
     updateCharCount();
     setTimeout(() => {
-      if (statusMsg.textContent.startsWith('GRID ONLINE')) {
+      if (statusMsg.textContent.startsWith('GRID ONLINE')
+          || statusMsg.textContent.startsWith('GRID · waiting')) {
         setStatus('SYS READY · awaiting input');
       }
     }, 2200);
+  }
+
+  // Merge incoming peers list, preserving local favorite state (until
+  // Fase 6 hooks favorites to backend persistence).
+  function applyPeers(wirePeers, initial) {
+    const localFavs = new Map(state.peers.map((p) => [p.id, p.favorite]));
+    state.peers = wirePeers.map((p) => ({
+      ...p,
+      favorite: localFavs.get(p.id) ?? p.favorite,
+    }));
+
+    // Drop selection if the selected peer vanished.
+    if (state.selectedPeerId && !state.peers.find((p) => p.id === state.selectedPeerId)) {
+      state.selectedPeerId = null;
+      targetName.textContent = '—';
+      targetHex.textContent = '—';
+      sendBtn.disabled = true;
+    }
+
+    // If nothing selected and peers exist, pick the first.
+    if (!state.selectedPeerId && state.peers.length > 0) {
+      state.selectedPeerId = state.peers[0].id;
+      selectPeer(state.selectedPeerId);
+    } else {
+      renderPeers();
+    }
+
+    if (state.peers.length === 0) {
+      setStatus('GRID · waiting for peers...');
+    } else if (initial) {
+      setStatus(`GRID ONLINE · ${state.peers.length} peer(s) detected.`);
+    } else {
+      setStatus(`GRID · ${state.peers.length} peer(s) online.`);
+    }
   }
 
   if (document.readyState === 'loading') {
