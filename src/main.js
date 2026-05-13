@@ -58,6 +58,20 @@
   const addPeerError = document.getElementById('add-peer-error');
   const addPeerSubmit = document.getElementById('add-peer-submit');
 
+  const peerDetailsModal = document.getElementById('peer-details-modal');
+  const peerDetailsTitle = document.getElementById('peer-details-title');
+  const peerDetailsName = document.getElementById('peer-details-name');
+  const peerDetailsFp = document.getElementById('peer-details-fp');
+  const peerDetailsAddr = document.getElementById('peer-details-addr');
+  const peerDetailsStatus = document.getElementById('peer-details-status');
+  const peerDetailsFav = document.getElementById('peer-details-fav');
+  const peerDetailsFavLabel = document.getElementById('peer-details-fav-label');
+  const peerDetailsClip = document.getElementById('peer-details-clip');
+  const peerDetailsClipLabel = document.getElementById('peer-details-clip-label');
+  const peerDetailsRemove = document.getElementById('peer-details-remove');
+  const peerDetailsCloseBtn = document.getElementById('peer-details-close');
+  let peerDetailsCurrentId = null;
+
   const settingsCheckUpdate = document.getElementById('settings-check-update');
   const settingsUpdateStatus = document.getElementById('settings-update-status');
   const settingsUpdateAction = document.getElementById('settings-update-action');
@@ -337,14 +351,11 @@
         <div class="peer-name-row">
           <span class="peer-name-wrap">
             <span class="peer-name" title="Double-click to rename"></span>
+            <span class="peer-indicator fav-ind" hidden title="Favorite">★</span>
+            <span class="peer-indicator clip-ind" hidden title="Clipboard sync">📋</span>
             <span class="peer-badge manual-badge" hidden>MANUAL</span>
           </span>
-          <span class="peer-actions">
-            <button class="peer-action-btn rename-btn" title="Rename">✎</button>
-            <button class="peer-action-btn remove-btn" title="Remove manual peer" hidden>🗑</button>
-            <button class="clip-btn" aria-label="Toggle clipboard sync">📋</button>
-            <button class="fav-btn" aria-label="Toggle favorite"></button>
-          </span>
+          <button class="peer-action-btn details-btn" title="Peer details">⋯</button>
         </div>
         <div class="peer-meta">
           <span class="peer-hex mono"></span>
@@ -360,16 +371,9 @@
     li.querySelector('.peer-hex').textContent = p.hexId;
     li.querySelector('.peer-ip').textContent = p.ip;
 
-    if (p.manual) {
-      li.querySelector('.manual-badge').hidden = false;
-      li.querySelector('.remove-btn').hidden = false;
-    }
-
-    const clipBtn = li.querySelector('.clip-btn');
-    clipBtn.dataset.on = p.clipboardSync ? 'true' : 'false';
-    clipBtn.title = p.clipboardSync
-      ? 'Clipboard sync ON · click to disable'
-      : 'Clipboard sync OFF · click to enable (mutual consent required)';
+    if (p.manual) li.querySelector('.manual-badge').hidden = false;
+    if (p.favorite) li.querySelector('.fav-ind').hidden = false;
+    if (p.clipboardSync) li.querySelector('.clip-ind').hidden = false;
 
     const favBtn = li.querySelector('.fav-btn');
     favBtn.textContent = p.favorite ? '★' : '☆';
@@ -400,73 +404,15 @@
   }
 
   // ---------- Peer list events (delegated) ---------------------------------
-  peerList.addEventListener('click', async (e) => {
-    // Rename
-    const renameBtn = e.target.closest('.rename-btn');
-    if (renameBtn) {
+  peerList.addEventListener('click', (e) => {
+    const detailsBtn = e.target.closest('.details-btn');
+    if (detailsBtn) {
       e.stopPropagation();
-      const item = renameBtn.closest('.peer-item');
-      if (item) startInlineRename(item);
-      return;
-    }
-    // Remove manual peer
-    const removeBtn = e.target.closest('.remove-btn');
-    if (removeBtn) {
-      e.stopPropagation();
-      const item = removeBtn.closest('.peer-item');
+      const item = detailsBtn.closest('.peer-item');
       const id = item?.dataset.id;
       if (!id) return;
       const peer = state.peers.find((p) => p.id === id);
-      if (!peer) return;
-      const ok = confirm(`Remove manual peer "${peer.name}"?\nFavorite state will be kept.`);
-      if (!ok) return;
-      try {
-        await invoke('remove_manual_peer', { peerId: id });
-        blip(440, 0.08);
-        setStatus(`Removed manual peer ${peer.name}`);
-      } catch (err) {
-        setStatus(`ERR remove · ${err}`);
-      }
-      return;
-    }
-    // Clipboard sync toggle
-    const clipBtn = e.target.closest('.clip-btn');
-    if (clipBtn) {
-      e.stopPropagation();
-      const item = clipBtn.closest('.peer-item');
-      const id = item?.dataset.id;
-      if (!id) return;
-      const next = clipBtn.dataset.on !== 'true';
-      try {
-        await invoke('set_clipboard_sync', { peerId: id, enabled: next });
-        clipBtn.dataset.on = next ? 'true' : 'false';
-        blip(next ? 1320 : 440, 0.05);
-        setStatus(next
-          ? `Clipboard sync ENABLED for this peer (both sides must enable)`
-          : `Clipboard sync disabled for this peer`);
-      } catch (err) {
-        setStatus(`ERR clipboard · ${err}`);
-      }
-      return;
-    }
-    // Favorite toggle
-    const favBtn = e.target.closest('.fav-btn');
-    if (favBtn) {
-      e.stopPropagation();
-      const item = favBtn.closest('.peer-item');
-      const id = item?.dataset.id;
-      if (!id) return;
-      const peer = state.peers.find((p) => p.id === id);
-      if (!peer) return;
-      const next = !peer.favorite;
-      try {
-        await invoke('toggle_favorite', { peerId: id, value: next });
-        peer.favorite = next;
-        renderPeers();
-        blip(next ? 1320 : 440, 0.05);
-      } catch (err) {
-        setStatus(`ERR toggle_favorite · ${err}`);
-      }
+      if (peer) openPeerDetails(peer);
       return;
     }
     const item = e.target.closest('.peer-item');
@@ -909,6 +855,104 @@
       if (!settingsModal.hidden) closeSettingsModal();
       if (!incomingModal.hidden) closeIncomingModal();
       if (!addPeerModal.hidden) closeAddPeerModal();
+      if (!peerDetailsModal.hidden) closePeerDetailsModal();
+    }
+  });
+
+  // ---------- Peer details modal -------------------------------------------
+  function openPeerDetails(peer) {
+    peerDetailsCurrentId = peer.id;
+    peerDetailsTitle.textContent = `◈ ${peer.name}`;
+    peerDetailsName.value = peer.name;
+    peerDetailsFp.textContent = peer.id.slice(0, 32) + '…';
+    peerDetailsFp.title = peer.id;
+    peerDetailsAddr.textContent = `${peer.ip || '?'}:${peer.port}`;
+
+    const tags = [];
+    if (peer.status === 'online') tags.push('ONLINE');
+    else tags.push('OFFLINE');
+    if (peer.manual) tags.push('MANUAL');
+    if (peer.favorite) tags.push('FAV');
+    peerDetailsStatus.textContent = tags.join(' · ');
+
+    peerDetailsFav.checked = !!peer.favorite;
+    peerDetailsFavLabel.textContent = peer.favorite ? 'ON' : 'OFF';
+    peerDetailsClip.checked = !!peer.clipboardSync;
+    peerDetailsClipLabel.textContent = peer.clipboardSync ? 'ON' : 'OFF';
+
+    peerDetailsRemove.hidden = !peer.manual;
+
+    peerDetailsModal.hidden = false;
+  }
+
+  function closePeerDetailsModal() {
+    peerDetailsModal.hidden = true;
+    peerDetailsCurrentId = null;
+  }
+
+  peerDetailsCloseBtn.addEventListener('click', closePeerDetailsModal);
+  peerDetailsModal.addEventListener('click', (e) => {
+    if (e.target === peerDetailsModal) closePeerDetailsModal();
+  });
+
+  async function submitDetailsName() {
+    if (!peerDetailsCurrentId) return;
+    const peer = state.peers.find((p) => p.id === peerDetailsCurrentId);
+    if (!peer) return;
+    const newName = peerDetailsName.value.trim();
+    if (newName === peer.name) return;
+    try {
+      await invoke('rename_peer', { peerId: peer.id, newName });
+      blip(1100, 0.05);
+    } catch (err) {
+      peerDetailsName.value = peer.name;
+      setStatus(`ERR rename · ${err}`);
+    }
+  }
+  peerDetailsName.addEventListener('blur', submitDetailsName);
+  peerDetailsName.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); peerDetailsName.blur(); }
+  });
+
+  peerDetailsFav.addEventListener('change', async () => {
+    if (!peerDetailsCurrentId) return;
+    const value = peerDetailsFav.checked;
+    try {
+      await invoke('toggle_favorite', { peerId: peerDetailsCurrentId, value });
+      peerDetailsFavLabel.textContent = value ? 'ON' : 'OFF';
+      blip(value ? 1320 : 440, 0.05);
+    } catch (err) {
+      peerDetailsFav.checked = !value;
+      setStatus(`ERR fav · ${err}`);
+    }
+  });
+
+  peerDetailsClip.addEventListener('change', async () => {
+    if (!peerDetailsCurrentId) return;
+    const enabled = peerDetailsClip.checked;
+    try {
+      await invoke('set_clipboard_sync', { peerId: peerDetailsCurrentId, enabled });
+      peerDetailsClipLabel.textContent = enabled ? 'ON' : 'OFF';
+      blip(enabled ? 1320 : 440, 0.05);
+    } catch (err) {
+      peerDetailsClip.checked = !enabled;
+      setStatus(`ERR clipboard · ${err}`);
+    }
+  });
+
+  peerDetailsRemove.addEventListener('click', async () => {
+    if (!peerDetailsCurrentId) return;
+    const peer = state.peers.find((p) => p.id === peerDetailsCurrentId);
+    if (!peer) return;
+    const ok = confirm(`Remove manual peer "${peer.name}"?\nFavorite + clipboard settings are kept.`);
+    if (!ok) return;
+    try {
+      await invoke('remove_manual_peer', { peerId: peer.id });
+      blip(440, 0.08);
+      setStatus(`Removed ${peer.name}`);
+      closePeerDetailsModal();
+    } catch (err) {
+      setStatus(`ERR remove · ${err}`);
     }
   });
   settingsModal.addEventListener('click', (e) => {

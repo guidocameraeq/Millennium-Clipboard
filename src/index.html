@@ -229,6 +229,61 @@
     </div>
   </div>
 
+  <!-- Peer details modal -->
+  <div class="modal-backdrop" id="peer-details-modal" hidden>
+    <div class="modal">
+      <div class="card-corners">
+        <span></span><span></span><span></span><span></span>
+      </div>
+      <header class="modal-head">
+        <span class="modal-glyph">◈</span>
+        <span class="modal-title" id="peer-details-title">PEER</span>
+      </header>
+      <div class="modal-body">
+        <div class="settings-row">
+          <span class="settings-label">NAME</span>
+          <input type="text" class="text-input" id="peer-details-name" maxlength="64" autocomplete="off" />
+        </div>
+        <div class="settings-row settings-info">
+          <span class="settings-label">FINGERPRINT</span>
+          <span class="settings-value mono" id="peer-details-fp"></span>
+        </div>
+        <div class="settings-row settings-info">
+          <span class="settings-label">ADDRESS</span>
+          <span class="settings-value mono" id="peer-details-addr"></span>
+        </div>
+        <div class="settings-row settings-info">
+          <span class="settings-label">STATUS</span>
+          <span class="settings-value mono" id="peer-details-status"></span>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">★ FAVORITE</span>
+          <div class="settings-control">
+            <label class="sound-toggle">
+              <input type="checkbox" id="peer-details-fav" />
+              <span class="sound-track"><span class="sound-thumb"></span></span>
+              <span class="settings-value mono" id="peer-details-fav-label">OFF</span>
+            </label>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">📋 CLIPBOARD SYNC</span>
+          <div class="settings-control">
+            <label class="sound-toggle">
+              <input type="checkbox" id="peer-details-clip" />
+              <span class="sound-track"><span class="sound-thumb"></span></span>
+              <span class="settings-value mono" id="peer-details-clip-label">OFF</span>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="modal-btn reject" id="peer-details-remove" hidden>🗑 REMOVE PEER</button>
+        <button class="modal-btn accept" id="peer-details-close" onclick="document.getElementById('peer-details-modal').hidden=true">✓ DONE</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Add peer by IP modal -->
   <div class="modal-backdrop" id="add-peer-modal" hidden>
     <div class="modal">

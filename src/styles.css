@@ -581,26 +581,43 @@ html, body {
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-mute);
-  font-size: 13px;
+  font-size: 14px;
   cursor: pointer;
-  padding: 1px 4px;
-  line-height: 1;
-  opacity: 0;
-  transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+  padding: 0 6px;
+  line-height: 1.1;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.peer-action-btn.details-btn {
+  font-size: 18px;
+  font-weight: bold;
+  letter-spacing: 1px;
 }
 
 .peer-item:hover .peer-action-btn {
-  opacity: 1;
+  color: var(--neon-cyan);
 }
 
 .peer-action-btn:hover {
   color: var(--neon-cyan);
   border-color: var(--neon-cyan-soft);
+  background: rgba(0, 240, 255, 0.08);
 }
 
-.peer-action-btn.remove-btn:hover {
-  color: var(--neon-red);
-  border-color: var(--neon-red);
+/* Tiny inline indicators (read-only badges; clickable controls live in the
+   peer details modal). */
+.peer-indicator {
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0.85;
+  flex-shrink: 0;
+}
+.peer-indicator.fav-ind {
+  color: var(--neon-amber);
+  text-shadow: 0 0 6px rgba(255, 179, 71, 0.55);
+}
+.peer-indicator.clip-ind {
+  text-shadow: 0 0 6px var(--neon-cyan-glow);
 }
 
 .rename-input {
