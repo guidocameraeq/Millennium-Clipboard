@@ -429,6 +429,55 @@ async fn check_for_update() -> Result<updater::UpdateInfo, String> {
 }
 
 // ---------------------------------------------------------------------------
+// Crash logging (v0.8.1)
+// ---------------------------------------------------------------------------
+
+fn install_panic_hook() {
+    // Resolve %APPDATA%/com.guidocameraeq.millennium/ manually so this
+    // hook is installable BEFORE Tauri exists and gives us app.path().
+    let data_dir = std::env::var_os("APPDATA")
+        .map(|p| std::path::PathBuf::from(p).join("com.guidocameraeq.millennium"));
+
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        // Let the default handler run too (writes to stderr if attached).
+        original_hook(info);
+
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "unknown panic payload".to_string());
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "unknown location".to_string());
+        let when = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        let entry = format!(
+            "=== panic @ {when} (millennium v{}) ===\nlocation: {loc}\nmessage:  {payload}\nbacktrace:\n{backtrace}\n\n",
+            env!("CARGO_PKG_VERSION"),
+        );
+        if let Some(dir) = &data_dir {
+            let _ = std::fs::create_dir_all(dir);
+            let path = dir.join("crash.log");
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+            {
+                let _ = f.write_all(entry.as_bytes());
+            }
+        }
+    }));
+}
+
+// ---------------------------------------------------------------------------
 // Clipboard sync (v0.6.0)
 // ---------------------------------------------------------------------------
 
@@ -540,12 +589,18 @@ async fn apply_update(app: tauri::AppHandle, download_url: String) -> Result<(),
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Install the panic hook BEFORE anything else so we capture
+    // crashes that happen during Tauri's own bootstrap, not just our
+    // `setup` callback. Release binaries use windows_subsystem="windows"
+    // which swallows stderr — without this hook every panic is invisible.
+    install_panic_hook();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            // 0. Logging — enabled only when RUST_LOG is set, so it's
-            //    silent by default but can be flipped on for debug.
+            // 0a. Logging — enabled only when RUST_LOG is set, so it's
+            //     silent by default but can be flipped on for debug.
             let _ = env_logger::Builder::from_env(
                 env_logger::Env::default().default_filter_or("warn"),
             )
@@ -652,7 +707,7 @@ pub fn run() {
                 tcp_port: discovery::local_port(),
                 local_ip: identity.local_ip.clone(),
             };
-            if let Err(e) = udp_discovery::spawn(
+            udp_discovery::spawn(
                 app.handle().clone(),
                 udp_info,
                 discovery_state.peers.clone(),
@@ -660,9 +715,7 @@ pub fn run() {
                 manual.clone(),
                 alias_store.clone(),
                 clipboard_store.clone(),
-            ) {
-                eprintln!("[udp] failed to start broadcast discovery: {e:?}");
-            }
+            );
 
             // 5. Clipboard-sync poller. Reads the OS clipboard every
             //    500 ms and broadcasts changes to opted-in peers.
