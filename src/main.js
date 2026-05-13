@@ -39,7 +39,7 @@
   const state = {
     peers: [],
     selectedPeerId: null,
-    filter: 'all',
+    filter: 'favorites',
     mode: 'text',
     queuedFiles: [], // mock for now; Fase 7 wires real paths
   };
@@ -237,12 +237,16 @@
     if (state.peers.length === 0) {
       const li = document.createElement('li');
       li.className = 'peer-empty';
-      li.textContent = '— NO PEERS ON THE GRID —';
+      li.innerHTML = '— SCANNING NETWORK —<br><small style="opacity:0.6;letter-spacing:1px;font-size:9px">peers appear within seconds</small>';
       peerList.appendChild(li);
     } else if (filtered.length === 0) {
       const li = document.createElement('li');
       li.className = 'peer-empty';
-      li.textContent = '— NO FAVORITES —';
+      if (state.filter === 'favorites') {
+        li.innerHTML = '— NO FAVORITES YET —<br><small style="opacity:0.6;letter-spacing:1px;font-size:9px">switch to ALL and click ★ to add one</small>';
+      } else {
+        li.textContent = '— NO PEERS —';
+      }
       peerList.appendChild(li);
     } else {
       filtered.forEach((p) => peerList.appendChild(buildPeerItem(p)));
@@ -260,6 +264,7 @@
     li.className = 'peer-item';
     if (p.id === state.selectedPeerId) li.classList.add('selected');
     li.dataset.id = p.id;
+    li.dataset.status = p.status;
 
     li.innerHTML = `
       <div class="peer-icon">${ICON_SVG[p.iconType] || ICON_SVG.desktop}</div>
@@ -299,8 +304,11 @@
     state.selectedPeerId = id;
     targetName.textContent = peer.name;
     targetHex.textContent = peer.hexId;
-    sendBtn.disabled = false;
-    setStatus(`PEER LOCKED · ${peer.name}`);
+    const isOffline = peer.status === 'offline';
+    sendBtn.disabled = isOffline;
+    setStatus(isOffline
+      ? `PEER OFFLINE · ${peer.name} (waiting on grid)`
+      : `PEER LOCKED · ${peer.name}`);
     blip(660, 0.06);
     document.querySelectorAll('.peer-item').forEach((el) => {
       el.classList.toggle('selected', el.dataset.id === id);
@@ -550,14 +558,9 @@
     }, 2200);
   }
 
-  // Merge incoming peers list, preserving local favorite state (until
-  // Fase 6 hooks favorites to backend persistence).
+  // Backend is the source of truth for `favorite` (Fase 6 persistence).
   function applyPeers(wirePeers, initial) {
-    const localFavs = new Map(state.peers.map((p) => [p.id, p.favorite]));
-    state.peers = wirePeers.map((p) => ({
-      ...p,
-      favorite: localFavs.get(p.id) ?? p.favorite,
-    }));
+    state.peers = wirePeers.map((p) => ({ ...p }));
 
     // Drop selection if the selected peer vanished.
     if (state.selectedPeerId && !state.peers.find((p) => p.id === state.selectedPeerId)) {

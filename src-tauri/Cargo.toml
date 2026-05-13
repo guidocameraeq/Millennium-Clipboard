@@ -27,7 +27,7 @@ uuid = { version = "1", features = ["v4"] }
 # HTTPS server + cert identity (Fase 4)
 axum = "0.8"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "fs", "io-util", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "fs", "io-util", "sync", "time"] }
 rcgen = "0.13"
 sha2 = "0.10"
 hex = "0.4"

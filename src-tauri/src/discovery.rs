@@ -6,6 +6,7 @@
 // later see at /info matches what the discovery announced.
 
 use crate::identity::Identity;
+use crate::preferences::PreferencesStore;
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -76,15 +77,76 @@ pub type FullnameMap = Arc<Mutex<HashMap<String, String>>>;
 pub struct DiscoveryState {
     pub peers: PeerMap,
     pub fullnames: FullnameMap,
+    pub prefs: Arc<PreferencesStore>,
     #[allow(dead_code)]
     pub daemon: ServiceDaemon,
+}
+
+/// Build the merged wire-list (online + offline favorites). Used by
+/// the public API, the event handler, and the reaper task.
+fn build_wire_list(peers: &PeerMap, prefs: &PreferencesStore) -> Vec<WirePeer> {
+    let online = peers.lock().unwrap();
+    let mut result: Vec<WirePeer> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for record in online.values() {
+        let is_fav = prefs.is_favorite(&record.id);
+        result.push(record.to_wire(is_fav));
+        seen.insert(record.id.clone());
+    }
+
+    for fav in prefs.favorites_snapshot() {
+        if seen.contains(&fav.fingerprint) {
+            continue;
+        }
+        result.push(WirePeer {
+            id: fav.fingerprint,
+            name: fav.alias,
+            hex_id: fav.hex_id,
+            ip: fav.last_ip,
+            port: fav.last_port,
+            status: "offline",
+            favorite: true,
+            icon_type: fav.icon_type,
+        });
+    }
+    result
+}
+
+impl DiscoveryState {
+    pub fn peers_for_wire(&self) -> Vec<WirePeer> {
+        build_wire_list(&self.peers, &self.prefs)
+    }
+
+    /// Build a FavoritePeer payload from a currently-known peer, if any.
+    pub fn favorite_from_peer(&self, fingerprint: &str) -> Option<crate::preferences::FavoritePeer> {
+        let peers = self.peers.lock().unwrap();
+        peers.get(fingerprint).map(|r| crate::preferences::FavoritePeer {
+            fingerprint: r.id.clone(),
+            alias: r.name.clone(),
+            hex_id: r.hex_id.clone(),
+            icon_type: r.icon_type.clone(),
+            last_ip: r.ip.clone(),
+            last_port: r.port,
+        })
+    }
+
+    pub fn emit_snapshot(&self, app: &AppHandle) {
+        let snapshot = self.peers_for_wire();
+        let _ = app.emit("peers-changed", &snapshot);
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-pub fn start(app: AppHandle, identity: &Identity, port: u16) -> Result<DiscoveryState, mdns_sd::Error> {
+pub fn start(
+    app: AppHandle,
+    identity: &Identity,
+    port: u16,
+    prefs: Arc<PreferencesStore>,
+) -> Result<DiscoveryState, mdns_sd::Error> {
     let daemon = ServiceDaemon::new()?;
     let peers: PeerMap = Arc::new(Mutex::new(HashMap::new()));
     let fullnames: FullnameMap = Arc::new(Mutex::new(HashMap::new()));
@@ -95,6 +157,7 @@ pub fn start(app: AppHandle, identity: &Identity, port: u16) -> Result<Discovery
 
     let peers_for_task = peers.clone();
     let fullnames_for_task = fullnames.clone();
+    let prefs_for_task = prefs.clone();
     let my_fingerprint = identity.fingerprint.clone();
     let app_handle = app.clone();
 
@@ -107,6 +170,7 @@ pub fn start(app: AppHandle, identity: &Identity, port: u16) -> Result<Discovery
                         &my_fingerprint,
                         &peers_for_task,
                         &fullnames_for_task,
+                        &prefs_for_task,
                         &app_handle,
                     );
                 }
@@ -118,7 +182,46 @@ pub fn start(app: AppHandle, identity: &Identity, port: u16) -> Result<Discovery
         }
     });
 
-    Ok(DiscoveryState { peers, fullnames, daemon })
+    // Reaper: peers that we haven't heard from in a while are dropped.
+    // mDNS goodbye packets are best-effort — if a peer is killed
+    // ungracefully (window closed with X) we won't get a removal event,
+    // so we age out entries based on last_seen.
+    let peers_for_reaper = peers.clone();
+    let fullnames_for_reaper = fullnames.clone();
+    let prefs_for_reaper = prefs.clone();
+    let app_for_reaper = app.clone();
+    tauri::async_runtime::spawn(async move {
+        const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
+        tick.tick().await; // skip the immediate first tick
+        loop {
+            tick.tick().await;
+            let now = std::time::Instant::now();
+            let mut removed_ids: Vec<String> = Vec::new();
+            {
+                let mut peers = peers_for_reaper.lock().unwrap();
+                peers.retain(|id, record| {
+                    let alive = now.duration_since(record.last_seen) < STALE_AFTER;
+                    if !alive {
+                        removed_ids.push(id.clone());
+                    }
+                    alive
+                });
+            }
+            if !removed_ids.is_empty() {
+                let mut fn_map = fullnames_for_reaper.lock().unwrap();
+                fn_map.retain(|_, peer_id| !removed_ids.contains(peer_id));
+                drop(fn_map);
+                for id in &removed_ids {
+                    println!("[mdns] reaper dropped stale peer {}", &id[..16.min(id.len())]);
+                }
+                let snapshot = build_wire_list(&peers_for_reaper, &prefs_for_reaper);
+                let _ = app_for_reaper.emit("peers-changed", &snapshot);
+            }
+        }
+    });
+
+    Ok(DiscoveryState { peers, fullnames, prefs, daemon })
 }
 
 pub fn rebrowse(state: &DiscoveryState) -> Result<(), mdns_sd::Error> {
@@ -178,6 +281,7 @@ fn handle_event(
     my_fingerprint: &str,
     peers: &PeerMap,
     fullnames: &FullnameMap,
+    prefs: &Arc<PreferencesStore>,
     app: &AppHandle,
 ) {
     match event {
@@ -227,7 +331,7 @@ fn handle_event(
                 let mut f = fullnames.lock().unwrap();
                 f.insert(fullname, id);
             }
-            emit_peers_changed(app, peers);
+            emit_peers_changed(app, peers, prefs);
         }
         ServiceEvent::ServiceRemoved(_, fullname) => {
             let removed_id = {
@@ -236,19 +340,14 @@ fn handle_event(
             };
             if let Some(id) = removed_id {
                 peers.lock().unwrap().remove(&id);
-                emit_peers_changed(app, peers);
+                emit_peers_changed(app, peers, prefs);
             }
         }
         _ => {}
     }
 }
 
-fn emit_peers_changed(app: &AppHandle, peers: &PeerMap) {
-    let snapshot: Vec<WirePeer> = peers
-        .lock()
-        .unwrap()
-        .values()
-        .map(|r| r.to_wire(false))
-        .collect();
+fn emit_peers_changed(app: &AppHandle, peers: &PeerMap, prefs: &Arc<PreferencesStore>) {
+    let snapshot = build_wire_list(peers, prefs);
     let _ = app.emit("peers-changed", &snapshot);
 }

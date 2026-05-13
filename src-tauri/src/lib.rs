@@ -14,6 +14,9 @@ mod discovery;
 mod http_client;
 mod http_server;
 mod identity;
+mod preferences;
+
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // Wire types
@@ -37,6 +40,7 @@ pub struct LocalInfo {
 pub struct AppState {
     discovery: discovery::DiscoveryState,
     identity: identity::Identity,
+    prefs: Arc<preferences::PreferencesStore>,
 }
 
 // ---------------------------------------------------------------------------
@@ -58,27 +62,13 @@ fn get_local_info(state: tauri::State<AppState>) -> LocalInfo {
 
 #[tauri::command]
 fn list_peers(state: tauri::State<AppState>) -> Vec<discovery::WirePeer> {
-    state
-        .discovery
-        .peers
-        .lock()
-        .unwrap()
-        .values()
-        .map(|r| r.to_wire(false))
-        .collect()
+    state.discovery.peers_for_wire()
 }
 
 #[tauri::command]
 fn rescan_peers(state: tauri::State<AppState>) -> Result<Vec<discovery::WirePeer>, String> {
     discovery::rebrowse(&state.discovery).map_err(|e| e.to_string())?;
-    Ok(state
-        .discovery
-        .peers
-        .lock()
-        .unwrap()
-        .values()
-        .map(|r| r.to_wire(false))
-        .collect())
+    Ok(state.discovery.peers_for_wire())
 }
 
 #[tauri::command]
@@ -143,8 +133,31 @@ fn send_files(peer_id: String, file_paths: Vec<String>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn toggle_favorite(peer_id: String, value: bool) -> Result<(), String> {
+fn toggle_favorite(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    peer_id: String,
+    value: bool,
+) -> Result<(), String> {
+    if value {
+        // We can only favorite a peer we currently know about, so we
+        // can snapshot its full card.
+        let fav = state
+            .discovery
+            .favorite_from_peer(&peer_id)
+            .ok_or_else(|| format!("peer {} is not on the grid right now", &peer_id[..8]))?;
+        state
+            .prefs
+            .add_favorite(fav)
+            .map_err(|e| format!("save prefs: {e:#}"))?;
+    } else {
+        state
+            .prefs
+            .remove_favorite(&peer_id)
+            .map_err(|e| format!("save prefs: {e:#}"))?;
+    }
     println!("[backend] toggle_favorite → peer={} value={}", peer_id, value);
+    state.discovery.emit_snapshot(&app);
     Ok(())
 }
 
@@ -161,13 +174,17 @@ pub fn run() {
             //    (axum-server + reqwest both auto-select otherwise).
             let _ = rustls::crypto::ring::default_provider().install_default();
 
-            // 1. Identity (load or generate cert)
+            // 1. Identity (load or generate cert) + persisted preferences
             let data_dir = app
                 .path()
                 .app_data_dir()
                 .expect("could not get app data dir");
             let identity = identity::Identity::load_or_generate(&data_dir)
                 .expect("failed to setup identity");
+            let prefs = Arc::new(
+                preferences::PreferencesStore::load_or_new(&data_dir)
+                    .expect("failed to setup preferences"),
+            );
 
             // 2. HTTPS server (background task)
             let info = http_server::InfoResponse {
@@ -196,12 +213,18 @@ pub fn run() {
 
             // 3. mDNS discovery
             let handle = app.handle().clone();
-            let discovery_state = discovery::start(handle, &identity, discovery::local_port())
-                .expect("failed to start mDNS discovery");
+            let discovery_state = discovery::start(
+                handle,
+                &identity,
+                discovery::local_port(),
+                prefs.clone(),
+            )
+            .expect("failed to start mDNS discovery");
 
             app.manage(AppState {
                 discovery: discovery_state,
                 identity,
+                prefs,
             });
             Ok(())
         })

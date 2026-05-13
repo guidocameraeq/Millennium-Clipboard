@@ -631,6 +631,35 @@ html, body {
   background: var(--neon-amber);
   box-shadow: 0 0 6px rgba(255, 179, 71, 0.6);
 }
+.peer-status.offline      { color: var(--text-dim); }
+.peer-status.offline .status-dot {
+  background: var(--text-dim);
+  box-shadow: none;
+}
+
+/* Greyed-out card for offline favorites */
+.peer-item[data-status="offline"] {
+  opacity: 0.55;
+  filter: grayscale(0.4);
+}
+.peer-item[data-status="offline"]:hover {
+  opacity: 0.85;
+}
+.peer-item[data-status="offline"] .peer-icon {
+  color: var(--text-dim);
+  border-color: var(--text-dim);
+  background: transparent;
+  box-shadow: none;
+}
+.peer-item[data-status="offline"].selected {
+  background: rgba(120, 148, 168, 0.08);
+  border-color: var(--text-mute);
+  box-shadow: 0 0 8px rgba(120, 148, 168, 0.25);
+}
+.peer-item[data-status="offline"].selected::before {
+  background: var(--text-mute);
+  box-shadow: none;
+}
 
 /* ==========================================================================
    COMPOSER
