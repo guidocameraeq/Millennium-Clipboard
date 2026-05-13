@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use uuid::Uuid;
 
 mod aliases;
@@ -666,6 +666,7 @@ pub fn run() {
             eprintln!("[setup] spawning HTTPS server task...");
             tauri::async_runtime::spawn(async move {
                 eprintln!("[setup] http_server::run starting");
+                let err_handle = server_app.clone();
                 if let Err(e) = http_server::run(
                     server_app,
                     discovery::local_port(),
@@ -679,6 +680,9 @@ pub fn run() {
                 .await
                 {
                     eprintln!("[http] server error: {e:?}");
+                    // Surface the failure to the frontend — without this
+                    // the user sees "no peers" with no clue why.
+                    let _ = err_handle.emit("backend-error", format!("HTTPS server failed: {e}"));
                 }
             });
             eprintln!("[setup] HTTPS server spawned");

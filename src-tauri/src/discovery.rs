@@ -215,19 +215,18 @@ pub fn start(
 ) -> Result<DiscoveryState, mdns_sd::Error> {
     let daemon = ServiceDaemon::new()?;
 
-    // Restrict mDNS to the actual physical NIC. By default `mdns-sd`
-    // binds to every interface it finds — which on Windows includes
-    // Hyper-V / WSL / VirtualBox virtual switches and any VPN TAP. The
-    // daemon then often announces via the wrong one and peers don't see
-    // each other. Forcing the bind to our resolved local IP is the
-    // single biggest reliability fix.
+    // Add the resolved local IP as an explicit interface, but keep the
+    // mdns-sd default (every IPv4 interface) active as a fallback.
+    // Previously we did disable_interface(All) + enable(local_ip),
+    // which on machines with WSL/Hyper-V/Docker/VPN routinely picked
+    // the wrong NIC (because local_ip_address::local_ip() returns the
+    // lowest-metric route, often a virtual one). Result: announcements
+    // went out the virtual switch and no peer ever saw us.
     if let Ok(local_ip) = identity.local_ip.parse::<std::net::IpAddr>() {
-        let _ = daemon.disable_interface(IfKind::All);
         match daemon.enable_interface(IfKind::Addr(local_ip)) {
-            Ok(_) => eprintln!("[mdns] bound to interface {}", local_ip),
-            Err(e) => eprintln!("[mdns] failed to bind to {}: {}", local_ip, e),
+            Ok(_) => eprintln!("[mdns] explicitly enabled interface {}", local_ip),
+            Err(e) => eprintln!("[mdns] enable_interface({}) failed (keeping defaults): {}", local_ip, e),
         }
-        let _ = daemon.disable_interface(IfKind::IPv6);
     } else {
         eprintln!("[mdns] could not parse local_ip='{}', using default bind", identity.local_ip);
     }

@@ -358,12 +358,10 @@
     }
 
     const favCount = state.peers.filter((p) => p.favorite).length;
-    // HUD peer-count badge reflects what the current tab is showing.
-    peerCount.textContent = String(filtered.length).padStart(2, '0');
-    // Bottom-strip PEERS = online on the network right now.
-    statusPeers.textContent = String(onlineCount).padStart(2, '0');
-    statusFav.textContent = String(favCount).padStart(2, '0');
-    filterHint.textContent = `${String(filtered.length).padStart(2, '0')} visible`;
+    setText(peerCount, String(filtered.length).padStart(2, '0'));
+    setText(statusPeers, String(onlineCount).padStart(2, '0'));
+    setText(statusFav, String(favCount).padStart(2, '0'));
+    setText(filterHint, `${String(filtered.length).padStart(2, '0')} visible`);
   }
 
   function buildPeerItem(p) {
@@ -396,21 +394,27 @@
       </div>
     `;
 
-    li.querySelector('.peer-name').textContent = p.name;
-    li.querySelector('.peer-hex').textContent = p.hexId;
-    li.querySelector('.peer-ip').textContent = p.ip;
+    setText(li.querySelector('.peer-name'), p.name);
+    setText(li.querySelector('.peer-hex'), p.hexId);
+    setText(li.querySelector('.peer-ip'), p.ip);
 
-    if (p.manual) li.querySelector('.manual-badge').hidden = false;
-    if (p.favorite) li.querySelector('.fav-ind').hidden = false;
-    if (p.clipboardSync) li.querySelector('.clip-ind').hidden = false;
-
-    const favBtn = li.querySelector('.fav-btn');
-    favBtn.textContent = p.favorite ? '★' : '☆';
-    favBtn.dataset.favorite = p.favorite ? 'true' : 'false';
+    if (p.manual) {
+      const b = li.querySelector('.manual-badge');
+      if (b) b.hidden = false;
+    }
+    if (p.favorite) {
+      const b = li.querySelector('.fav-ind');
+      if (b) b.hidden = false;
+    }
+    if (p.clipboardSync) {
+      const b = li.querySelector('.clip-ind');
+      if (b) b.hidden = false;
+    }
 
     const statusEl = li.querySelector('.peer-status');
-    statusEl.classList.add(p.status);
-    li.querySelector('.status-label').textContent = p.status.toUpperCase();
+    if (statusEl) statusEl.classList.add(p.status);
+    const statusLabel = li.querySelector('.status-label');
+    if (statusLabel) statusLabel.textContent = p.status.toUpperCase();
 
     return li;
   }
@@ -1156,6 +1160,14 @@
     // Live updates from the mDNS daemon (Fase 3+)
     await listen('peers-changed', (event) => {
       applyPeers(event.payload, /* initial = */ false);
+    });
+
+    // Backend failures (HTTPS server bind, etc.) — surfacing to the user
+    // so a silent crash doesn't read as "no peers".
+    await listen('backend-error', (event) => {
+      const msg = typeof event.payload === 'string' ? event.payload : JSON.stringify(event.payload);
+      setStatus(`BACKEND ERR · ${msg}`);
+      console.error('[backend-error]', event.payload);
     });
 
     // Incoming text from a peer (Fase 5)
