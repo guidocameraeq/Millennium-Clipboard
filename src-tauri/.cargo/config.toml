@@ -1,0 +1,6 @@
+# Statically link the MSVC C++ runtime into the binary so the portable
+# .exe doesn't require Visual C++ Redistributable to be installed on
+# the target machine. Without this, end users see "VCRUNTIME140.dll
+# is missing" on a fresh Windows install.
+[target.'cfg(all(target_os = "windows", target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
