@@ -26,14 +26,17 @@ pub struct UpdateInfo {
 }
 
 pub async fn check_for_update() -> Result<UpdateInfo> {
-    let url = format!("https://api.github.com/repos/{}/releases/latest", REPO);
+    // Use the full releases list (not /releases/latest) because GitHub
+    // returns 404 from /latest when every release is marked as
+    // prerelease — which is our case until v1.0.0.
+    let url = format!("https://api.github.com/repos/{}/releases?per_page=30", REPO);
     let client = reqwest::Client::builder()
         .user_agent(concat!("Millennium-Clipboard/", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .context("build http client")?;
 
-    let json: serde_json::Value = client
+    let releases: Vec<serde_json::Value> = client
         .get(&url)
         .send()
         .await
@@ -44,15 +47,21 @@ pub async fn check_for_update() -> Result<UpdateInfo> {
         .await
         .context("decode GitHub response")?;
 
-    let latest_tag = json["tag_name"]
+    // Filter out drafts; keep prereleases (we always publish those).
+    let release = releases
+        .into_iter()
+        .find(|r| !r["draft"].as_bool().unwrap_or(false))
+        .ok_or_else(|| anyhow::anyhow!("no releases published yet"))?;
+
+    let latest_tag = release["tag_name"]
         .as_str()
         .unwrap_or("")
         .trim_start_matches('v')
         .to_string();
-    let release_url = json["html_url"].as_str().unwrap_or("").to_string();
-    let release_notes = json["body"].as_str().unwrap_or("").to_string();
+    let release_url = release["html_url"].as_str().unwrap_or("").to_string();
+    let release_notes = release["body"].as_str().unwrap_or("").to_string();
 
-    let download_url = json["assets"]
+    let download_url = release["assets"]
         .as_array()
         .and_then(|arr| {
             arr.iter().find(|a| {
