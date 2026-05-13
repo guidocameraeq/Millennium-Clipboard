@@ -649,6 +649,28 @@ pub fn run() {
             );
             eprintln!("[setup] settings loaded");
 
+            // Identity / network / store diagnostic dump. Without this it
+            // is impossible to tell from a user report whether the right
+            // identity is loaded, what local IP got picked (WSL/Hyper-V
+            // pollution), and what the manual-peer store actually contains.
+            eprintln!(
+                "[diag] identity fp={} alias='{}' local_ip={}",
+                &identity.fingerprint[..16.min(identity.fingerprint.len())],
+                identity.alias,
+                identity.local_ip
+            );
+            let manual_snap = manual.snapshot();
+            eprintln!("[diag] manual-peers count = {}", manual_snap.len());
+            for m in &manual_snap {
+                eprintln!(
+                    "[diag]   manual: fp={} alias='{}' {}:{}",
+                    &m.fingerprint[..16.min(m.fingerprint.len())],
+                    m.alias,
+                    m.ip,
+                    m.port
+                );
+            }
+
             // 2. HTTPS server.
             let info = http_server::InfoResponse {
                 alias: identity.alias.clone(),

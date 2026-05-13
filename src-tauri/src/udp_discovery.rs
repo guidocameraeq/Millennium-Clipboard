@@ -211,19 +211,37 @@ fn handle_packet(
         return;
     }
 
-    let record = PeerRecord {
-        id: pkt.fingerprint.clone(),
-        name: pkt.alias,
-        hex_id: pkt.hex_id,
-        ip: peer_addr.ip().to_string(),
-        port: pkt.tcp_port,
-        icon_type: pkt.icon_type,
-        last_seen: Instant::now(),
-    };
-
+    // If the peer is already in the map, only refresh last_seen and alias.
+    // We do NOT overwrite ip/port: the TCP poller already validated those,
+    // and the UDP source ip (from peer_addr) may come from a different
+    // route (subnet broadcast vs unicast, virtual NIC, etc.) — overwriting
+    // with it can break the next /info probe and cause the peer to flap.
     let was_new = {
         let mut p = peers.lock().unwrap();
-        p.insert(record.id.clone(), record).is_none()
+        match p.get_mut(&pkt.fingerprint) {
+            Some(existing) => {
+                existing.last_seen = Instant::now();
+                if existing.name != pkt.alias {
+                    existing.name = pkt.alias.clone();
+                }
+                false
+            }
+            None => {
+                p.insert(
+                    pkt.fingerprint.clone(),
+                    PeerRecord {
+                        id: pkt.fingerprint.clone(),
+                        name: pkt.alias.clone(),
+                        hex_id: pkt.hex_id.clone(),
+                        ip: peer_addr.ip().to_string(),
+                        port: pkt.tcp_port,
+                        icon_type: pkt.icon_type.clone(),
+                        last_seen: Instant::now(),
+                    },
+                );
+                true
+            }
+        }
     };
 
     if was_new {

@@ -331,30 +331,54 @@
   function renderPeers() {
     const filtered = state.peers.filter((p) => {
       if (state.filter === 'favorites') return p.favorite;
-      // ALL = peers currently on the network
       return p.status !== 'offline';
     });
 
-    peerList.innerHTML = '';
-
     const onlineCount = state.peers.filter((p) => p.status !== 'offline').length;
 
-    if (state.peers.length === 0) {
+    // Empty / placeholder states use a full wipe — fine, they don't flap
+    // because there's nothing to keep alive.
+    if (state.peers.length === 0 || filtered.length === 0) {
+      peerList.innerHTML = '';
       const li = document.createElement('li');
       li.className = 'peer-empty';
-      li.innerHTML = '— SCANNING NETWORK —<br><small style="opacity:0.6;letter-spacing:1px;font-size:9px">peers appear within seconds</small>';
-      peerList.appendChild(li);
-    } else if (filtered.length === 0) {
-      const li = document.createElement('li');
-      li.className = 'peer-empty';
-      if (state.filter === 'favorites') {
+      if (state.peers.length === 0) {
+        li.innerHTML = '— SCANNING NETWORK —<br><small style="opacity:0.6;letter-spacing:1px;font-size:9px">peers appear within seconds</small>';
+      } else if (state.filter === 'favorites') {
         li.innerHTML = '— NO FAVORITES YET —<br><small style="opacity:0.6;letter-spacing:1px;font-size:9px">switch to ALL and click ★ to add one</small>';
       } else {
         li.innerHTML = '— NO PEERS ONLINE —<br><small style="opacity:0.6;letter-spacing:1px;font-size:9px">waiting on the grid</small>';
       }
       peerList.appendChild(li);
     } else {
-      filtered.forEach((p) => peerList.appendChild(buildPeerItem(p)));
+      // Incremental diff: reuse existing <li> nodes by data-id so the
+      // peer rows don't visibly flicker every time the backend pushes
+      // a peers-changed snapshot (which can be every 5s from UDP).
+      const empty = peerList.querySelector('.peer-empty');
+      if (empty) empty.remove();
+
+      const existing = new Map();
+      Array.from(peerList.querySelectorAll('li.peer-item')).forEach((li) => {
+        if (li.dataset.id) existing.set(li.dataset.id, li);
+      });
+
+      const seen = new Set();
+      filtered.forEach((p, idx) => {
+        seen.add(p.id);
+        let li = existing.get(p.id);
+        if (li) {
+          updatePeerItem(li, p);
+        } else {
+          li = buildPeerItem(p);
+        }
+        if (peerList.children[idx] !== li) {
+          peerList.insertBefore(li, peerList.children[idx] || null);
+        }
+      });
+
+      existing.forEach((li, id) => {
+        if (!seen.has(id)) li.remove();
+      });
     }
 
     const favCount = state.peers.filter((p) => p.favorite).length;
@@ -362,6 +386,31 @@
     setText(statusPeers, String(onlineCount).padStart(2, '0'));
     setText(statusFav, String(favCount).padStart(2, '0'));
     setText(filterHint, `${String(filtered.length).padStart(2, '0')} visible`);
+  }
+
+  function updatePeerItem(li, p) {
+    li.classList.toggle('selected', p.id === state.selectedPeerId);
+    li.dataset.status = p.status;
+    li.dataset.manual = p.manual ? 'true' : 'false';
+
+    setText(li.querySelector('.peer-name'), p.name);
+    setText(li.querySelector('.peer-hex'), p.hexId);
+    setText(li.querySelector('.peer-ip'), p.ip);
+
+    const manualBadge = li.querySelector('.manual-badge');
+    if (manualBadge) manualBadge.hidden = !p.manual;
+    const favInd = li.querySelector('.fav-ind');
+    if (favInd) favInd.hidden = !p.favorite;
+    const clipInd = li.querySelector('.clip-ind');
+    if (clipInd) clipInd.hidden = !p.clipboardSync;
+
+    const statusEl = li.querySelector('.peer-status');
+    if (statusEl) {
+      statusEl.classList.remove('online', 'offline', 'reaching');
+      statusEl.classList.add(p.status);
+    }
+    const statusLabel = li.querySelector('.status-label');
+    if (statusLabel) statusLabel.textContent = p.status.toUpperCase();
   }
 
   function buildPeerItem(p) {

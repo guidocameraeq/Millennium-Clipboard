@@ -340,7 +340,7 @@ pub fn start(
                 .into_iter()
                 .map(|(fp, (ip, port, hex_id, icon_type))| async move {
                     let res = tokio::time::timeout(
-                        Duration::from_secs(3),
+                        Duration::from_secs(5),
                         crate::http_client::fetch_info(&ip, port),
                     )
                     .await;
@@ -386,11 +386,19 @@ pub fn start(
                         }
                     }
                     _ => {
+                        // 3 consecutive failures (~18s @ 6s tick) before
+                        // dropping. Previously 2 (~12s) — too aggressive
+                        // for TLS handshakes over flaky Wi-Fi, especially
+                        // when UDP keeps reannouncing every 5s.
                         let count = failures.entry(fp.clone()).or_insert(0);
                         *count += 1;
-                        if *count >= 2 {
+                        if *count >= 3 {
                             if peers_for_poll.lock().unwrap().remove(&fp).is_some() {
                                 changed = true;
+                                eprintln!(
+                                    "[poll] dropped {} after 3 failed probes",
+                                    &fp[..16.min(fp.len())]
+                                );
                             }
                         }
                     }
@@ -524,36 +532,66 @@ fn handle_event(
                 .map(|a| a.to_string())
                 .unwrap_or_default();
 
-            let record = PeerRecord {
-                id: id.clone(),
-                name: alias,
-                hex_id,
-                ip,
-                port: info.get_port(),
-                icon_type,
-                last_seen: Instant::now(),
-            };
+            let port = info.get_port();
             let fullname = info.get_fullname().to_string();
 
-            {
+            // Only emit peers-changed when something the UI actually
+            // shows has changed. Without this, every mDNS re-resolve
+            // (which happens every few seconds because we re-browse on
+            // the poller tick) rebuilds the peer list DOM and looks
+            // like a flap to the user.
+            let changed = {
                 let mut p = peers.lock().unwrap();
-                p.insert(id.clone(), record);
-            }
+                match p.get_mut(&id) {
+                    Some(existing) => {
+                        let same = existing.name == alias
+                            && existing.hex_id == hex_id
+                            && existing.ip == ip
+                            && existing.port == port
+                            && existing.icon_type == icon_type;
+                        existing.last_seen = Instant::now();
+                        if !same {
+                            existing.name = alias;
+                            existing.hex_id = hex_id;
+                            existing.ip = ip;
+                            existing.port = port;
+                            existing.icon_type = icon_type;
+                        }
+                        !same
+                    }
+                    None => {
+                        p.insert(
+                            id.clone(),
+                            PeerRecord {
+                                id: id.clone(),
+                                name: alias,
+                                hex_id,
+                                ip,
+                                port,
+                                icon_type,
+                                last_seen: Instant::now(),
+                            },
+                        );
+                        true
+                    }
+                }
+            };
             {
                 let mut f = fullnames.lock().unwrap();
                 f.insert(fullname, id);
             }
-            emit_peers_changed(app, peers, prefs, manual, aliases, clipboard);
-        }
-        ServiceEvent::ServiceRemoved(_, fullname) => {
-            let removed_id = {
-                let mut f = fullnames.lock().unwrap();
-                f.remove(&fullname)
-            };
-            if let Some(id) = removed_id {
-                peers.lock().unwrap().remove(&id);
+            if changed {
                 emit_peers_changed(app, peers, prefs, manual, aliases, clipboard);
             }
+        }
+        ServiceEvent::ServiceRemoved(_, fullname) => {
+            // mDNS is unreliable on multicast — ServiceRemoved fires on TTL
+            // expiry even when the peer is perfectly alive. The TCP-probe
+            // poller is our source of truth for liveness; let it decide
+            // when a peer goes offline. Here we only forget the fullname
+            // mapping so the next ServiceResolved can reattach cleanly.
+            let mut f = fullnames.lock().unwrap();
+            f.remove(&fullname);
         }
         _ => {}
     }
