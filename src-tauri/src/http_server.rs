@@ -10,7 +10,7 @@
 use anyhow::{Context, Result};
 use axum::{
     body::Body,
-    extract::{Path as AxumPath, Query, State},
+    extract::{ConnectInfo, Path as AxumPath, Query, State},
     http::StatusCode,
     routing::{get, post},
     Json, Router,
@@ -118,7 +118,7 @@ pub async fn run(
     println!("[http] HTTPS server listening on {}", addr);
 
     axum_server::bind_rustls(addr, tls)
-        .serve(router.into_make_service())
+        .serve(router.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .context("axum server")?;
 
@@ -143,6 +143,8 @@ struct TextPayload {
     text: String,
     sender_alias: String,
     sender_fingerprint: String,
+    #[serde(default)]
+    sender_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -151,23 +153,30 @@ struct IncomingTextEvent {
     text: String,
     sender_alias: String,
     sender_fingerprint: String,
+    sender_ip: String,
+    sender_port: u16,
     received_at: i64,
 }
 
 async fn handle_text(
     State(state): State<ServerState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(payload): Json<TextPayload>,
 ) -> StatusCode {
+    let sender_port = payload.sender_port.unwrap_or(crate::discovery::DEFAULT_PORT);
     let evt = IncomingTextEvent {
         text: payload.text,
         sender_alias: payload.sender_alias,
         sender_fingerprint: payload.sender_fingerprint,
+        sender_ip: addr.ip().to_string(),
+        sender_port,
         received_at: unix_now(),
     };
     println!(
-        "[http] /text received {} chars from {}",
+        "[http] /text received {} chars from {} ({})",
         evt.text.chars().count(),
-        evt.sender_alias
+        evt.sender_alias,
+        evt.sender_ip
     );
     let _ = state.app.emit("incoming-text", &evt);
     StatusCode::OK
@@ -197,6 +206,8 @@ struct PrepareUploadRequest {
     session_id: String,
     sender_alias: String,
     sender_fingerprint: String,
+    #[serde(default)]
+    sender_port: Option<u16>,
     files: Vec<PrepareFile>,
 }
 
@@ -236,6 +247,8 @@ struct IncomingFilesRequestEvent {
     session_id: String,
     sender_alias: String,
     sender_fingerprint: String,
+    sender_ip: String,
+    sender_port: u16,
     file_count: usize,
     total_size: u64,
     files: Vec<IncomingFilePreview>,
@@ -254,12 +267,16 @@ struct IncomingFilePreview {
 
 async fn handle_prepare_upload(
     State(state): State<ServerState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<PrepareUploadRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let total: u64 = req.files.iter().map(|f| f.size).sum();
+    let sender_port = req.sender_port.unwrap_or(crate::discovery::DEFAULT_PORT);
+    let sender_ip = addr.ip().to_string();
     println!(
-        "[http] /prepare-upload from {} ({} files, {} bytes)",
+        "[http] /prepare-upload from {} at {} ({} files, {} bytes)",
         req.sender_alias,
+        sender_ip,
         req.files.len(),
         total
     );
@@ -274,6 +291,8 @@ async fn handle_prepare_upload(
         session_id: req.session_id.clone(),
         sender_alias: req.sender_alias.clone(),
         sender_fingerprint: req.sender_fingerprint.clone(),
+        sender_ip: sender_ip.clone(),
+        sender_port,
         file_count: req.files.len(),
         total_size: total,
         files: req

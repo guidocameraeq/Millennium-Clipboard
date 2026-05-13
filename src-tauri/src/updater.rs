@@ -1,0 +1,157 @@
+// Millennium Clipboard — auto-updater (v0.5.0 F5)
+//
+// Polls the GitHub Releases API for a newer version, downloads the new
+// portable .exe to a temp dir, and hands off to a tiny .bat script that
+// swaps the binary and relaunches once the current process exits.
+//
+// Code signing / signature verification is intentionally NOT implemented
+// for this alpha — adding it later requires generating an offline key
+// pair and signing each release. See the project roadmap.
+
+use anyhow::{bail, Context, Result};
+use serde::Serialize;
+
+const REPO: &str = "guidocameraeq/Millennium-Clipboard";
+const ASSET_TAIL: &str = "portable.exe";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInfo {
+    pub current_version: String,
+    pub latest_version: String,
+    pub has_update: bool,
+    pub download_url: Option<String>,
+    pub release_url: String,
+    pub release_notes: String,
+}
+
+pub async fn check_for_update() -> Result<UpdateInfo> {
+    let url = format!("https://api.github.com/repos/{}/releases/latest", REPO);
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("Millennium-Clipboard/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .context("build http client")?;
+
+    let json: serde_json::Value = client
+        .get(&url)
+        .send()
+        .await
+        .context("query GitHub releases")?
+        .error_for_status()
+        .context("GitHub returned non-2xx")?
+        .json()
+        .await
+        .context("decode GitHub response")?;
+
+    let latest_tag = json["tag_name"]
+        .as_str()
+        .unwrap_or("")
+        .trim_start_matches('v')
+        .to_string();
+    let release_url = json["html_url"].as_str().unwrap_or("").to_string();
+    let release_notes = json["body"].as_str().unwrap_or("").to_string();
+
+    let download_url = json["assets"]
+        .as_array()
+        .and_then(|arr| {
+            arr.iter().find(|a| {
+                a["name"]
+                    .as_str()
+                    .map(|n| n.ends_with(ASSET_TAIL))
+                    .unwrap_or(false)
+            })
+        })
+        .and_then(|a| a["browser_download_url"].as_str().map(String::from));
+
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    let has_update = version_gt(&latest_tag, &current);
+
+    Ok(UpdateInfo {
+        current_version: current,
+        latest_version: latest_tag,
+        has_update,
+        download_url,
+        release_url,
+        release_notes,
+    })
+}
+
+fn version_gt(a: &str, b: &str) -> bool {
+    let parse = |s: &str| -> Vec<u32> {
+        s.split(['.', '-'])
+            .take(3)
+            .filter_map(|p| p.parse().ok())
+            .collect()
+    };
+    let av = parse(a);
+    let bv = parse(b);
+    for i in 0..av.len().max(bv.len()) {
+        let ai = av.get(i).copied().unwrap_or(0);
+        let bi = bv.get(i).copied().unwrap_or(0);
+        if ai > bi {
+            return true;
+        }
+        if ai < bi {
+            return false;
+        }
+    }
+    false
+}
+
+/// Download the new .exe to a temp file, write a swap-and-restart batch
+/// script next to it, spawn the script detached. The caller should then
+/// exit the app so the script can move the file in place.
+#[cfg(target_os = "windows")]
+pub async fn download_and_stage(download_url: &str) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("Millennium-Clipboard/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(120))
+        .build()?;
+    let bytes = client
+        .get(download_url)
+        .send()
+        .await
+        .context("download new exe")?
+        .error_for_status()?
+        .bytes()
+        .await
+        .context("read new exe body")?;
+
+    let current_exe = std::env::current_exe().context("locate current exe")?;
+    let temp_dir = std::env::temp_dir();
+    let staged = temp_dir.join("millennium-clipboard-update.exe");
+    let script = temp_dir.join("millennium-clipboard-update.bat");
+
+    tokio::fs::write(&staged, &bytes)
+        .await
+        .with_context(|| format!("write {}", staged.display()))?;
+
+    // Tiny self-deleting batch: wait → swap → launch new → delete script.
+    let bat = format!(
+        "@echo off\r\nping 127.0.0.1 -n 3 >nul\r\nmove /Y \"{src}\" \"{dst}\" >nul\r\nstart \"\" \"{dst}\"\r\ndel \"%~f0\"\r\n",
+        src = staged.display(),
+        dst = current_exe.display(),
+    );
+    tokio::fs::write(&script, bat)
+        .await
+        .with_context(|| format!("write {}", script.display()))?;
+
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+    const DETACHED_PROCESS: u32 = 0x00000008;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    Command::new("cmd")
+        .arg("/C")
+        .arg(&script)
+        .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
+        .spawn()
+        .context("spawn updater batch")?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub async fn download_and_stage(_download_url: &str) -> Result<()> {
+    bail!("auto-update is only supported on Windows in this build");
+}

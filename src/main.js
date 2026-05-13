@@ -58,6 +58,13 @@
   const addPeerError = document.getElementById('add-peer-error');
   const addPeerSubmit = document.getElementById('add-peer-submit');
 
+  const settingsCheckUpdate = document.getElementById('settings-check-update');
+  const settingsUpdateStatus = document.getElementById('settings-update-status');
+  const settingsUpdateAction = document.getElementById('settings-update-action');
+  const settingsUpdateBanner = document.getElementById('settings-update-banner');
+  const settingsApplyUpdate = document.getElementById('settings-apply-update');
+  let updateInfoCache = null;
+
   // ---------- App state ----------------------------------------------------
   const state = {
     peers: [],
@@ -104,7 +111,7 @@
     if (el) el.textContent = t;
   }
 
-  function showIncomingText(text, alias, fingerprint) {
+  function showIncomingText(text, alias, fingerprint, senderIp, senderPort) {
     if (toastHideTimer) {
       clearTimeout(toastHideTimer);
       toastHideTimer = null;
@@ -119,7 +126,7 @@
 
     const meta = document.createElement('div');
     meta.className = 'incoming-meta mono';
-    meta.textContent = `${text.length} CHARS · ${fingerprint.slice(0, 16)}...`;
+    meta.textContent = `${text.length} CHARS · ${fingerprint.slice(0, 16)}... · ${senderIp || '?'}`;
     toastText.appendChild(meta);
 
     const actions = document.createElement('div');
@@ -139,6 +146,27 @@
     });
     actions.appendChild(copyBtn);
 
+    const known = isKnownPeer(fingerprint);
+    if (!known && senderIp) {
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'incoming-btn';
+      saveBtn.textContent = '+ SAVE SENDER';
+      saveBtn.title = `Register ${alias} (${senderIp}) as a known peer so you can send back`;
+      saveBtn.addEventListener('click', async () => {
+        saveBtn.disabled = true;
+        saveBtn.textContent = '◷ SAVING...';
+        try {
+          await invoke('add_peer_by_ip', { ip: senderIp, port: senderPort || 53319 });
+          saveBtn.textContent = '✓ SAVED';
+          blip(1320, 0.08);
+        } catch (err) {
+          saveBtn.textContent = 'ERR';
+          saveBtn.disabled = false;
+        }
+      });
+      actions.appendChild(saveBtn);
+    }
+
     const closeBtn = document.createElement('button');
     closeBtn.className = 'incoming-btn';
     closeBtn.textContent = '✕ CLOSE';
@@ -149,7 +177,10 @@
 
     toastText.appendChild(actions);
     toast.hidden = false;
-    // Persistent — user must dismiss with COPY or CLOSE.
+  }
+
+  function isKnownPeer(fingerprint) {
+    return state.peers.some((p) => p.id === fingerprint);
   }
 
   // ---------- Uptime ticker -------------------------------------------------
@@ -304,8 +335,15 @@
       <div class="peer-icon">${ICON_SVG[p.iconType] || ICON_SVG.desktop}</div>
       <div class="peer-info">
         <div class="peer-name-row">
-          <span class="peer-name"></span>
-          <button class="fav-btn" aria-label="Toggle favorite"></button>
+          <span class="peer-name-wrap">
+            <span class="peer-name" title="Double-click to rename"></span>
+            <span class="peer-badge manual-badge" hidden>MANUAL</span>
+          </span>
+          <span class="peer-actions">
+            <button class="peer-action-btn rename-btn" title="Rename">✎</button>
+            <button class="peer-action-btn remove-btn" title="Remove manual peer" hidden>🗑</button>
+            <button class="fav-btn" aria-label="Toggle favorite"></button>
+          </span>
         </div>
         <div class="peer-meta">
           <span class="peer-hex mono"></span>
@@ -320,6 +358,11 @@
     li.querySelector('.peer-name').textContent = p.name;
     li.querySelector('.peer-hex').textContent = p.hexId;
     li.querySelector('.peer-ip').textContent = p.ip;
+
+    if (p.manual) {
+      li.querySelector('.manual-badge').hidden = false;
+      li.querySelector('.remove-btn').hidden = false;
+    }
 
     const favBtn = li.querySelector('.fav-btn');
     favBtn.textContent = p.favorite ? '★' : '☆';
@@ -351,6 +394,35 @@
 
   // ---------- Peer list events (delegated) ---------------------------------
   peerList.addEventListener('click', async (e) => {
+    // Rename
+    const renameBtn = e.target.closest('.rename-btn');
+    if (renameBtn) {
+      e.stopPropagation();
+      const item = renameBtn.closest('.peer-item');
+      if (item) startInlineRename(item);
+      return;
+    }
+    // Remove manual peer
+    const removeBtn = e.target.closest('.remove-btn');
+    if (removeBtn) {
+      e.stopPropagation();
+      const item = removeBtn.closest('.peer-item');
+      const id = item?.dataset.id;
+      if (!id) return;
+      const peer = state.peers.find((p) => p.id === id);
+      if (!peer) return;
+      const ok = confirm(`Remove manual peer "${peer.name}"?\nFavorite state will be kept.`);
+      if (!ok) return;
+      try {
+        await invoke('remove_manual_peer', { peerId: id });
+        blip(440, 0.08);
+        setStatus(`Removed manual peer ${peer.name}`);
+      } catch (err) {
+        setStatus(`ERR remove · ${err}`);
+      }
+      return;
+    }
+    // Favorite toggle
     const favBtn = e.target.closest('.fav-btn');
     if (favBtn) {
       e.stopPropagation();
@@ -373,6 +445,54 @@
     const item = e.target.closest('.peer-item');
     if (item && item.dataset.id) selectPeer(item.dataset.id);
   });
+
+  // Double-click on the name also opens inline rename
+  peerList.addEventListener('dblclick', (e) => {
+    const nameEl = e.target.closest('.peer-name');
+    if (!nameEl) return;
+    e.stopPropagation();
+    const item = nameEl.closest('.peer-item');
+    if (item) startInlineRename(item);
+  });
+
+  function startInlineRename(item) {
+    const nameEl = item.querySelector('.peer-name');
+    if (!nameEl || nameEl.querySelector('input')) return;
+    const id = item.dataset.id;
+    const original = nameEl.textContent;
+    nameEl.innerHTML = '';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'rename-input';
+    input.value = original;
+    input.maxLength = 64;
+    nameEl.appendChild(input);
+    input.focus();
+    input.select();
+
+    let done = false;
+    const finish = async (commit) => {
+      if (done) return;
+      done = true;
+      const newName = input.value.trim();
+      nameEl.textContent = commit && newName ? newName : original;
+      if (commit && newName && newName !== original) {
+        try {
+          await invoke('rename_peer', { peerId: id, newName });
+          blip(1100, 0.06);
+        } catch (err) {
+          nameEl.textContent = original;
+          setStatus(`ERR rename · ${err}`);
+        }
+      }
+    };
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', () => finish(true));
+  }
 
   // ---------- Filter buttons -----------------------------------------------
   document.querySelectorAll('.filter-btn').forEach((btn) => {
@@ -645,6 +765,40 @@
       li.innerHTML = `<span class="file-name">${escapeHtml(f.name)}</span><span class="file-size">${formatBytes(f.size)}</span>`;
       incomingFileList.appendChild(li);
     });
+
+    // First-contact banner — offer to save the sender if we don't know them yet.
+    const banner = document.getElementById('incoming-firstcontact');
+    if (banner) banner.remove();
+    if (payload.senderFingerprint && !isKnownPeer(payload.senderFingerprint) && payload.senderIp) {
+      const b = document.createElement('div');
+      b.id = 'incoming-firstcontact';
+      b.className = 'modal-firstcontact';
+      b.innerHTML = `
+        <div class="settings-label" style="color:var(--neon-magenta);text-shadow:0 0 6px var(--neon-magenta-glow);margin-bottom:6px">FIRST CONTACT</div>
+        <div style="display:flex;gap:6px;align-items:center;justify-content:space-between">
+          <span class="mono" style="font-size:11px;color:var(--text-mute)">${payload.senderIp}:${payload.senderPort || 53319}</span>
+          <button class="modal-btn small" id="firstcontact-save">+ SAVE PEER</button>
+        </div>
+      `;
+      incomingFileList.parentNode.insertBefore(b, incomingFileList);
+      b.querySelector('#firstcontact-save').addEventListener('click', async (e) => {
+        const btn = e.target;
+        btn.disabled = true;
+        btn.textContent = '◷ SAVING...';
+        try {
+          await invoke('add_peer_by_ip', {
+            ip: payload.senderIp,
+            port: payload.senderPort || 53319,
+          });
+          btn.textContent = '✓ SAVED';
+          blip(1320, 0.08);
+        } catch (err) {
+          btn.textContent = 'ERR';
+          btn.disabled = false;
+        }
+      });
+    }
+
     incomingModal.hidden = false;
     blip(880, 0.1);
     setTimeout(() => blip(660, 0.08), 130);
@@ -707,6 +861,11 @@
     settingsDownloadDir.textContent = state.settings.downloadDir;
     settingsAutoAccept.checked = state.settings.autoAcceptFavorites;
     settingsAutoAcceptLabel.textContent = state.settings.autoAcceptFavorites ? 'ON' : 'OFF';
+    // Reset update UI to a known state each time the modal opens
+    settingsUpdateStatus.textContent = `current v${(window.__LOCAL_INFO || {}).version || '?'}`;
+    settingsUpdateAction.hidden = true;
+    settingsApplyUpdate.disabled = false;
+    settingsApplyUpdate.textContent = '▸ DOWNLOAD & RESTART';
     settingsModal.hidden = false;
   }
 
@@ -750,6 +909,48 @@
       blip(1100, 0.06);
     } catch (err) {
       setStatus(`ERR change dir · ${err}`);
+    }
+  });
+
+  settingsCheckUpdate.addEventListener('click', async () => {
+    settingsCheckUpdate.disabled = true;
+    settingsCheckUpdate.textContent = '◷ ...';
+    settingsUpdateAction.hidden = true;
+    try {
+      const info = await invoke('check_for_update');
+      updateInfoCache = info;
+      settingsUpdateStatus.textContent = `current v${info.currentVersion} · latest v${info.latestVersion}`;
+      if (info.hasUpdate && info.downloadUrl) {
+        settingsUpdateBanner.textContent = `Update available: v${info.latestVersion}`;
+        settingsUpdateAction.hidden = false;
+        blip(1320, 0.06);
+      } else if (info.hasUpdate) {
+        settingsUpdateBanner.textContent = `New version available, no portable asset found.`;
+        settingsUpdateAction.hidden = false;
+        settingsApplyUpdate.disabled = true;
+      } else {
+        settingsUpdateBanner.textContent = '';
+        blip(660, 0.05);
+      }
+    } catch (err) {
+      settingsUpdateStatus.textContent = `ERR · ${err}`;
+    } finally {
+      settingsCheckUpdate.disabled = false;
+      settingsCheckUpdate.textContent = '▸ CHECK';
+    }
+  });
+
+  settingsApplyUpdate.addEventListener('click', async () => {
+    if (!updateInfoCache || !updateInfoCache.downloadUrl) return;
+    const ok = confirm(`Download v${updateInfoCache.latestVersion} and restart the app?`);
+    if (!ok) return;
+    settingsApplyUpdate.disabled = true;
+    settingsApplyUpdate.textContent = '◷ DOWNLOADING...';
+    try {
+      await invoke('apply_update', { downloadUrl: updateInfoCache.downloadUrl });
+      // The app should exit before we get here.
+    } catch (err) {
+      settingsApplyUpdate.textContent = `ERR · ${err}`;
     }
   });
 
@@ -833,6 +1034,7 @@
   async function boot() {
     try {
       const info = await invoke('get_local_info');
+      window.__LOCAL_INFO = info;
       hudHost.textContent = info.alias;
       hudIp.textContent = `${info.ip}:${info.port}`;
       hudVersion.textContent = `v${info.version}`;
@@ -858,8 +1060,8 @@
 
     // Incoming text from a peer (Fase 5)
     await listen('incoming-text', (event) => {
-      const { text, senderAlias, senderFingerprint } = event.payload;
-      showIncomingText(text, senderAlias, senderFingerprint);
+      const { text, senderAlias, senderFingerprint, senderIp, senderPort } = event.payload;
+      showIncomingText(text, senderAlias, senderFingerprint, senderIp, senderPort);
       blip(1320, 0.12);
       setTimeout(() => blip(1760, 0.1), 130);
     });

@@ -286,6 +286,19 @@
             </label>
           </div>
         </div>
+        <div class="settings-row">
+          <span class="settings-label">APP UPDATES</span>
+          <div class="settings-control" style="flex-direction:column;align-items:stretch;gap:6px">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+              <span class="settings-value mono" id="settings-update-status">current: vX.Y.Z</span>
+              <button class="modal-btn small" id="settings-check-update">▸ CHECK</button>
+            </div>
+            <div id="settings-update-action" hidden style="display:flex;gap:6px;align-items:center;justify-content:space-between;padding:6px 8px;border:1px solid var(--neon-cyan);background:rgba(0,240,255,0.06)">
+              <span class="mono" id="settings-update-banner" style="font-size:11px;color:var(--neon-cyan);text-shadow:0 0 6px var(--neon-cyan-glow)"></span>
+              <button class="modal-btn small" id="settings-apply-update">▸ DOWNLOAD &amp; RESTART</button>
+            </div>
+          </div>
+        </div>
         <div class="settings-row settings-info">
           <span class="settings-label">DATA DIR</span>
           <span class="settings-value mono" id="settings-data-dir">%APPDATA%\com.guidocameraeq.millennium</span>

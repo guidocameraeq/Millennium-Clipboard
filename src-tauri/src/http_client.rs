@@ -76,6 +76,7 @@ struct TextPayload {
     text: String,
     sender_alias: String,
     sender_fingerprint: String,
+    sender_port: u16,
 }
 
 pub async fn post_text(
@@ -84,11 +85,12 @@ pub async fn post_text(
     text: String,
     sender_alias: String,
     sender_fingerprint: String,
+    sender_port: u16,
 ) -> Result<()> {
     let url = format!("https://{}:{}/text", ip, port);
     let resp = client()
         .post(&url)
-        .json(&TextPayload { text, sender_alias, sender_fingerprint })
+        .json(&TextPayload { text, sender_alias, sender_fingerprint, sender_port })
         .send()
         .await
         .with_context(|| format!("POST {}", url))?;
@@ -119,6 +121,7 @@ struct PrepareUploadRequest<'a> {
     session_id: &'a str,
     sender_alias: &'a str,
     sender_fingerprint: &'a str,
+    sender_port: u16,
     files: &'a [PrepareFile],
 }
 
@@ -135,6 +138,7 @@ pub async fn prepare_upload(
     session_id: &str,
     sender_alias: &str,
     sender_fingerprint: &str,
+    sender_port: u16,
     files: &[PrepareFile],
 ) -> Result<PrepareUploadResponse> {
     let url = format!("https://{}:{}/prepare-upload", ip, port);
@@ -144,6 +148,7 @@ pub async fn prepare_upload(
             session_id,
             sender_alias,
             sender_fingerprint,
+            sender_port,
             files,
         })
         .send()

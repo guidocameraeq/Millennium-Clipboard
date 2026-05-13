@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tauri::Manager;
 use uuid::Uuid;
 
+mod aliases;
 mod discovery;
 mod http_client;
 mod http_server;
@@ -17,6 +18,7 @@ mod identity;
 mod manual_peers;
 mod preferences;
 mod settings;
+mod updater;
 
 // ---------------------------------------------------------------------------
 // Wire types shared with the frontend
@@ -50,6 +52,7 @@ pub struct AppState {
     prefs: Arc<preferences::PreferencesStore>,
     settings: Arc<settings::SettingsStore>,
     manual: Arc<manual_peers::ManualPeerStore>,
+    aliases: Arc<aliases::AliasStore>,
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +148,7 @@ async fn send_text(
         text,
         state.identity.alias.clone(),
         state.identity.fingerprint.clone(),
+        discovery::local_port(),
     )
     .await
     .map_err(|e| format!("send failed: {e:#}"))?;
@@ -237,6 +241,7 @@ async fn send_files(
         &session_id,
         &state.identity.alias,
         &state.identity.fingerprint,
+        discovery::local_port(),
         &prepare_files,
     )
     .await
@@ -391,6 +396,47 @@ fn remove_manual_peer(
     Ok(())
 }
 
+#[tauri::command]
+fn rename_peer(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    peer_id: String,
+    new_name: String,
+) -> Result<(), String> {
+    let trimmed = new_name.trim();
+    if trimmed.is_empty() {
+        state.aliases.clear(&peer_id).map_err(|e| format!("{e:#}"))?;
+    } else {
+        state
+            .aliases
+            .set(peer_id, trimmed.to_string())
+            .map_err(|e| format!("{e:#}"))?;
+    }
+    state.discovery.emit_snapshot(&app);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Auto-update (v0.5.0 F5)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn check_for_update() -> Result<updater::UpdateInfo, String> {
+    updater::check_for_update().await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+async fn apply_update(app: tauri::AppHandle, download_url: String) -> Result<(), String> {
+    updater::download_and_stage(&download_url)
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    // Give the batch script a chance to start, then exit so it can move
+    // the file in place.
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    app.exit(0);
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -418,6 +464,10 @@ pub fn run() {
             let manual = Arc::new(
                 manual_peers::ManualPeerStore::load_or_new(&data_dir)
                     .expect("failed to setup manual peers"),
+            );
+            let alias_store = Arc::new(
+                aliases::AliasStore::load_or_new(&data_dir)
+                    .expect("failed to setup aliases"),
             );
 
             // Compute a sensible default for incoming files. Avoid the
@@ -477,6 +527,7 @@ pub fn run() {
                 discovery::local_port(),
                 prefs.clone(),
                 manual.clone(),
+                alias_store.clone(),
             )
             .expect("failed to start mDNS discovery");
             eprintln!("[setup] discovery started");
@@ -487,6 +538,7 @@ pub fn run() {
                 prefs,
                 settings: settings_store,
                 manual,
+                aliases: alias_store,
             });
             Ok(())
         })
@@ -505,6 +557,9 @@ pub fn run() {
             set_auto_accept_favorites,
             add_peer_by_ip,
             remove_manual_peer,
+            rename_peer,
+            check_for_update,
+            apply_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
