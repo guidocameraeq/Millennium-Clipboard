@@ -254,125 +254,148 @@ pub fn start(
         }
     });
 
-    // Periodic re-browse + stale-peer reaper. mDNS-sd resolves a peer
-    // once and then stays quiet — without our own poke, last_seen drifts
-    // and looks like the peer left. Re-browsing every few seconds keeps
-    // healthy peers' timestamps fresh; the reaper still drops peers that
-    // stop answering for a generous window (covers ungraceful exits the
-    // standard mDNS goodbye would normally signal).
-    let peers_for_reaper = peers.clone();
-    let fullnames_for_reaper = fullnames.clone();
-    let prefs_for_reaper = prefs.clone();
-    let manual_for_reaper = manual.clone();
-    let aliases_for_reaper = aliases.clone();
-    let clipboard_for_reaper = clipboard.clone();
-    let app_for_reaper = app.clone();
-    let daemon_for_reaper = daemon.clone();
+    // ---------------------------------------------------------------------
+    // Unified presence poller (v0.7.0)
+    //
+    // mDNS multicast is unreliable on Wi-Fi with AP isolation, IGMP
+    // snooping, firewall quirks, or just packet loss. So we treat mDNS
+    // as a "first sight" mechanism and use a TCP probe of /info as the
+    // source of truth for online/offline.
+    //
+    // Every ~6 s we probe in parallel every peer we know about (from
+    // mDNS cache, manual entries, or stored favorites). If they reply
+    // with the expected fingerprint, they're online and we refresh the
+    // cache. Two consecutive failures → drop from live cache. Manual
+    // and favorite peers still show as offline in `build_wire_list`.
+    // ---------------------------------------------------------------------
+    let peers_for_poll = peers.clone();
+    let fullnames_for_poll = fullnames.clone();
+    let prefs_for_poll = prefs.clone();
+    let manual_for_poll = manual.clone();
+    let aliases_for_poll = aliases.clone();
+    let clipboard_for_poll = clipboard.clone();
+    let app_for_poll = app.clone();
+    let daemon_for_poll = daemon.clone();
+    let my_fp_poll = identity.fingerprint.clone();
+
     tauri::async_runtime::spawn(async move {
-        const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(90);
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(8));
+        use futures_util::future::join_all;
+        use std::collections::HashMap as Map;
+        use std::time::Duration;
+
+        let mut failures: Map<String, u8> = Map::new();
+        let mut tick = tokio::time::interval(Duration::from_secs(6));
         tick.tick().await; // skip the immediate first tick
+
         loop {
             tick.tick().await;
 
-            // Nudge the network so live peers re-announce.
-            let _ = daemon_for_reaper.browse(SERVICE_TYPE);
+            // Still poke mDNS so any newcomer that's announcing is heard.
+            let _ = daemon_for_poll.browse(SERVICE_TYPE);
 
-            let now = std::time::Instant::now();
-            let mut removed_ids: Vec<String> = Vec::new();
-            {
-                let mut peers = peers_for_reaper.lock().unwrap();
-                peers.retain(|id, record| {
-                    let alive = now.duration_since(record.last_seen) < STALE_AFTER;
-                    if !alive {
-                        removed_ids.push(id.clone());
-                    }
-                    alive
-                });
-            }
-            if !removed_ids.is_empty() {
-                let mut fn_map = fullnames_for_reaper.lock().unwrap();
-                fn_map.retain(|_, peer_id| !removed_ids.contains(peer_id));
-                drop(fn_map);
-                for id in &removed_ids {
-                    eprintln!("[mdns] reaper dropped stale peer {}", &id[..16.min(id.len())]);
-                }
-                let snapshot = build_wire_list(
-                    &peers_for_reaper,
-                    &prefs_for_reaper,
-                    &manual_for_reaper,
-                    &aliases_for_reaper,
-                    &clipboard_for_reaper,
+            // Build the candidate set, preferring mDNS metadata over
+            // manual/favorite stored data (mDNS has the freshest alias).
+            let mut by_fp: Map<String, (String, u16, String, String)> = Map::new();
+            for r in peers_for_poll.lock().unwrap().values() {
+                by_fp.insert(
+                    r.id.clone(),
+                    (r.ip.clone(), r.port, r.hex_id.clone(), r.icon_type.clone()),
                 );
-                let _ = app_for_reaper.emit("peers-changed", &snapshot);
             }
-        }
-    });
+            for m in manual_for_poll.snapshot() {
+                by_fp
+                    .entry(m.fingerprint.clone())
+                    .or_insert((m.ip, m.port, m.hex_id, m.icon_type));
+            }
+            for f in prefs_for_poll.favorites_snapshot() {
+                by_fp
+                    .entry(f.fingerprint.clone())
+                    .or_insert((f.last_ip, f.last_port, f.hex_id, f.icon_type));
+            }
+            by_fp.remove(&my_fp_poll);
 
-    // Manual-peer poller. Manual entries don't ride mDNS, so we ping
-    // them on a schedule and treat a successful /info reply as
-    // "online" by inserting/refreshing a record in the same cache.
-    let peers_for_manual = peers.clone();
-    let prefs_for_manual = prefs.clone();
-    let manual_for_manual = manual.clone();
-    let aliases_for_manual = aliases.clone();
-    let clipboard_for_manual = clipboard.clone();
-    let app_for_manual = app.clone();
-    let my_fp_for_manual = identity.fingerprint.clone();
-    tauri::async_runtime::spawn(async move {
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(12));
-        tick.tick().await; // skip immediate tick — give the rest of setup a beat
-        loop {
-            tick.tick().await;
-            let entries = manual_for_manual.snapshot();
-            if entries.is_empty() {
+            if by_fp.is_empty() {
                 continue;
             }
+
+            // Probe everyone in parallel with a tight per-peer timeout.
+            let probes: Vec<_> = by_fp
+                .into_iter()
+                .map(|(fp, (ip, port, hex_id, icon_type))| async move {
+                    let res = tokio::time::timeout(
+                        Duration::from_secs(3),
+                        crate::http_client::fetch_info(&ip, port),
+                    )
+                    .await;
+                    (fp, ip, port, hex_id, icon_type, res)
+                })
+                .collect();
+            let results = join_all(probes).await;
+
             let mut changed = false;
-            for m in entries {
-                if m.fingerprint == my_fp_for_manual {
-                    continue;
-                }
-                match crate::http_client::fetch_info(&m.ip, m.port).await {
-                    Ok(info) if info.fingerprint == m.fingerprint => {
+            for (fp, ip, port, hex_id, icon_type, res) in results {
+                match res {
+                    Ok(Ok(info)) if info.fingerprint == fp => {
+                        failures.remove(&fp);
                         let record = PeerRecord {
-                            id: m.fingerprint.clone(),
+                            id: fp.clone(),
                             name: info.alias,
-                            hex_id: m.hex_id.clone(),
-                            ip: m.ip.clone(),
-                            port: m.port,
-                            icon_type: m.icon_type.clone(),
+                            hex_id,
+                            ip,
+                            port,
+                            icon_type,
                             last_seen: std::time::Instant::now(),
                         };
-                        peers_for_manual
+                        let was_new = peers_for_poll
                             .lock()
                             .unwrap()
-                            .insert(m.fingerprint.clone(), record);
-                        changed = true;
-                    }
-                    Ok(_) => {
-                        eprintln!(
-                            "[manual] fingerprint drift at {}:{}, dropping from cache",
-                            m.ip, m.port
-                        );
-                        if peers_for_manual.lock().unwrap().remove(&m.fingerprint).is_some() {
+                            .insert(fp.clone(), record)
+                            .is_none();
+                        if was_new {
                             changed = true;
                         }
                     }
-                    Err(_) => {
-                        // unreachable; leave it as offline (presence handled by build_wire_list)
+                    Ok(Ok(info)) => {
+                        // Fingerprint drift — someone else now answers at that IP:port.
+                        eprintln!(
+                            "[poll] drift {}:{}: expected {} got {}",
+                            ip,
+                            port,
+                            &fp[..16.min(fp.len())],
+                            &info.fingerprint[..16.min(info.fingerprint.len())]
+                        );
+                        if peers_for_poll.lock().unwrap().remove(&fp).is_some() {
+                            changed = true;
+                        }
+                    }
+                    _ => {
+                        let count = failures.entry(fp.clone()).or_insert(0);
+                        *count += 1;
+                        if *count >= 2 {
+                            if peers_for_poll.lock().unwrap().remove(&fp).is_some() {
+                                changed = true;
+                            }
+                        }
                     }
                 }
             }
+
             if changed {
+                let live_ids: std::collections::HashSet<String> =
+                    peers_for_poll.lock().unwrap().keys().cloned().collect();
+                fullnames_for_poll
+                    .lock()
+                    .unwrap()
+                    .retain(|_, id| live_ids.contains(id));
+
                 let snapshot = build_wire_list(
-                    &peers_for_manual,
-                    &prefs_for_manual,
-                    &manual_for_manual,
-                    &aliases_for_manual,
-                    &clipboard_for_manual,
+                    &peers_for_poll,
+                    &prefs_for_poll,
+                    &manual_for_poll,
+                    &aliases_for_poll,
+                    &clipboard_for_poll,
                 );
-                let _ = app_for_manual.emit("peers-changed", &snapshot);
+                let _ = app_for_poll.emit("peers-changed", &snapshot);
             }
         }
     });
