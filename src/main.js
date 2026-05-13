@@ -51,6 +51,13 @@
   const settingsAutoAcceptLabel = document.getElementById('settings-auto-accept-label');
   const settingsCloseBtn = document.getElementById('settings-close');
 
+  const addPeerBtn = document.getElementById('add-peer-btn');
+  const addPeerModal = document.getElementById('add-peer-modal');
+  const addPeerIp = document.getElementById('add-peer-ip');
+  const addPeerPort = document.getElementById('add-peer-port');
+  const addPeerError = document.getElementById('add-peer-error');
+  const addPeerSubmit = document.getElementById('add-peer-submit');
+
   // ---------- App state ----------------------------------------------------
   const state = {
     peers: [],
@@ -291,6 +298,7 @@
     if (p.id === state.selectedPeerId) li.classList.add('selected');
     li.dataset.id = p.id;
     li.dataset.status = p.status;
+    li.dataset.manual = p.manual ? 'true' : 'false';
 
     li.innerHTML = `
       <div class="peer-icon">${ICON_SVG[p.iconType] || ICON_SVG.desktop}</div>
@@ -714,6 +722,7 @@
     if (e.key === 'Escape') {
       if (!settingsModal.hidden) closeSettingsModal();
       if (!incomingModal.hidden) closeIncomingModal();
+      if (!addPeerModal.hidden) closeAddPeerModal();
     }
   });
   settingsModal.addEventListener('click', (e) => {
@@ -756,6 +765,69 @@
       setStatus(`ERR toggle · ${err}`);
     }
   });
+
+  // ---------- Add peer by IP (Fase 8) --------------------------------------
+  function openAddPeerModal() {
+    addPeerError.hidden = true;
+    addPeerError.textContent = '';
+    addPeerIp.value = '';
+    addPeerPort.value = '53319';
+    addPeerSubmit.disabled = false;
+    addPeerSubmit.textContent = '▸ REGISTER';
+    addPeerModal.hidden = false;
+    setTimeout(() => addPeerIp.focus(), 0);
+  }
+
+  function closeAddPeerModal() {
+    addPeerModal.hidden = true;
+  }
+
+  addPeerBtn.addEventListener('click', () => {
+    blip(880, 0.06);
+    openAddPeerModal();
+  });
+
+  addPeerModal.addEventListener('click', (e) => {
+    if (e.target === addPeerModal) closeAddPeerModal();
+  });
+
+  const IPV4_RE = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+
+  async function submitAddPeer() {
+    const ip = addPeerIp.value.trim();
+    const port = parseInt(addPeerPort.value, 10) || 53319;
+    addPeerError.hidden = true;
+    addPeerError.textContent = '';
+    if (!IPV4_RE.test(ip)) {
+      addPeerError.textContent = 'INVALID IP — use IPv4 (eg 192.168.1.42)';
+      addPeerError.hidden = false;
+      return;
+    }
+    if (port < 1 || port > 65535) {
+      addPeerError.textContent = 'INVALID PORT';
+      addPeerError.hidden = false;
+      return;
+    }
+    addPeerSubmit.disabled = true;
+    addPeerSubmit.textContent = '◷ PROBING...';
+    try {
+      const peer = await invoke('add_peer_by_ip', { ip, port });
+      blip(1760, 0.1);
+      setTimeout(() => blip(2200, 0.12), 130);
+      setStatus(`OK · registered ${peer.alias} (${peer.hexId})`);
+      closeAddPeerModal();
+    } catch (err) {
+      addPeerError.textContent = String(err).toUpperCase();
+      addPeerError.hidden = false;
+      addPeerSubmit.disabled = false;
+      addPeerSubmit.textContent = '▸ RETRY';
+      blip(220, 0.15);
+    }
+  }
+
+  addPeerSubmit.addEventListener('click', submitAddPeer);
+  addPeerIp.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitAddPeer(); });
+  addPeerPort.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitAddPeer(); });
 
   // ---------- Boot ----------------------------------------------------------
   async function boot() {

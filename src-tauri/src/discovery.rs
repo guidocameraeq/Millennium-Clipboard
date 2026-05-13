@@ -6,6 +6,7 @@
 // later see at /info matches what the discovery announced.
 
 use crate::identity::Identity;
+use crate::manual_peers::ManualPeerStore;
 use crate::preferences::PreferencesStore;
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use serde::Serialize;
@@ -42,6 +43,7 @@ pub struct WirePeer {
     pub status: &'static str,
     pub favorite: bool,
     pub icon_type: String,
+    pub manual: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -57,7 +59,7 @@ pub struct PeerRecord {
 }
 
 impl PeerRecord {
-    pub fn to_wire(&self, favorite: bool) -> WirePeer {
+    pub fn to_wire(&self, favorite: bool, manual: bool) -> WirePeer {
         WirePeer {
             id: self.id.clone(),
             name: self.name.clone(),
@@ -67,6 +69,7 @@ impl PeerRecord {
             status: "online",
             favorite,
             icon_type: self.icon_type.clone(),
+            manual,
         }
     }
 }
@@ -78,21 +81,48 @@ pub struct DiscoveryState {
     pub peers: PeerMap,
     pub fullnames: FullnameMap,
     pub prefs: Arc<PreferencesStore>,
+    pub manual: Arc<ManualPeerStore>,
     #[allow(dead_code)]
     pub daemon: ServiceDaemon,
 }
 
-/// Build the merged wire-list (online + offline favorites). Used by
-/// the public API, the event handler, and the reaper task.
-fn build_wire_list(peers: &PeerMap, prefs: &PreferencesStore) -> Vec<WirePeer> {
+/// Build the merged wire-list. Sources in priority order:
+///   1. Peers currently visible on mDNS (status = online).
+///   2. Manually-added peers we couldn't reach (status = offline, manual = true).
+///   3. Favorite peers we haven't seen in this session (status = offline).
+fn build_wire_list(
+    peers: &PeerMap,
+    prefs: &PreferencesStore,
+    manual: &ManualPeerStore,
+) -> Vec<WirePeer> {
     let online = peers.lock().unwrap();
     let mut result: Vec<WirePeer> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for record in online.values() {
         let is_fav = prefs.is_favorite(&record.id);
-        result.push(record.to_wire(is_fav));
+        let is_manual = manual.contains(&record.id);
+        result.push(record.to_wire(is_fav, is_manual));
         seen.insert(record.id.clone());
+    }
+
+    // Manual peers that aren't reachable right now still belong on the list.
+    for m in manual.snapshot() {
+        if seen.contains(&m.fingerprint) {
+            continue;
+        }
+        result.push(WirePeer {
+            id: m.fingerprint.clone(),
+            name: m.alias,
+            hex_id: m.hex_id,
+            ip: m.ip,
+            port: m.port,
+            status: "offline",
+            favorite: prefs.is_favorite(&m.fingerprint),
+            icon_type: m.icon_type,
+            manual: true,
+        });
+        seen.insert(m.fingerprint);
     }
 
     for fav in prefs.favorites_snapshot() {
@@ -108,6 +138,7 @@ fn build_wire_list(peers: &PeerMap, prefs: &PreferencesStore) -> Vec<WirePeer> {
             status: "offline",
             favorite: true,
             icon_type: fav.icon_type,
+            manual: false,
         });
     }
     result
@@ -115,20 +146,35 @@ fn build_wire_list(peers: &PeerMap, prefs: &PreferencesStore) -> Vec<WirePeer> {
 
 impl DiscoveryState {
     pub fn peers_for_wire(&self) -> Vec<WirePeer> {
-        build_wire_list(&self.peers, &self.prefs)
+        build_wire_list(&self.peers, &self.prefs, &self.manual)
     }
 
-    /// Build a FavoritePeer payload from a currently-known peer, if any.
+    /// Build a FavoritePeer payload from a currently-known peer, falling
+    /// back to manually-registered data so peers added by hand can still
+    /// be marked as favorites.
     pub fn favorite_from_peer(&self, fingerprint: &str) -> Option<crate::preferences::FavoritePeer> {
-        let peers = self.peers.lock().unwrap();
-        peers.get(fingerprint).map(|r| crate::preferences::FavoritePeer {
-            fingerprint: r.id.clone(),
-            alias: r.name.clone(),
-            hex_id: r.hex_id.clone(),
-            icon_type: r.icon_type.clone(),
-            last_ip: r.ip.clone(),
-            last_port: r.port,
-        })
+        if let Some(r) = self.peers.lock().unwrap().get(fingerprint) {
+            return Some(crate::preferences::FavoritePeer {
+                fingerprint: r.id.clone(),
+                alias: r.name.clone(),
+                hex_id: r.hex_id.clone(),
+                icon_type: r.icon_type.clone(),
+                last_ip: r.ip.clone(),
+                last_port: r.port,
+            });
+        }
+        self.manual
+            .snapshot()
+            .into_iter()
+            .find(|m| m.fingerprint == fingerprint)
+            .map(|m| crate::preferences::FavoritePeer {
+                fingerprint: m.fingerprint,
+                alias: m.alias,
+                hex_id: m.hex_id,
+                icon_type: m.icon_type,
+                last_ip: m.ip,
+                last_port: m.port,
+            })
     }
 
     pub fn emit_snapshot(&self, app: &AppHandle) {
@@ -146,6 +192,7 @@ pub fn start(
     identity: &Identity,
     port: u16,
     prefs: Arc<PreferencesStore>,
+    manual: Arc<ManualPeerStore>,
 ) -> Result<DiscoveryState, mdns_sd::Error> {
     let daemon = ServiceDaemon::new()?;
     let peers: PeerMap = Arc::new(Mutex::new(HashMap::new()));
@@ -158,6 +205,7 @@ pub fn start(
     let peers_for_task = peers.clone();
     let fullnames_for_task = fullnames.clone();
     let prefs_for_task = prefs.clone();
+    let manual_for_task = manual.clone();
     let my_fingerprint = identity.fingerprint.clone();
     let app_handle = app.clone();
 
@@ -171,6 +219,7 @@ pub fn start(
                         &peers_for_task,
                         &fullnames_for_task,
                         &prefs_for_task,
+                        &manual_for_task,
                         &app_handle,
                     );
                 }
@@ -191,6 +240,7 @@ pub fn start(
     let peers_for_reaper = peers.clone();
     let fullnames_for_reaper = fullnames.clone();
     let prefs_for_reaper = prefs.clone();
+    let manual_for_reaper = manual.clone();
     let app_for_reaper = app.clone();
     let daemon_for_reaper = daemon.clone();
     tauri::async_runtime::spawn(async move {
@@ -222,13 +272,75 @@ pub fn start(
                 for id in &removed_ids {
                     eprintln!("[mdns] reaper dropped stale peer {}", &id[..16.min(id.len())]);
                 }
-                let snapshot = build_wire_list(&peers_for_reaper, &prefs_for_reaper);
+                let snapshot =
+                    build_wire_list(&peers_for_reaper, &prefs_for_reaper, &manual_for_reaper);
                 let _ = app_for_reaper.emit("peers-changed", &snapshot);
             }
         }
     });
 
-    Ok(DiscoveryState { peers, fullnames, prefs, daemon })
+    // Manual-peer poller. Manual entries don't ride mDNS, so we ping
+    // them on a schedule and treat a successful /info reply as
+    // "online" by inserting/refreshing a record in the same cache.
+    let peers_for_manual = peers.clone();
+    let prefs_for_manual = prefs.clone();
+    let manual_for_manual = manual.clone();
+    let app_for_manual = app.clone();
+    let my_fp_for_manual = identity.fingerprint.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(12));
+        tick.tick().await; // skip immediate tick — give the rest of setup a beat
+        loop {
+            tick.tick().await;
+            let entries = manual_for_manual.snapshot();
+            if entries.is_empty() {
+                continue;
+            }
+            let mut changed = false;
+            for m in entries {
+                if m.fingerprint == my_fp_for_manual {
+                    continue;
+                }
+                match crate::http_client::fetch_info(&m.ip, m.port).await {
+                    Ok(info) if info.fingerprint == m.fingerprint => {
+                        let record = PeerRecord {
+                            id: m.fingerprint.clone(),
+                            name: info.alias,
+                            hex_id: m.hex_id.clone(),
+                            ip: m.ip.clone(),
+                            port: m.port,
+                            icon_type: m.icon_type.clone(),
+                            last_seen: std::time::Instant::now(),
+                        };
+                        peers_for_manual
+                            .lock()
+                            .unwrap()
+                            .insert(m.fingerprint.clone(), record);
+                        changed = true;
+                    }
+                    Ok(_) => {
+                        eprintln!(
+                            "[manual] fingerprint drift at {}:{}, dropping from cache",
+                            m.ip, m.port
+                        );
+                        if peers_for_manual.lock().unwrap().remove(&m.fingerprint).is_some() {
+                            changed = true;
+                        }
+                    }
+                    Err(_) => {
+                        // unreachable; leave it as offline (presence handled by build_wire_list)
+                    }
+                }
+            }
+            if changed {
+                let snapshot =
+                    build_wire_list(&peers_for_manual, &prefs_for_manual, &manual_for_manual);
+                let _ = app_for_manual.emit("peers-changed", &snapshot);
+            }
+        }
+    });
+
+    Ok(DiscoveryState { peers, fullnames, prefs, manual, daemon })
 }
 
 pub fn rebrowse(state: &DiscoveryState) -> Result<(), mdns_sd::Error> {
@@ -289,6 +401,7 @@ fn handle_event(
     peers: &PeerMap,
     fullnames: &FullnameMap,
     prefs: &Arc<PreferencesStore>,
+    manual: &Arc<ManualPeerStore>,
     app: &AppHandle,
 ) {
     match event {
@@ -338,7 +451,7 @@ fn handle_event(
                 let mut f = fullnames.lock().unwrap();
                 f.insert(fullname, id);
             }
-            emit_peers_changed(app, peers, prefs);
+            emit_peers_changed(app, peers, prefs, manual);
         }
         ServiceEvent::ServiceRemoved(_, fullname) => {
             let removed_id = {
@@ -347,14 +460,19 @@ fn handle_event(
             };
             if let Some(id) = removed_id {
                 peers.lock().unwrap().remove(&id);
-                emit_peers_changed(app, peers, prefs);
+                emit_peers_changed(app, peers, prefs, manual);
             }
         }
         _ => {}
     }
 }
 
-fn emit_peers_changed(app: &AppHandle, peers: &PeerMap, prefs: &Arc<PreferencesStore>) {
-    let snapshot = build_wire_list(peers, prefs);
+fn emit_peers_changed(
+    app: &AppHandle,
+    peers: &PeerMap,
+    prefs: &Arc<PreferencesStore>,
+    manual: &Arc<ManualPeerStore>,
+) {
+    let snapshot = build_wire_list(peers, prefs, manual);
     let _ = app.emit("peers-changed", &snapshot);
 }

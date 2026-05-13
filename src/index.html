@@ -80,8 +80,9 @@
           <button class="filter-btn active" data-filter="favorites">★ FAVORITES</button>
           <button class="filter-btn" data-filter="all">ALL</button>
           <div class="filter-spacer"></div>
-          <span class="filter-hint" id="filter-hint">scanning...</span>
+          <button class="filter-btn add-peer-btn" id="add-peer-btn" title="Register a peer by IP (for networks where mDNS is blocked)">+ ADD</button>
         </div>
+        <span class="filter-hint mono" id="filter-hint">scanning...</span>
 
         <ul class="peer-list" id="peer-list">
           <li class="peer-loading">⌛ SCANNING NETWORK...</li>
@@ -224,6 +225,35 @@
       <div class="modal-actions">
         <button class="modal-btn reject" id="incoming-reject">✕ REJECT</button>
         <button class="modal-btn accept" id="incoming-accept">▸ ACCEPT</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add peer by IP modal -->
+  <div class="modal-backdrop" id="add-peer-modal" hidden>
+    <div class="modal">
+      <div class="card-corners">
+        <span></span><span></span><span></span><span></span>
+      </div>
+      <header class="modal-head">
+        <span class="modal-glyph">+</span>
+        <span class="modal-title">REGISTER PEER BY IP</span>
+      </header>
+      <div class="modal-body">
+        <p class="settings-label" style="margin-bottom:12px">For office networks where mDNS is blocked. Enter the peer's local IP. The remote machine must be running Millennium Clipboard.</p>
+        <div class="settings-row">
+          <span class="settings-label">IP ADDRESS</span>
+          <input type="text" class="text-input" id="add-peer-ip" placeholder="192.168.1.42" autocomplete="off" />
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">PORT</span>
+          <input type="number" class="text-input" id="add-peer-port" value="53319" min="1" max="65535" />
+        </div>
+        <div class="modal-error mono" id="add-peer-error" hidden></div>
+      </div>
+      <div class="modal-actions">
+        <button class="modal-btn reject" id="add-peer-cancel" onclick="document.getElementById('add-peer-modal').hidden=true">✕ CANCEL</button>
+        <button class="modal-btn accept" id="add-peer-submit">▸ REGISTER</button>
       </div>
     </div>
   </div>

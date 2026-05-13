@@ -1384,6 +1384,73 @@ html, body {
   word-break: break-all;
 }
 
+/* Text input inside modals (Fase 8) */
+.text-input {
+  flex: 1;
+  background: rgba(0, 12, 24, 0.6);
+  border: 1px solid var(--neon-cyan-soft);
+  color: var(--neon-cyan);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  letter-spacing: 1px;
+  padding: 8px 10px;
+  outline: none;
+  text-shadow: 0 0 6px var(--neon-cyan-glow);
+}
+.text-input:focus {
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 14px var(--neon-cyan-glow), inset 0 0 8px rgba(0, 240, 255, 0.08);
+}
+.text-input::placeholder {
+  color: var(--text-dim);
+  text-shadow: none;
+}
+
+.modal-error {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--neon-red);
+  background: rgba(255, 56, 96, 0.08);
+  color: var(--neon-red);
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  text-shadow: 0 0 6px rgba(255, 56, 96, 0.4);
+}
+
+/* "+ ADD" peer button in the filter bar */
+.filter-btn.add-peer-btn {
+  border-color: var(--neon-magenta);
+  color: var(--neon-magenta);
+}
+.filter-btn.add-peer-btn:hover {
+  background: rgba(255, 43, 214, 0.08);
+  box-shadow: 0 0 12px var(--neon-magenta-glow), inset 0 0 8px rgba(255, 43, 214, 0.12);
+  text-shadow: 0 0 6px var(--neon-magenta-glow);
+}
+
+/* Filter hint sits below the filter bar now so it has its own line */
+.filter-hint {
+  display: block;
+  margin-bottom: 8px;
+  text-align: right;
+  padding-right: 2px;
+}
+
+/* Manual-peer indicator (📌 badge inside the name row) */
+.peer-item[data-manual="true"] .peer-name-row::after {
+  content: "MANUAL";
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 1px;
+  color: var(--neon-magenta);
+  border: 1px solid var(--neon-magenta);
+  vertical-align: middle;
+  text-shadow: 0 0 4px var(--neon-magenta-glow);
+}
+
 /* ==========================================================================
    RESPONSIVE
    ========================================================================== */

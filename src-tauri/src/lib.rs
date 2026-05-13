@@ -14,6 +14,7 @@ mod discovery;
 mod http_client;
 mod http_server;
 mod identity;
+mod manual_peers;
 mod preferences;
 mod settings;
 
@@ -48,6 +49,7 @@ pub struct AppState {
     identity: identity::Identity,
     prefs: Arc<preferences::PreferencesStore>,
     settings: Arc<settings::SettingsStore>,
+    manual: Arc<manual_peers::ManualPeerStore>,
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +335,63 @@ fn set_auto_accept_favorites(
 }
 
 // ---------------------------------------------------------------------------
+// Manual peers (Fase 8) — register a peer by IP for networks where mDNS is
+// blocked (AP isolation, corporate VLANs).
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn add_peer_by_ip(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    ip: String,
+    port: Option<u16>,
+) -> Result<manual_peers::ManualPeer, String> {
+    let port = port.unwrap_or(discovery::DEFAULT_PORT);
+    let info = http_client::fetch_info(&ip, port)
+        .await
+        .map_err(|e| format!("could not reach {}:{} — {e:#}", ip, port))?;
+
+    if info.fingerprint == state.identity.fingerprint {
+        return Err("that's your own machine".into());
+    }
+
+    let icon_type = if info.protocol.contains("phone") || info.protocol.contains("mobile") {
+        "phone".to_string()
+    } else {
+        "desktop".to_string()
+    };
+    let peer = manual_peers::ManualPeer {
+        fingerprint: info.fingerprint.clone(),
+        alias: info.alias,
+        hex_id: info.hex_id,
+        icon_type,
+        ip,
+        port,
+    };
+    state.manual.add(peer.clone()).map_err(|e| format!("{e:#}"))?;
+    state.discovery.emit_snapshot(&app);
+    println!(
+        "[backend] add_peer_by_ip → {} {}:{}",
+        peer.alias, peer.ip, peer.port
+    );
+    Ok(peer)
+}
+
+#[tauri::command]
+fn remove_manual_peer(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    peer_id: String,
+) -> Result<(), String> {
+    state.manual.remove(&peer_id).map_err(|e| format!("{e:#}"))?;
+    // Also drop it from the live peer cache so the offline ghost
+    // disappears without waiting for the reaper.
+    state.discovery.peers.lock().unwrap().remove(&peer_id);
+    state.discovery.emit_snapshot(&app);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -355,6 +414,10 @@ pub fn run() {
             let prefs = Arc::new(
                 preferences::PreferencesStore::load_or_new(&data_dir)
                     .expect("failed to setup preferences"),
+            );
+            let manual = Arc::new(
+                manual_peers::ManualPeerStore::load_or_new(&data_dir)
+                    .expect("failed to setup manual peers"),
             );
 
             // Compute a sensible default for incoming files. Avoid the
@@ -413,6 +476,7 @@ pub fn run() {
                 &identity,
                 discovery::local_port(),
                 prefs.clone(),
+                manual.clone(),
             )
             .expect("failed to start mDNS discovery");
             eprintln!("[setup] discovery started");
@@ -422,6 +486,7 @@ pub fn run() {
                 identity,
                 prefs,
                 settings: settings_store,
+                manual,
             });
             Ok(())
         })
@@ -438,6 +503,8 @@ pub fn run() {
             get_settings,
             set_download_dir,
             set_auto_accept_favorites,
+            add_peer_by_ip,
+            remove_manual_peer,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
