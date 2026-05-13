@@ -19,6 +19,7 @@ mod identity;
 mod manual_peers;
 mod preferences;
 mod settings;
+mod udp_discovery;
 mod updater;
 
 // ---------------------------------------------------------------------------
@@ -543,7 +544,14 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            // 0. Install the rustls crypto provider before anything uses TLS.
+            // 0. Logging — enabled only when RUST_LOG is set, so it's
+            //    silent by default but can be flipped on for debug.
+            let _ = env_logger::Builder::from_env(
+                env_logger::Env::default().default_filter_or("warn"),
+            )
+            .try_init();
+
+            // 0b. Install the rustls crypto provider before anything uses TLS.
             let _ = rustls::crypto::ring::default_provider().install_default();
 
             // 1. Identity + prefs + settings.
@@ -635,7 +643,28 @@ pub fn run() {
             .expect("failed to start mDNS discovery");
             eprintln!("[setup] discovery started");
 
-            // 4. Clipboard-sync poller. Reads the OS clipboard every
+            // 4. UDP broadcast discovery — runs alongside mDNS so peers
+            //    appear even on networks that filter multicast.
+            let udp_info = udp_discovery::LocalInfo {
+                alias: identity.alias.clone(),
+                fingerprint: identity.fingerprint.clone(),
+                hex_id: identity.hex_id.clone(),
+                tcp_port: discovery::local_port(),
+                local_ip: identity.local_ip.clone(),
+            };
+            if let Err(e) = udp_discovery::spawn(
+                app.handle().clone(),
+                udp_info,
+                discovery_state.peers.clone(),
+                prefs.clone(),
+                manual.clone(),
+                alias_store.clone(),
+                clipboard_store.clone(),
+            ) {
+                eprintln!("[udp] failed to start broadcast discovery: {e:?}");
+            }
+
+            // 5. Clipboard-sync poller. Reads the OS clipboard every
             //    500 ms and broadcasts changes to opted-in peers.
             spawn_clipboard_poller(
                 discovery_state.peers.clone(),

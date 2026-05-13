@@ -10,7 +10,7 @@ use crate::clipboard_sync::ClipboardSyncStore;
 use crate::identity::Identity;
 use crate::manual_peers::ManualPeerStore;
 use crate::preferences::PreferencesStore;
-use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{IfKind, ServiceDaemon, ServiceEvent, ServiceInfo};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -96,7 +96,7 @@ pub struct DiscoveryState {
 ///   1. Peers currently visible on mDNS (status = online).
 ///   2. Manually-added peers we couldn't reach (status = offline, manual = true).
 ///   3. Favorite peers we haven't seen in this session (status = offline).
-fn build_wire_list(
+pub(crate) fn build_wire_list(
     peers: &PeerMap,
     prefs: &PreferencesStore,
     manual: &ManualPeerStore,
@@ -214,6 +214,24 @@ pub fn start(
     clipboard: Arc<ClipboardSyncStore>,
 ) -> Result<DiscoveryState, mdns_sd::Error> {
     let daemon = ServiceDaemon::new()?;
+
+    // Restrict mDNS to the actual physical NIC. By default `mdns-sd`
+    // binds to every interface it finds — which on Windows includes
+    // Hyper-V / WSL / VirtualBox virtual switches and any VPN TAP. The
+    // daemon then often announces via the wrong one and peers don't see
+    // each other. Forcing the bind to our resolved local IP is the
+    // single biggest reliability fix.
+    if let Ok(local_ip) = identity.local_ip.parse::<std::net::IpAddr>() {
+        let _ = daemon.disable_interface(IfKind::All);
+        match daemon.enable_interface(IfKind::Addr(local_ip)) {
+            Ok(_) => eprintln!("[mdns] bound to interface {}", local_ip),
+            Err(e) => eprintln!("[mdns] failed to bind to {}: {}", local_ip, e),
+        }
+        let _ = daemon.disable_interface(IfKind::IPv6);
+    } else {
+        eprintln!("[mdns] could not parse local_ip='{}', using default bind", identity.local_ip);
+    }
+
     let peers: PeerMap = Arc::new(Mutex::new(HashMap::new()));
     let fullnames: FullnameMap = Arc::new(Mutex::new(HashMap::new()));
 
@@ -419,6 +437,21 @@ fn detect_icon_type() -> &'static str {
     }
 }
 
+/// Strip the alias down to characters that are legal in a DNS label
+/// (ASCII alphanumeric plus `-`). Empty result falls back to "host".
+fn sanitize_hostname(s: &str) -> String {
+    let cleaned: String = s
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
+        .collect();
+    let trimmed = cleaned.trim_matches('-');
+    if trimmed.is_empty() {
+        "host".to_string()
+    } else {
+        trimmed.to_lowercase()
+    }
+}
+
 fn register_self(daemon: &ServiceDaemon, id: &Identity, port: u16) -> Result<(), mdns_sd::Error> {
     let mut props = HashMap::new();
     props.insert("id".to_string(), id.fingerprint.clone());
@@ -430,11 +463,9 @@ fn register_self(daemon: &ServiceDaemon, id: &Identity, port: u16) -> Result<(),
     // Add a per-port suffix so two instances on the same host (dev) can
     // both register without colliding on the mDNS instance name.
     let instance_name = format!("millennium-{}-{}", &id.fingerprint[..8], port);
-    let host = if id.alias.is_empty() {
-        "host".to_string()
-    } else {
-        id.alias.to_lowercase()
-    };
+    // mDNS hostnames must be ASCII alphanumeric (plus `-`). Strip
+    // anything else from the user alias before using it.
+    let host = sanitize_hostname(&id.alias);
 
     let service = ServiceInfo::new(
         SERVICE_TYPE,
