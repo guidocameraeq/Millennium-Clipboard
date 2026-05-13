@@ -58,6 +58,9 @@ secrets/
 
 # Logs / temp
 *.log
+*.log.err
 *.tmp
 tmp/
 .cache/
+.inst*
+.tmp-*
