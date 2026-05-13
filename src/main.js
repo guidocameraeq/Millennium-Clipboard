@@ -342,6 +342,7 @@
           <span class="peer-actions">
             <button class="peer-action-btn rename-btn" title="Rename">✎</button>
             <button class="peer-action-btn remove-btn" title="Remove manual peer" hidden>🗑</button>
+            <button class="clip-btn" aria-label="Toggle clipboard sync">📋</button>
             <button class="fav-btn" aria-label="Toggle favorite"></button>
           </span>
         </div>
@@ -363,6 +364,12 @@
       li.querySelector('.manual-badge').hidden = false;
       li.querySelector('.remove-btn').hidden = false;
     }
+
+    const clipBtn = li.querySelector('.clip-btn');
+    clipBtn.dataset.on = p.clipboardSync ? 'true' : 'false';
+    clipBtn.title = p.clipboardSync
+      ? 'Clipboard sync ON · click to disable'
+      : 'Clipboard sync OFF · click to enable (mutual consent required)';
 
     const favBtn = li.querySelector('.fav-btn');
     favBtn.textContent = p.favorite ? '★' : '☆';
@@ -419,6 +426,26 @@
         setStatus(`Removed manual peer ${peer.name}`);
       } catch (err) {
         setStatus(`ERR remove · ${err}`);
+      }
+      return;
+    }
+    // Clipboard sync toggle
+    const clipBtn = e.target.closest('.clip-btn');
+    if (clipBtn) {
+      e.stopPropagation();
+      const item = clipBtn.closest('.peer-item');
+      const id = item?.dataset.id;
+      if (!id) return;
+      const next = clipBtn.dataset.on !== 'true';
+      try {
+        await invoke('set_clipboard_sync', { peerId: id, enabled: next });
+        clipBtn.dataset.on = next ? 'true' : 'false';
+        blip(next ? 1320 : 440, 0.05);
+        setStatus(next
+          ? `Clipboard sync ENABLED for this peer (both sides must enable)`
+          : `Clipboard sync disabled for this peer`);
+      } catch (err) {
+        setStatus(`ERR clipboard · ${err}`);
       }
       return;
     }
@@ -1128,6 +1155,14 @@
       progressBlock.hidden = true;
       setProgress(0);
       setStatus('Transfer cancelled.');
+    });
+
+    // Clipboard sync — feedback when a peer pushes something to us (v0.6.0)
+    await listen('clipboard-received', (event) => {
+      const { senderAlias, text } = event.payload;
+      const preview = text.length > 40 ? text.slice(0, 40) + '...' : text;
+      setStatus(`📋 ${senderAlias} → clipboard: ${preview}`);
+      blip(880, 0.06);
     });
 
     // Preload settings (used by transmit + settings modal)

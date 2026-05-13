@@ -11,6 +11,7 @@ use tauri::Manager;
 use uuid::Uuid;
 
 mod aliases;
+mod clipboard_sync;
 mod discovery;
 mod http_client;
 mod http_server;
@@ -53,6 +54,7 @@ pub struct AppState {
     settings: Arc<settings::SettingsStore>,
     manual: Arc<manual_peers::ManualPeerStore>,
     aliases: Arc<aliases::AliasStore>,
+    clipboard: Arc<clipboard_sync::ClipboardSyncStore>,
 }
 
 // ---------------------------------------------------------------------------
@@ -425,6 +427,100 @@ async fn check_for_update() -> Result<updater::UpdateInfo, String> {
     updater::check_for_update().await.map_err(|e| format!("{e:#}"))
 }
 
+// ---------------------------------------------------------------------------
+// Clipboard sync (v0.6.0)
+// ---------------------------------------------------------------------------
+
+fn spawn_clipboard_poller(
+    peers: discovery::PeerMap,
+    store: Arc<clipboard_sync::ClipboardSyncStore>,
+    my_alias: String,
+    my_fingerprint: String,
+) {
+    tauri::async_runtime::spawn(async move {
+        let mut last_seen: Option<String> = None;
+        let mut tick = tokio::time::interval(std::time::Duration::from_millis(500));
+        tick.tick().await; // skip immediate first tick
+        loop {
+            tick.tick().await;
+
+            // Reading the OS clipboard is blocking — keep it off the
+            // tokio worker pool.
+            let text: Option<String> = tokio::task::spawn_blocking(|| {
+                arboard::Clipboard::new()
+                    .ok()
+                    .and_then(|mut cb| cb.get_text().ok())
+            })
+            .await
+            .ok()
+            .flatten();
+
+            let Some(text) = text else { continue };
+            if text.is_empty() || text.len() > 1_000_000 {
+                continue;
+            }
+            if last_seen.as_deref() == Some(text.as_str()) {
+                continue;
+            }
+            last_seen = Some(text.clone());
+
+            let hash = clipboard_sync::hash_text(&text);
+            // Loop prevention: skip if we just applied this hash from a peer.
+            if store.is_recent(&hash) {
+                continue;
+            }
+            store.note_synced(hash.clone());
+
+            // Collect enabled+online targets.
+            let targets: Vec<(String, u16)> = {
+                let enabled = store.enabled_snapshot();
+                if enabled.is_empty() {
+                    Vec::new()
+                } else {
+                    let p = peers.lock().unwrap();
+                    enabled
+                        .into_iter()
+                        .filter(|fp| fp != &my_fingerprint)
+                        .filter_map(|fp| p.get(&fp).map(|r| (r.ip.clone(), r.port)))
+                        .collect()
+                }
+            };
+            if targets.is_empty() {
+                continue;
+            }
+
+            for (ip, port) in targets {
+                let text = text.clone();
+                let alias = my_alias.clone();
+                let fp = my_fingerprint.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) =
+                        http_client::post_clipboard(&ip, port, &text, &alias, &fp).await
+                    {
+                        eprintln!("[clipboard] sync to {}:{} failed: {}", ip, port, e);
+                    }
+                });
+            }
+        }
+    });
+}
+
+#[tauri::command]
+fn set_clipboard_sync(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    peer_id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    state
+        .clipboard
+        .set(peer_id.clone(), enabled)
+        .map_err(|e| format!("{e:#}"))?;
+    println!("[backend] set_clipboard_sync → peer={} enabled={}", peer_id, enabled);
+    state.discovery.emit_snapshot(&app);
+    Ok(())
+}
+
 #[tauri::command]
 async fn apply_update(app: tauri::AppHandle, download_url: String) -> Result<(), String> {
     updater::download_and_stage(&download_url)
@@ -469,6 +565,10 @@ pub fn run() {
                 aliases::AliasStore::load_or_new(&data_dir)
                     .expect("failed to setup aliases"),
             );
+            let clipboard_store = Arc::new(
+                clipboard_sync::ClipboardSyncStore::load_or_new(&data_dir)
+                    .expect("failed to setup clipboard sync"),
+            );
 
             // Compute a sensible default for incoming files. Avoid the
             // Tauri path API here — calling desktop_dir() inside the
@@ -499,6 +599,7 @@ pub fn run() {
             let server_app = app.handle().clone();
             let prefs_for_server = prefs.clone();
             let settings_for_server = settings_store.clone();
+            let clipboard_for_server = clipboard_store.clone();
             eprintln!("[setup] spawning HTTPS server task...");
             tauri::async_runtime::spawn(async move {
                 eprintln!("[setup] http_server::run starting");
@@ -510,6 +611,7 @@ pub fn run() {
                     key_pem,
                     prefs_for_server,
                     settings_for_server,
+                    clipboard_for_server,
                 )
                 .await
                 {
@@ -528,9 +630,19 @@ pub fn run() {
                 prefs.clone(),
                 manual.clone(),
                 alias_store.clone(),
+                clipboard_store.clone(),
             )
             .expect("failed to start mDNS discovery");
             eprintln!("[setup] discovery started");
+
+            // 4. Clipboard-sync poller. Reads the OS clipboard every
+            //    500 ms and broadcasts changes to opted-in peers.
+            spawn_clipboard_poller(
+                discovery_state.peers.clone(),
+                clipboard_store.clone(),
+                identity.alias.clone(),
+                identity.fingerprint.clone(),
+            );
 
             app.manage(AppState {
                 discovery: discovery_state,
@@ -539,6 +651,7 @@ pub fn run() {
                 settings: settings_store,
                 manual,
                 aliases: alias_store,
+                clipboard: clipboard_store,
             });
             Ok(())
         })
@@ -560,6 +673,7 @@ pub fn run() {
             rename_peer,
             check_for_update,
             apply_update,
+            set_clipboard_sync,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -258,3 +258,39 @@ pub async fn cancel_upload(ip: &str, port: u16, session_id: &str) -> Result<()> 
     let _ = client().post(&url).send().await; // best-effort
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// /clipboard (v0.6.0)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipboardPayload<'a> {
+    text: &'a str,
+    sender_alias: &'a str,
+    sender_fingerprint: &'a str,
+}
+
+pub async fn post_clipboard(
+    ip: &str,
+    port: u16,
+    text: &str,
+    sender_alias: &str,
+    sender_fingerprint: &str,
+) -> Result<()> {
+    let url = format!("https://{}:{}/clipboard", ip, port);
+    let resp = client()
+        .post(&url)
+        .json(&ClipboardPayload { text, sender_alias, sender_fingerprint })
+        .send()
+        .await
+        .with_context(|| format!("POST {}", url))?;
+    if resp.status() == reqwest::StatusCode::FORBIDDEN {
+        // Peer hasn't opted into sync with us — silent skip.
+        return Ok(());
+    }
+    if !resp.status().is_success() {
+        bail!("clipboard endpoint returned {}", resp.status());
+    }
+    Ok(())
+}

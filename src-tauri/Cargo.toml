@@ -1,6 +1,6 @@
 [package]
 name = "millennium-clipboard"
-version = "0.5.0"
+version = "0.6.0"
 description = "Share text and files between devices on the same LAN"
 authors = ["guidocameraeq"]
 edition = "2021"
@@ -45,4 +45,7 @@ mime_guess = "2"
 bytes = "1"
 futures-util = "0.3"
 tokio-util = { version = "0.7", features = ["io"] }
+
+# Clipboard sync (v0.6.0)
+arboard = "3"
 

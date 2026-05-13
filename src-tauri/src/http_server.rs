@@ -30,6 +30,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
+use crate::clipboard_sync::{hash_text, ClipboardSyncStore};
 use crate::preferences::PreferencesStore;
 use crate::settings::SettingsStore;
 
@@ -59,6 +60,7 @@ struct ServerState {
     app: AppHandle,
     prefs: Arc<PreferencesStore>,
     settings: Arc<SettingsStore>,
+    clipboard: Arc<ClipboardSyncStore>,
     sessions: Arc<Mutex<HashMap<String, IncomingSession>>>,
 }
 
@@ -93,12 +95,14 @@ pub async fn run(
     key_pem: String,
     prefs: Arc<PreferencesStore>,
     settings: Arc<SettingsStore>,
+    clipboard: Arc<ClipboardSyncStore>,
 ) -> Result<()> {
     let state = ServerState {
         info: Arc::new(info),
         app,
         prefs,
         settings,
+        clipboard,
         sessions: Arc::new(Mutex::new(HashMap::new())),
     };
 
@@ -108,6 +112,7 @@ pub async fn run(
         .route("/prepare-upload", post(handle_prepare_upload))
         .route("/upload/{session_id}/{file_id}", post(handle_upload))
         .route("/cancel/{session_id}", post(handle_cancel))
+        .route("/clipboard", post(handle_clipboard))
         .with_state(state);
 
     let tls = RustlsConfig::from_pem(cert_pem.into_bytes(), key_pem.into_bytes())
@@ -591,6 +596,61 @@ async fn handle_upload(
 // ---------------------------------------------------------------------------
 // /cancel/:sessionId
 // ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipboardPayload {
+    text: String,
+    sender_alias: String,
+    sender_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipboardReceivedEvent {
+    text: String,
+    sender_alias: String,
+    sender_fingerprint: String,
+    received_at: i64,
+}
+
+async fn handle_clipboard(
+    State(state): State<ServerState>,
+    Json(payload): Json<ClipboardPayload>,
+) -> StatusCode {
+    // Mutual-consent check: we only accept clipboard pushes from peers
+    // that we explicitly opted in to.
+    if !state.clipboard.is_enabled(&payload.sender_fingerprint) {
+        return StatusCode::FORBIDDEN;
+    }
+
+    let hash = hash_text(&payload.text);
+    state.clipboard.note_synced(hash);
+
+    // Write to the local clipboard (blocking work runs off-runtime).
+    let text_for_write = payload.text.clone();
+    let written = tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+        cb.set_text(text_for_write).map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await;
+
+    if let Ok(Err(e)) = written {
+        eprintln!("[clipboard] failed to write OS clipboard: {}", e);
+    }
+
+    let _ = state.app.emit(
+        "clipboard-received",
+        &ClipboardReceivedEvent {
+            text: payload.text,
+            sender_alias: payload.sender_alias,
+            sender_fingerprint: payload.sender_fingerprint,
+            received_at: unix_now(),
+        },
+    );
+    StatusCode::OK
+}
 
 async fn handle_cancel(
     State(state): State<ServerState>,

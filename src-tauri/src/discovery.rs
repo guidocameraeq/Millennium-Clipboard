@@ -6,6 +6,7 @@
 // later see at /info matches what the discovery announced.
 
 use crate::aliases::AliasStore;
+use crate::clipboard_sync::ClipboardSyncStore;
 use crate::identity::Identity;
 use crate::manual_peers::ManualPeerStore;
 use crate::preferences::PreferencesStore;
@@ -45,6 +46,7 @@ pub struct WirePeer {
     pub favorite: bool,
     pub icon_type: String,
     pub manual: bool,
+    pub clipboard_sync: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -60,7 +62,7 @@ pub struct PeerRecord {
 }
 
 impl PeerRecord {
-    pub fn to_wire(&self, favorite: bool, manual: bool) -> WirePeer {
+    pub fn to_wire(&self, favorite: bool, manual: bool, clipboard_sync: bool) -> WirePeer {
         WirePeer {
             id: self.id.clone(),
             name: self.name.clone(),
@@ -71,6 +73,7 @@ impl PeerRecord {
             favorite,
             icon_type: self.icon_type.clone(),
             manual,
+            clipboard_sync,
         }
     }
 }
@@ -84,6 +87,7 @@ pub struct DiscoveryState {
     pub prefs: Arc<PreferencesStore>,
     pub manual: Arc<ManualPeerStore>,
     pub aliases: Arc<AliasStore>,
+    pub clipboard: Arc<ClipboardSyncStore>,
     #[allow(dead_code)]
     pub daemon: ServiceDaemon,
 }
@@ -97,19 +101,20 @@ fn build_wire_list(
     prefs: &PreferencesStore,
     manual: &ManualPeerStore,
     aliases: &AliasStore,
+    clipboard: &ClipboardSyncStore,
 ) -> Vec<WirePeer> {
     let online = peers.lock().unwrap();
     let mut result: Vec<WirePeer> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    let apply_alias = |fp: &str, default: String| -> String {
-        aliases.get(fp).unwrap_or(default)
-    };
+    let apply_alias =
+        |fp: &str, default: String| -> String { aliases.get(fp).unwrap_or(default) };
 
     for record in online.values() {
         let is_fav = prefs.is_favorite(&record.id);
         let is_manual = manual.contains(&record.id);
-        let mut wire = record.to_wire(is_fav, is_manual);
+        let clip_sync = clipboard.is_enabled(&record.id);
+        let mut wire = record.to_wire(is_fav, is_manual, clip_sync);
         wire.name = apply_alias(&record.id, wire.name);
         result.push(wire);
         seen.insert(record.id.clone());
@@ -130,6 +135,7 @@ fn build_wire_list(
             favorite: prefs.is_favorite(&m.fingerprint),
             icon_type: m.icon_type,
             manual: true,
+            clipboard_sync: clipboard.is_enabled(&m.fingerprint),
         });
         seen.insert(m.fingerprint);
     }
@@ -140,7 +146,7 @@ fn build_wire_list(
         }
         let name = apply_alias(&fav.fingerprint, fav.alias);
         result.push(WirePeer {
-            id: fav.fingerprint,
+            id: fav.fingerprint.clone(),
             name,
             hex_id: fav.hex_id,
             ip: fav.last_ip,
@@ -149,6 +155,7 @@ fn build_wire_list(
             favorite: true,
             icon_type: fav.icon_type,
             manual: false,
+            clipboard_sync: clipboard.is_enabled(&fav.fingerprint),
         });
     }
     result
@@ -156,7 +163,7 @@ fn build_wire_list(
 
 impl DiscoveryState {
     pub fn peers_for_wire(&self) -> Vec<WirePeer> {
-        build_wire_list(&self.peers, &self.prefs, &self.manual, &self.aliases)
+        build_wire_list(&self.peers, &self.prefs, &self.manual, &self.aliases, &self.clipboard)
     }
 
     /// Build a FavoritePeer payload from a currently-known peer, falling
@@ -204,6 +211,7 @@ pub fn start(
     prefs: Arc<PreferencesStore>,
     manual: Arc<ManualPeerStore>,
     aliases: Arc<AliasStore>,
+    clipboard: Arc<ClipboardSyncStore>,
 ) -> Result<DiscoveryState, mdns_sd::Error> {
     let daemon = ServiceDaemon::new()?;
     let peers: PeerMap = Arc::new(Mutex::new(HashMap::new()));
@@ -218,6 +226,7 @@ pub fn start(
     let prefs_for_task = prefs.clone();
     let manual_for_task = manual.clone();
     let aliases_for_task = aliases.clone();
+    let clipboard_for_task = clipboard.clone();
     let my_fingerprint = identity.fingerprint.clone();
     let app_handle = app.clone();
 
@@ -233,6 +242,7 @@ pub fn start(
                         &prefs_for_task,
                         &manual_for_task,
                         &aliases_for_task,
+                        &clipboard_for_task,
                         &app_handle,
                     );
                 }
@@ -255,6 +265,7 @@ pub fn start(
     let prefs_for_reaper = prefs.clone();
     let manual_for_reaper = manual.clone();
     let aliases_for_reaper = aliases.clone();
+    let clipboard_for_reaper = clipboard.clone();
     let app_for_reaper = app.clone();
     let daemon_for_reaper = daemon.clone();
     tauri::async_runtime::spawn(async move {
@@ -291,6 +302,7 @@ pub fn start(
                     &prefs_for_reaper,
                     &manual_for_reaper,
                     &aliases_for_reaper,
+                    &clipboard_for_reaper,
                 );
                 let _ = app_for_reaper.emit("peers-changed", &snapshot);
             }
@@ -304,6 +316,7 @@ pub fn start(
     let prefs_for_manual = prefs.clone();
     let manual_for_manual = manual.clone();
     let aliases_for_manual = aliases.clone();
+    let clipboard_for_manual = clipboard.clone();
     let app_for_manual = app.clone();
     let my_fp_for_manual = identity.fingerprint.clone();
     tauri::async_runtime::spawn(async move {
@@ -357,13 +370,14 @@ pub fn start(
                     &prefs_for_manual,
                     &manual_for_manual,
                     &aliases_for_manual,
+                    &clipboard_for_manual,
                 );
                 let _ = app_for_manual.emit("peers-changed", &snapshot);
             }
         }
     });
 
-    Ok(DiscoveryState { peers, fullnames, prefs, manual, aliases, daemon })
+    Ok(DiscoveryState { peers, fullnames, prefs, manual, aliases, clipboard, daemon })
 }
 
 pub fn rebrowse(state: &DiscoveryState) -> Result<(), mdns_sd::Error> {
@@ -426,6 +440,7 @@ fn handle_event(
     prefs: &Arc<PreferencesStore>,
     manual: &Arc<ManualPeerStore>,
     aliases: &Arc<AliasStore>,
+    clipboard: &Arc<ClipboardSyncStore>,
     app: &AppHandle,
 ) {
     match event {
@@ -475,7 +490,7 @@ fn handle_event(
                 let mut f = fullnames.lock().unwrap();
                 f.insert(fullname, id);
             }
-            emit_peers_changed(app, peers, prefs, manual, aliases);
+            emit_peers_changed(app, peers, prefs, manual, aliases, clipboard);
         }
         ServiceEvent::ServiceRemoved(_, fullname) => {
             let removed_id = {
@@ -484,7 +499,7 @@ fn handle_event(
             };
             if let Some(id) = removed_id {
                 peers.lock().unwrap().remove(&id);
-                emit_peers_changed(app, peers, prefs, manual, aliases);
+                emit_peers_changed(app, peers, prefs, manual, aliases, clipboard);
             }
         }
         _ => {}
@@ -497,7 +512,8 @@ fn emit_peers_changed(
     prefs: &Arc<PreferencesStore>,
     manual: &Arc<ManualPeerStore>,
     aliases: &Arc<AliasStore>,
+    clipboard: &Arc<ClipboardSyncStore>,
 ) {
-    let snapshot = build_wire_list(peers, prefs, manual, aliases);
+    let snapshot = build_wire_list(peers, prefs, manual, aliases, clipboard);
     let _ = app.emit("peers-changed", &snapshot);
 }
