@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
 mod discovery;
+mod http_client;
 mod http_server;
 mod identity;
 
@@ -49,7 +50,7 @@ fn get_local_info(state: tauri::State<AppState>) -> LocalInfo {
         alias: id.alias.clone(),
         host_id_hex: id.hex_id.clone(),
         ip: id.local_ip.clone(),
-        port: discovery::SERVICE_PORT,
+        port: discovery::local_port(),
         fingerprint: id.fingerprint.clone(),
         version: env!("CARGO_PKG_VERSION").into(),
     }
@@ -81,12 +82,53 @@ fn rescan_peers(state: tauri::State<AppState>) -> Result<Vec<discovery::WirePeer
 }
 
 #[tauri::command]
-fn send_text(peer_id: String, text: String) -> Result<(), String> {
+async fn send_text(
+    state: tauri::State<'_, AppState>,
+    peer_id: String,
+    text: String,
+) -> Result<(), String> {
+    // 1. Look the peer up in the discovery cache.
+    let target = state
+        .discovery
+        .peers
+        .lock()
+        .unwrap()
+        .get(&peer_id)
+        .cloned()
+        .ok_or_else(|| format!("peer {} not on the grid", peer_id))?;
+
     println!(
-        "[backend] send_text → peer={} chars={}",
-        peer_id,
+        "[backend] send_text → peer={} ({}:{}) chars={}",
+        target.name,
+        target.ip,
+        target.port,
         text.chars().count()
     );
+
+    // 2. Cross-check identity: what the server reports must match the
+    //    fingerprint mDNS advertised. Mismatch = MITM or stale cache.
+    let remote = http_client::fetch_info(&target.ip, target.port)
+        .await
+        .map_err(|e| format!("identity probe failed: {e:#}"))?;
+    if remote.fingerprint != peer_id {
+        return Err(format!(
+            "fingerprint mismatch — expected {}, got {}",
+            &peer_id[..16],
+            &remote.fingerprint[..16]
+        ));
+    }
+
+    // 3. Send the text.
+    http_client::post_text(
+        &target.ip,
+        target.port,
+        text,
+        state.identity.alias.clone(),
+        state.identity.fingerprint.clone(),
+    )
+    .await
+    .map_err(|e| format!("send failed: {e:#}"))?;
+
     Ok(())
 }
 
@@ -115,6 +157,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            // 0. Pick a TLS crypto provider before anything uses rustls
+            //    (axum-server + reqwest both auto-select otherwise).
+            let _ = rustls::crypto::ring::default_provider().install_default();
+
             // 1. Identity (load or generate cert)
             let data_dir = app
                 .path()
@@ -133,9 +179,16 @@ pub fn run() {
             };
             let cert_pem = identity.cert_pem.clone();
             let key_pem = identity.key_pem.clone();
+            let server_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) =
-                    http_server::run(discovery::SERVICE_PORT, info, cert_pem, key_pem).await
+                if let Err(e) = http_server::run(
+                    server_app,
+                    discovery::local_port(),
+                    info,
+                    cert_pem,
+                    key_pem,
+                )
+                .await
                 {
                     eprintln!("[http] server error: {e:?}");
                 }
@@ -143,8 +196,8 @@ pub fn run() {
 
             // 3. mDNS discovery
             let handle = app.handle().clone();
-            let discovery_state =
-                discovery::start(handle, &identity).expect("failed to start mDNS discovery");
+            let discovery_state = discovery::start(handle, &identity, discovery::local_port())
+                .expect("failed to start mDNS discovery");
 
             app.manage(AppState {
                 discovery: discovery_state,

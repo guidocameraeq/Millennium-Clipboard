@@ -14,7 +14,17 @@ use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 
 pub const SERVICE_TYPE: &str = "_millennium._tcp.local.";
-pub const SERVICE_PORT: u16 = 53319;
+pub const DEFAULT_PORT: u16 = 53319;
+
+/// Resolve the local listening port. Defaults to 53319; can be
+/// overridden by `MILLENNIUM_PORT` (useful for running multiple
+/// instances on the same host during development).
+pub fn local_port() -> u16 {
+    std::env::var("MILLENNIUM_PORT")
+        .ok()
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(DEFAULT_PORT)
+}
 
 // ---------------------------------------------------------------------------
 // Wire types — what reaches the frontend.
@@ -74,12 +84,12 @@ pub struct DiscoveryState {
 // Public API
 // ---------------------------------------------------------------------------
 
-pub fn start(app: AppHandle, identity: &Identity) -> Result<DiscoveryState, mdns_sd::Error> {
+pub fn start(app: AppHandle, identity: &Identity, port: u16) -> Result<DiscoveryState, mdns_sd::Error> {
     let daemon = ServiceDaemon::new()?;
     let peers: PeerMap = Arc::new(Mutex::new(HashMap::new()));
     let fullnames: FullnameMap = Arc::new(Mutex::new(HashMap::new()));
 
-    register_self(&daemon, identity)?;
+    register_self(&daemon, identity, port)?;
 
     let receiver = daemon.browse(SERVICE_TYPE)?;
 
@@ -127,7 +137,7 @@ fn detect_icon_type() -> &'static str {
     }
 }
 
-fn register_self(daemon: &ServiceDaemon, id: &Identity) -> Result<(), mdns_sd::Error> {
+fn register_self(daemon: &ServiceDaemon, id: &Identity, port: u16) -> Result<(), mdns_sd::Error> {
     let mut props = HashMap::new();
     props.insert("id".to_string(), id.fingerprint.clone());
     props.insert("alias".to_string(), id.alias.clone());
@@ -135,7 +145,9 @@ fn register_self(daemon: &ServiceDaemon, id: &Identity) -> Result<(), mdns_sd::E
     props.insert("version".to_string(), env!("CARGO_PKG_VERSION").to_string());
     props.insert("icon".to_string(), detect_icon_type().to_string());
 
-    let instance_name = format!("millennium-{}", &id.fingerprint[..8]);
+    // Add a per-port suffix so two instances on the same host (dev) can
+    // both register without colliding on the mDNS instance name.
+    let instance_name = format!("millennium-{}-{}", &id.fingerprint[..8], port);
     let host = if id.alias.is_empty() {
         "host".to_string()
     } else {
@@ -147,7 +159,7 @@ fn register_self(daemon: &ServiceDaemon, id: &Identity) -> Result<(), mdns_sd::E
         &instance_name,
         &format!("{}.local.", host),
         id.local_ip.as_str(),
-        SERVICE_PORT,
+        port,
         Some(props),
     )?;
     daemon.register(service)?;
@@ -155,7 +167,7 @@ fn register_self(daemon: &ServiceDaemon, id: &Identity) -> Result<(), mdns_sd::E
         "[mdns] registered {} on {}:{} (fp={})",
         instance_name,
         id.local_ip,
-        SERVICE_PORT,
+        port,
         &id.fingerprint[..16]
     );
     Ok(())

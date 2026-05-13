@@ -1084,6 +1084,58 @@ html, body {
   letter-spacing: 1px;
 }
 
+/* Incoming text variant of the alert */
+.incoming-body {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--neon-cyan);
+  text-shadow: 0 0 6px var(--neon-cyan-glow);
+  padding: 10px 12px;
+  background: rgba(0, 240, 255, 0.05);
+  border: 1px solid var(--neon-cyan-soft);
+  max-height: 180px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  letter-spacing: 0.5px;
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+.incoming-meta {
+  font-size: 9px;
+  color: var(--text-mute);
+  letter-spacing: 2px;
+  margin-bottom: 10px;
+}
+
+.incoming-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.incoming-btn {
+  flex: 1;
+  padding: 8px 10px;
+  background: transparent;
+  border: 1px solid var(--neon-cyan-soft);
+  color: var(--text-bright);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.incoming-btn:hover {
+  background: rgba(0, 240, 255, 0.1);
+  border-color: var(--neon-cyan);
+  color: var(--neon-cyan);
+  text-shadow: 0 0 6px var(--neon-cyan-glow);
+  box-shadow: 0 0 12px var(--neon-cyan-glow);
+}
+
 /* ==========================================================================
    RESPONSIVE
    ========================================================================== */

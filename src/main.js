@@ -62,9 +62,67 @@
   // ---------- Status helpers -----------------------------------------------
   function setStatus(msg) { statusMsg.textContent = msg; }
   function showToast(text) {
+    toastText.innerHTML = '';
     toastText.textContent = text;
+    setToastTitle('TRANSMIT OK');
     toast.hidden = false;
-    setTimeout(() => (toast.hidden = true), 3800);
+    if (toastHideTimer) clearTimeout(toastHideTimer);
+    toastHideTimer = setTimeout(() => (toast.hidden = true), 3800);
+  }
+
+  let toastHideTimer = null;
+
+  function setToastTitle(t) {
+    const el = document.querySelector('.alert-title');
+    if (el) el.textContent = t;
+  }
+
+  function showIncomingText(text, alias, fingerprint) {
+    if (toastHideTimer) {
+      clearTimeout(toastHideTimer);
+      toastHideTimer = null;
+    }
+    setToastTitle(`◂ INCOMING FROM ${alias}`);
+    toastText.innerHTML = '';
+
+    const body = document.createElement('div');
+    body.className = 'incoming-body';
+    body.textContent = text;
+    toastText.appendChild(body);
+
+    const meta = document.createElement('div');
+    meta.className = 'incoming-meta mono';
+    meta.textContent = `${text.length} CHARS · ${fingerprint.slice(0, 16)}...`;
+    toastText.appendChild(meta);
+
+    const actions = document.createElement('div');
+    actions.className = 'incoming-actions';
+
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'incoming-btn';
+    copyBtn.textContent = '⎘ COPY';
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(text);
+        copyBtn.textContent = '✓ COPIED';
+        blip(1760, 0.08);
+      } catch (e) {
+        copyBtn.textContent = 'ERR';
+      }
+    });
+    actions.appendChild(copyBtn);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'incoming-btn';
+    closeBtn.textContent = '✕ CLOSE';
+    closeBtn.addEventListener('click', () => {
+      toast.hidden = true;
+    });
+    actions.appendChild(closeBtn);
+
+    toastText.appendChild(actions);
+    toast.hidden = false;
+    // Persistent — user must dismiss with COPY or CLOSE.
   }
 
   // ---------- Uptime ticker -------------------------------------------------
@@ -473,6 +531,14 @@
     // Live updates from the mDNS daemon (Fase 3+)
     await listen('peers-changed', (event) => {
       applyPeers(event.payload, /* initial = */ false);
+    });
+
+    // Incoming text from a peer (Fase 5)
+    await listen('incoming-text', (event) => {
+      const { text, senderAlias, senderFingerprint } = event.payload;
+      showIncomingText(text, senderAlias, senderFingerprint);
+      blip(1320, 0.12);
+      setTimeout(() => blip(1760, 0.1), 130);
     });
 
     updateCharCount();

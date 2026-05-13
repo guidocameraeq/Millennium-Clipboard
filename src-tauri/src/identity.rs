@@ -27,7 +27,15 @@ pub struct Identity {
 
 impl Identity {
     pub fn load_or_generate(data_dir: &Path) -> Result<Self> {
-        let identity_file = data_dir.join("identity.json");
+        // Dev convenience: spawning a second instance on the same box
+        // would otherwise share identity.json. MILLENNIUM_INSTANCE=N
+        // gives that instance its own identity-N.json so two peers
+        // can find each other locally.
+        let filename = match std::env::var("MILLENNIUM_INSTANCE").ok() {
+            Some(s) if !s.is_empty() => format!("identity-{}.json", s),
+            _ => "identity.json".to_string(),
+        };
+        let identity_file = data_dir.join(filename);
 
         if identity_file.exists() {
             let raw = fs::read_to_string(&identity_file)
