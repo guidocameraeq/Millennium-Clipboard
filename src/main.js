@@ -228,11 +228,15 @@
   };
 
   function renderPeers() {
-    const filtered = state.peers.filter((p) =>
-      state.filter === 'all' ? true : p.favorite,
-    );
+    const filtered = state.peers.filter((p) => {
+      if (state.filter === 'favorites') return p.favorite;
+      // ALL = peers currently on the network
+      return p.status !== 'offline';
+    });
 
     peerList.innerHTML = '';
+
+    const onlineCount = state.peers.filter((p) => p.status !== 'offline').length;
 
     if (state.peers.length === 0) {
       const li = document.createElement('li');
@@ -245,7 +249,7 @@
       if (state.filter === 'favorites') {
         li.innerHTML = '— NO FAVORITES YET —<br><small style="opacity:0.6;letter-spacing:1px;font-size:9px">switch to ALL and click ★ to add one</small>';
       } else {
-        li.textContent = '— NO PEERS —';
+        li.innerHTML = '— NO PEERS ONLINE —<br><small style="opacity:0.6;letter-spacing:1px;font-size:9px">waiting on the grid</small>';
       }
       peerList.appendChild(li);
     } else {
@@ -253,8 +257,10 @@
     }
 
     const favCount = state.peers.filter((p) => p.favorite).length;
-    peerCount.textContent = String(state.peers.length).padStart(2, '0');
-    statusPeers.textContent = String(state.peers.length).padStart(2, '0');
+    // HUD peer-count badge reflects what the current tab is showing.
+    peerCount.textContent = String(filtered.length).padStart(2, '0');
+    // Bottom-strip PEERS = online on the network right now.
+    statusPeers.textContent = String(onlineCount).padStart(2, '0');
     statusFav.textContent = String(favCount).padStart(2, '0');
     filterHint.textContent = `${String(filtered.length).padStart(2, '0')} visible`;
   }
