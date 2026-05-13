@@ -1,13 +1,11 @@
-// Millennium Clipboard // GRID — frontend
-// Fase 2: peers and local info come from the Rust backend via Tauri's
-// invoke bridge. Send is wired to send_text / send_files (still mocked
-// on the Rust side until Fase 5).
+// Millennium Clipboard // GRID — frontend (Fase 7)
 
 (() => {
   'use strict';
 
   const { invoke } = window.__TAURI__.core;
   const { listen } = window.__TAURI__.event;
+  const dialog = window.__TAURI__.dialog;
 
   // ---------- DOM refs -----------------------------------------------------
   const textarea = document.getElementById('text-composer');
@@ -35,13 +33,35 @@
   const fileQueue = document.getElementById('file-queue');
   const soundToggle = document.getElementById('sound-toggle');
 
+  // Modals
+  const incomingModal = document.getElementById('incoming-modal');
+  const incomingSenderName = document.getElementById('incoming-sender-name');
+  const incomingSenderHex = document.getElementById('incoming-sender-hex');
+  const incomingFileCount = document.getElementById('incoming-file-count');
+  const incomingTotalSize = document.getElementById('incoming-total-size');
+  const incomingFileList = document.getElementById('incoming-file-list');
+  const incomingTimer = document.getElementById('incoming-timer');
+  const incomingAcceptBtn = document.getElementById('incoming-accept');
+  const incomingRejectBtn = document.getElementById('incoming-reject');
+
+  const settingsModal = document.getElementById('settings-modal');
+  const settingsDownloadDir = document.getElementById('settings-download-dir');
+  const settingsPickDir = document.getElementById('settings-pick-dir');
+  const settingsAutoAccept = document.getElementById('settings-auto-accept');
+  const settingsAutoAcceptLabel = document.getElementById('settings-auto-accept-label');
+  const settingsCloseBtn = document.getElementById('settings-close');
+
   // ---------- App state ----------------------------------------------------
   const state = {
     peers: [],
     selectedPeerId: null,
     filter: 'favorites',
     mode: 'text',
-    queuedFiles: [], // mock for now; Fase 7 wires real paths
+    queuedFiles: [], // [{ path, name, size }]
+    settings: null,
+    pendingIncoming: null, // { sessionId, files, totalSize, deadlineAt }
+    incomingTimerHandle: null,
+    activeTransfer: null, // { sessionId, files: [{ fileId, name, size, bytes }], totalBytes }
   };
 
   // ---------- Progress bar segments ----------------------------------------
@@ -372,59 +392,117 @@
     });
   });
 
-  // ---------- File dropzone (mock paths — Fase 7 wires real paths) --------
-  function mockAddFile(name, size) {
-    fileQueue.hidden = false;
-    const li = document.createElement('li');
-    li.textContent = `▸ ${name}  //  ${size}`;
-    fileQueue.appendChild(li);
-    state.queuedFiles.push(name);
+  // ---------- File dropzone (real: picker + Tauri drag-drop) --------------
+  function formatBytes(n) {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   }
-  dropzone.addEventListener('click', () => {
-    mockAddFile('proyecto-borrador.docx', '142 KB');
-    blip(1100, 0.05);
-  });
-  dropzone.addEventListener('dragover', (e) => {
+
+  function renderQueue() {
+    fileQueue.innerHTML = '';
+    if (state.queuedFiles.length === 0) {
+      fileQueue.hidden = true;
+      return;
+    }
+    fileQueue.hidden = false;
+    state.queuedFiles.forEach((f, idx) => {
+      const li = document.createElement('li');
+      li.innerHTML = `<span>▸ ${escapeHtml(f.name)}</span><span style="opacity:.7"> · ${formatBytes(f.size)} · <a href="#" data-remove="${idx}" style="color:var(--neon-magenta);text-decoration:none">[X]</a></span>`;
+      fileQueue.appendChild(li);
+    });
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s;
+    return div.innerHTML;
+  }
+
+  fileQueue.addEventListener('click', (e) => {
+    const a = e.target.closest('[data-remove]');
+    if (!a) return;
     e.preventDefault();
+    const idx = parseInt(a.dataset.remove, 10);
+    if (!isNaN(idx)) {
+      state.queuedFiles.splice(idx, 1);
+      renderQueue();
+    }
+  });
+
+  async function pickFiles() {
+    if (!dialog || !dialog.open) {
+      setStatus('ERR · dialog plugin not available');
+      return;
+    }
+    try {
+      const result = await dialog.open({ multiple: true, directory: false });
+      if (!result) return;
+      const paths = Array.isArray(result) ? result : [result];
+      for (const path of paths) {
+        await addPathToQueue(path);
+      }
+      blip(1100, 0.05);
+    } catch (err) {
+      setStatus(`ERR picker · ${err}`);
+    }
+  }
+
+  async function addPathToQueue(path) {
+    // Derive name + size on Rust side would be ideal; for MVP we infer
+    // name from path and fetch size via fs metadata when sending.
+    const name = path.split(/[\\/]/).pop() || 'file';
+    state.queuedFiles.push({ path, name, size: 0 });
+    renderQueue();
+  }
+
+  dropzone.addEventListener('click', pickFiles);
+
+  // Tauri's webview drag-drop event delivers real filesystem paths.
+  listen('tauri://drag-enter', () => {
     dropzone.style.background = 'rgba(0, 240, 255, 0.08)';
   });
-  dropzone.addEventListener('dragleave', () => { dropzone.style.background = ''; });
-  dropzone.addEventListener('drop', (e) => {
-    e.preventDefault();
+  listen('tauri://drag-leave', () => {
     dropzone.style.background = '';
-    [...e.dataTransfer.files].forEach((f) => {
-      const kb = Math.max(1, Math.round(f.size / 1024));
-      mockAddFile(f.name.toUpperCase(), `${kb} KB`);
-    });
-    blip(1320, 0.05);
+  });
+  listen('tauri://drag-drop', async (event) => {
+    dropzone.style.background = '';
+    const paths = event.payload?.paths || [];
+    for (const path of paths) {
+      await addPathToQueue(path);
+    }
+    if (paths.length > 0) blip(1320, 0.05);
   });
 
   // ---------- Transmit / send ----------------------------------------------
-  async function simulateTransmit() {
+  async function transmit() {
     if (!state.selectedPeerId) {
       setStatus('ERR · no peer selected.');
       blip(220, 0.12);
       return;
     }
-
-    let payloadDesc;
-    if (state.mode === 'text') {
-      if (!textarea.value.trim()) {
-        setStatus('ERR · empty payload. Type something first.');
-        blip(220, 0.12);
-        return;
-      }
-      payloadDesc = `${textarea.value.length} CHARS`;
-    } else {
-      if (state.queuedFiles.length === 0) {
-        setStatus('ERR · queue empty. Drop a file first.');
-        blip(220, 0.12);
-        return;
-      }
-      payloadDesc = `${state.queuedFiles.length} FILE(S)`;
+    const peer = state.peers.find((p) => p.id === state.selectedPeerId);
+    if (!peer || peer.status === 'offline') {
+      setStatus('ERR · peer offline');
+      blip(220, 0.12);
+      return;
     }
 
-    const peer = state.peers.find((p) => p.id === state.selectedPeerId);
+    if (state.mode === 'text') {
+      await transmitText(peer);
+    } else {
+      await transmitFiles(peer);
+    }
+  }
+
+  async function transmitText(peer) {
+    if (!textarea.value.trim()) {
+      setStatus('ERR · empty payload. Type something first.');
+      blip(220, 0.12);
+      return;
+    }
+    const chars = textarea.value.length;
     sendBtn.disabled = true;
     progressBlock.hidden = false;
     setProgress(0);
@@ -432,31 +510,16 @@
     setStatus(`TX → ${peer.name}...`);
     blip(880, 0.05);
 
-    // Local animation runs while the real invoke happens. In Fase 5+ the
-    // backend will emit transfer-progress events that drive this instead.
+    // Tiny payload — no granular events. Quick animated fill.
     let pct = 0;
-    let animDone = false;
-    const animate = () => {
-      pct = Math.min(95, pct + Math.floor(4 + Math.random() * 12));
+    const tick = setInterval(() => {
+      pct = Math.min(95, pct + 10 + Math.random() * 10);
       setProgress(pct);
-      if (soundToggle.checked && pct < 95) blip(660 + pct * 6, 0.02);
-      if (!animDone) setTimeout(animate, 90 + Math.random() * 110);
-    };
-    animate();
+    }, 80);
 
     try {
-      if (state.mode === 'text') {
-        await invoke('send_text', {
-          peerId: state.selectedPeerId,
-          text: textarea.value,
-        });
-      } else {
-        await invoke('send_files', {
-          peerId: state.selectedPeerId,
-          filePaths: state.queuedFiles,
-        });
-      }
-      animDone = true;
+      await invoke('send_text', { peerId: peer.id, text: textarea.value });
+      clearInterval(tick);
       setProgress(100);
       progressText.textContent = 'COMPLETE';
       blip(1760, 0.12);
@@ -466,30 +529,76 @@
         sendBtn.disabled = false;
         setProgress(0);
         setStatus(`OK · delivered to ${peer.name}.`);
-        showToast(`${peer.name} · ${payloadDesc} · ACK`);
-        if (state.mode === 'text') {
-          textarea.value = '';
-          updateCharCount();
-        } else {
-          fileQueue.innerHTML = '';
-          fileQueue.hidden = true;
-          state.queuedFiles = [];
-        }
-      }, 700);
+        showToast(`${peer.name} · ${chars} CHARS · ACK`);
+        textarea.value = '';
+        updateCharCount();
+      }, 600);
     } catch (err) {
-      animDone = true;
-      setProgress(0);
+      clearInterval(tick);
       progressBlock.hidden = true;
       sendBtn.disabled = false;
       setStatus(`ERR transmit · ${err}`);
       blip(220, 0.2);
     }
   }
-  sendBtn.addEventListener('click', simulateTransmit);
+
+  async function transmitFiles(peer) {
+    if (state.queuedFiles.length === 0) {
+      setStatus('ERR · queue empty. Drop a file first.');
+      blip(220, 0.12);
+      return;
+    }
+    const filePaths = state.queuedFiles.map((f) => f.path);
+
+    sendBtn.disabled = true;
+    progressBlock.hidden = false;
+    setProgress(0);
+    progressText.textContent = `WAITING // ${peer.name}`;
+    setStatus(`TX → ${peer.name} · awaiting accept...`);
+    blip(880, 0.05);
+
+    // The backend drives the progress events from this call.
+    state.activeTransfer = {
+      sessionId: null,
+      totalBytes: 0,
+      bytesSent: 0,
+    };
+
+    try {
+      const sessionId = await invoke('send_files', {
+        peerId: peer.id,
+        filePaths,
+      });
+      state.activeTransfer.sessionId = sessionId;
+      setProgress(100);
+      progressText.textContent = 'COMPLETE';
+      blip(1760, 0.12);
+      setTimeout(() => blip(2200, 0.16), 130);
+      setTimeout(() => {
+        progressBlock.hidden = true;
+        sendBtn.disabled = false;
+        setProgress(0);
+        const count = state.queuedFiles.length;
+        setStatus(`OK · ${count} file(s) delivered to ${peer.name}.`);
+        showToast(`${peer.name} · ${count} FILE(S) · ACK`);
+        state.queuedFiles = [];
+        renderQueue();
+        state.activeTransfer = null;
+      }, 700);
+    } catch (err) {
+      progressBlock.hidden = true;
+      sendBtn.disabled = false;
+      setStatus(`ERR transmit · ${err}`);
+      state.activeTransfer = null;
+      blip(220, 0.2);
+    }
+  }
+
+  sendBtn.addEventListener('click', transmit);
   textarea.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault();
-      simulateTransmit();
+      transmit();
     }
   });
 
@@ -502,22 +611,150 @@
         setStatus('SCAN · probing the network...');
         try {
           const peers = await invoke('rescan_peers');
-          state.peers = peers;
-          if (state.selectedPeerId && !peers.find((p) => p.id === state.selectedPeerId)) {
-            state.selectedPeerId = peers[0]?.id || null;
-            if (state.selectedPeerId) selectPeer(state.selectedPeerId);
-          }
-          renderPeers();
+          applyPeers(peers, /* initial */ false);
           setStatus(`OK · ${peers.length} peer(s) on the grid.`);
         } catch (err) {
           setStatus(`ERR rescan · ${err}`);
         }
       } else if (action === 'history') {
-        setStatus('LOG · panel TBD (Fase 6+)');
+        setStatus('LOG · panel TBD (Fase 8+)');
       } else if (action === 'settings') {
-        setStatus('CONF · panel TBD');
+        openSettingsModal();
       }
     });
+  });
+
+  // ---------- Incoming files modal -----------------------------------------
+  function openIncomingModal(payload) {
+    state.pendingIncoming = payload;
+    incomingSenderName.textContent = payload.senderAlias || '—';
+    incomingSenderHex.textContent = (payload.senderFingerprint || '').slice(0, 12);
+    incomingFileCount.textContent = String(payload.fileCount).padStart(2, '0');
+    incomingTotalSize.textContent = formatBytes(payload.totalSize);
+    incomingFileList.innerHTML = '';
+    (payload.files || []).forEach((f) => {
+      const li = document.createElement('li');
+      li.innerHTML = `<span class="file-name">${escapeHtml(f.name)}</span><span class="file-size">${formatBytes(f.size)}</span>`;
+      incomingFileList.appendChild(li);
+    });
+    incomingModal.hidden = false;
+    blip(880, 0.1);
+    setTimeout(() => blip(660, 0.08), 130);
+
+    // Countdown — backend timeout is 60 s.
+    const deadline = Date.now() + 60_000;
+    if (state.incomingTimerHandle) clearInterval(state.incomingTimerHandle);
+    state.incomingTimerHandle = setInterval(() => {
+      const left = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+      incomingTimer.textContent = `awaiting decision · ${left}s`;
+      if (left <= 0) clearInterval(state.incomingTimerHandle);
+    }, 250);
+  }
+
+  function closeIncomingModal() {
+    incomingModal.hidden = true;
+    state.pendingIncoming = null;
+    if (state.incomingTimerHandle) {
+      clearInterval(state.incomingTimerHandle);
+      state.incomingTimerHandle = null;
+    }
+  }
+
+  incomingAcceptBtn.addEventListener('click', async () => {
+    if (!state.pendingIncoming) return;
+    const sid = state.pendingIncoming.sessionId;
+    blip(1320, 0.1);
+    closeIncomingModal();
+    try {
+      await invoke('approve_session', { sessionId: sid });
+      setStatus('RX · accepting transfer...');
+    } catch (err) {
+      setStatus(`ERR approve · ${err}`);
+    }
+  });
+
+  incomingRejectBtn.addEventListener('click', async () => {
+    if (!state.pendingIncoming) return;
+    const sid = state.pendingIncoming.sessionId;
+    blip(220, 0.12);
+    closeIncomingModal();
+    try {
+      await invoke('reject_session', { sessionId: sid });
+      setStatus('RX rejected.');
+    } catch (err) {
+      setStatus(`ERR reject · ${err}`);
+    }
+  });
+
+  // ---------- Settings modal -----------------------------------------------
+  async function openSettingsModal() {
+    if (!state.settings) {
+      try {
+        state.settings = await invoke('get_settings');
+      } catch (err) {
+        setStatus(`ERR settings · ${err}`);
+        return;
+      }
+    }
+    settingsDownloadDir.textContent = state.settings.downloadDir;
+    settingsAutoAccept.checked = state.settings.autoAcceptFavorites;
+    settingsAutoAcceptLabel.textContent = state.settings.autoAcceptFavorites ? 'ON' : 'OFF';
+    settingsModal.hidden = false;
+  }
+
+  function closeSettingsModal() {
+    settingsModal.hidden = true;
+  }
+
+  settingsCloseBtn.addEventListener('click', closeSettingsModal);
+
+  // Close any modal on ESC or click outside the panel (defensive layer
+  // in case a stray JS error elsewhere skips listeners).
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (!settingsModal.hidden) closeSettingsModal();
+      if (!incomingModal.hidden) closeIncomingModal();
+    }
+  });
+  settingsModal.addEventListener('click', (e) => {
+    if (e.target === settingsModal) closeSettingsModal();
+  });
+  incomingModal.addEventListener('click', (e) => {
+    if (e.target === incomingModal) {
+      // Treat click-outside on incoming as a reject (safer default).
+      if (state.pendingIncoming) {
+        const sid = state.pendingIncoming.sessionId;
+        closeIncomingModal();
+        invoke('reject_session', { sessionId: sid }).catch(() => {});
+      }
+    }
+  });
+
+  settingsPickDir.addEventListener('click', async () => {
+    if (!dialog || !dialog.open) return;
+    try {
+      const result = await dialog.open({ directory: true, multiple: false });
+      if (!result) return;
+      await invoke('set_download_dir', { path: result });
+      state.settings.downloadDir = result;
+      settingsDownloadDir.textContent = result;
+      blip(1100, 0.06);
+    } catch (err) {
+      setStatus(`ERR change dir · ${err}`);
+    }
+  });
+
+  settingsAutoAccept.addEventListener('change', async () => {
+    const value = settingsAutoAccept.checked;
+    try {
+      await invoke('set_auto_accept_favorites', { value });
+      state.settings.autoAcceptFavorites = value;
+      settingsAutoAcceptLabel.textContent = value ? 'ON' : 'OFF';
+      blip(value ? 1320 : 440, 0.06);
+    } catch (err) {
+      settingsAutoAccept.checked = !value;
+      setStatus(`ERR toggle · ${err}`);
+    }
   });
 
   // ---------- Boot ----------------------------------------------------------
@@ -554,6 +791,77 @@
       blip(1320, 0.12);
       setTimeout(() => blip(1760, 0.1), 130);
     });
+
+    // Incoming file transfer request — show modal (Fase 7)
+    await listen('incoming-files-request', (event) => {
+      const payload = event.payload;
+      if (payload.autoAccepted) {
+        // Backend auto-accepted (favorite + auto-accept enabled) — show brief toast.
+        setStatus(`RX · auto-accepting ${payload.fileCount} file(s) from ${payload.senderAlias}`);
+        return;
+      }
+      openIncomingModal(payload);
+    });
+
+    await listen('incoming-files-timeout', () => {
+      closeIncomingModal();
+      setStatus('RX · timed out (no decision in 60 s)');
+    });
+
+    await listen('incoming-files-approved', () => {
+      setStatus('RX · accepted, receiving...');
+    });
+
+    // Progress events (Fase 7)
+    await listen('transfer-progress-sender', (event) => {
+      const { bytesSent, total } = event.payload;
+      if (total > 0) {
+        const pct = Math.min(99, Math.round((bytesSent / total) * 100));
+        setProgress(pct);
+        progressText.textContent = `TRANSMITTING // ${formatBytes(bytesSent)} / ${formatBytes(total)}`;
+      }
+    });
+
+    await listen('transfer-progress-receiver', (event) => {
+      const { bytesReceived, total } = event.payload;
+      if (total > 0) {
+        const pct = Math.min(99, Math.round((bytesReceived / total) * 100));
+        setProgress(pct);
+        progressBlock.hidden = false;
+        progressText.textContent = `RECEIVING // ${formatBytes(bytesReceived)} / ${formatBytes(total)}`;
+        setStatus(`RX · ${formatBytes(bytesReceived)} received`);
+      }
+    });
+
+    await listen('file-completed', (event) => {
+      const { name, verified } = event.payload;
+      if (!verified) {
+        setStatus(`WARN · ${name} hash mismatch`);
+      }
+    });
+
+    await listen('session-completed', (event) => {
+      const { senderAlias, fileCount, totalSize, destinationDir } = event.payload;
+      progressBlock.hidden = true;
+      setProgress(0);
+      setStatus(`RX OK · ${fileCount} file(s) from ${senderAlias} saved`);
+      showToast(`${senderAlias} → ${fileCount} FILE(S) · ${formatBytes(totalSize)} · saved to ${destinationDir}`);
+      blip(1760, 0.12);
+      setTimeout(() => blip(2200, 0.16), 130);
+    });
+
+    await listen('session-cancelled', () => {
+      progressBlock.hidden = true;
+      setProgress(0);
+      setStatus('Transfer cancelled.');
+    });
+
+    // Preload settings (used by transmit + settings modal)
+    try {
+      state.settings = await invoke('get_settings');
+    } catch (err) {
+      console.error('settings load:', err);
+    }
 
     updateCharCount();
     setTimeout(() => {

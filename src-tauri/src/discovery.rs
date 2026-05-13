@@ -182,20 +182,27 @@ pub fn start(
         }
     });
 
-    // Reaper: peers that we haven't heard from in a while are dropped.
-    // mDNS goodbye packets are best-effort — if a peer is killed
-    // ungracefully (window closed with X) we won't get a removal event,
-    // so we age out entries based on last_seen.
+    // Periodic re-browse + stale-peer reaper. mDNS-sd resolves a peer
+    // once and then stays quiet — without our own poke, last_seen drifts
+    // and looks like the peer left. Re-browsing every few seconds keeps
+    // healthy peers' timestamps fresh; the reaper still drops peers that
+    // stop answering for a generous window (covers ungraceful exits the
+    // standard mDNS goodbye would normally signal).
     let peers_for_reaper = peers.clone();
     let fullnames_for_reaper = fullnames.clone();
     let prefs_for_reaper = prefs.clone();
     let app_for_reaper = app.clone();
+    let daemon_for_reaper = daemon.clone();
     tauri::async_runtime::spawn(async move {
-        const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
+        const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(90);
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(8));
         tick.tick().await; // skip the immediate first tick
         loop {
             tick.tick().await;
+
+            // Nudge the network so live peers re-announce.
+            let _ = daemon_for_reaper.browse(SERVICE_TYPE);
+
             let now = std::time::Instant::now();
             let mut removed_ids: Vec<String> = Vec::new();
             {
@@ -213,7 +220,7 @@ pub fn start(
                 fn_map.retain(|_, peer_id| !removed_ids.contains(peer_id));
                 drop(fn_map);
                 for id in &removed_ids {
-                    println!("[mdns] reaper dropped stale peer {}", &id[..16.min(id.len())]);
+                    eprintln!("[mdns] reaper dropped stale peer {}", &id[..16.min(id.len())]);
                 }
                 let snapshot = build_wire_list(&peers_for_reaper, &prefs_for_reaper);
                 let _ = app_for_reaper.emit("peers-changed", &snapshot);

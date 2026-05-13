@@ -1,25 +1,24 @@
-// Millennium Clipboard — backend (Fase 4)
+// Millennium Clipboard — backend (Fase 7)
 //
-// Setup wires three subsystems:
-//   1. Identity (cert + fingerprint, persisted)
-//   2. HTTPS server (exposes /info for peer cross-check)
-//   3. mDNS discovery (announces our service, lists peers)
-//
-// Transfer commands still log instead of doing network I/O — Fase 5.
+// Wires identity, persisted prefs/settings, HTTPS server, mDNS discovery,
+// and the HTTPS client used to talk to peers. Commands invoked from JS
+// are at the bottom.
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::sync::Arc;
 use tauri::Manager;
+use uuid::Uuid;
 
 mod discovery;
 mod http_client;
 mod http_server;
 mod identity;
 mod preferences;
-
-use std::sync::Arc;
+mod settings;
 
 // ---------------------------------------------------------------------------
-// Wire types
+// Wire types shared with the frontend
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +32,13 @@ pub struct LocalInfo {
     pub version: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserSettings {
+    pub download_dir: String,
+    pub auto_accept_favorites: bool,
+}
+
 // ---------------------------------------------------------------------------
 // App state
 // ---------------------------------------------------------------------------
@@ -41,10 +47,11 @@ pub struct AppState {
     discovery: discovery::DiscoveryState,
     identity: identity::Identity,
     prefs: Arc<preferences::PreferencesStore>,
+    settings: Arc<settings::SettingsStore>,
 }
 
 // ---------------------------------------------------------------------------
-// Commands
+// Identity / peers commands
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
@@ -72,12 +79,36 @@ fn rescan_peers(state: tauri::State<AppState>) -> Result<Vec<discovery::WirePeer
 }
 
 #[tauri::command]
+fn toggle_favorite(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    peer_id: String,
+    value: bool,
+) -> Result<(), String> {
+    if value {
+        let fav = state
+            .discovery
+            .favorite_from_peer(&peer_id)
+            .ok_or_else(|| format!("peer {} is not on the grid right now", &peer_id[..8]))?;
+        state.prefs.add_favorite(fav).map_err(|e| format!("{e:#}"))?;
+    } else {
+        state.prefs.remove_favorite(&peer_id).map_err(|e| format!("{e:#}"))?;
+    }
+    println!("[backend] toggle_favorite → peer={} value={}", peer_id, value);
+    state.discovery.emit_snapshot(&app);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Text transfer (Fase 5)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
 async fn send_text(
     state: tauri::State<'_, AppState>,
     peer_id: String,
     text: String,
 ) -> Result<(), String> {
-    // 1. Look the peer up in the discovery cache.
     let target = state
         .discovery
         .peers
@@ -95,8 +126,6 @@ async fn send_text(
         text.chars().count()
     );
 
-    // 2. Cross-check identity: what the server reports must match the
-    //    fingerprint mDNS advertised. Mismatch = MITM or stale cache.
     let remote = http_client::fetch_info(&target.ip, target.port)
         .await
         .map_err(|e| format!("identity probe failed: {e:#}"))?;
@@ -108,7 +137,6 @@ async fn send_text(
         ));
     }
 
-    // 3. Send the text.
     http_client::post_text(
         &target.ip,
         target.port,
@@ -122,43 +150,186 @@ async fn send_text(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// File transfer (Fase 7)
+// ---------------------------------------------------------------------------
+
 #[tauri::command]
-fn send_files(peer_id: String, file_paths: Vec<String>) -> Result<(), String> {
+async fn send_files(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    peer_id: String,
+    file_paths: Vec<String>,
+) -> Result<String, String> {
+    if file_paths.is_empty() {
+        return Err("no files to send".into());
+    }
+
+    let target = state
+        .discovery
+        .peers
+        .lock()
+        .unwrap()
+        .get(&peer_id)
+        .cloned()
+        .ok_or_else(|| format!("peer {} not on the grid", peer_id))?;
+
+    // Verify identity (Fase 5 cross-check, reused).
+    let remote = http_client::fetch_info(&target.ip, target.port)
+        .await
+        .map_err(|e| format!("identity probe failed: {e:#}"))?;
+    if remote.fingerprint != peer_id {
+        return Err("fingerprint mismatch — peer changed identity".into());
+    }
+
+    // Gather metadata for each file.
+    let session_id = Uuid::new_v4().simple().to_string();
+    let mut prepare_files: Vec<http_client::PrepareFile> = Vec::new();
+    let mut upload_plan: Vec<(String, PathBuf, u64)> = Vec::new();
+
+    for path_str in &file_paths {
+        let p = PathBuf::from(path_str);
+        let meta = tokio::fs::metadata(&p)
+            .await
+            .map_err(|e| format!("stat {}: {}", p.display(), e))?;
+        if !meta.is_file() {
+            return Err(format!(
+                "{} is not a regular file (folder transfer arrives later)",
+                p.display()
+            ));
+        }
+        let size = meta.len();
+        let name = p
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| format!("invalid file name: {}", p.display()))?;
+        let mime = mime_guess::from_path(&p)
+            .first()
+            .map(|m| m.essence_str().to_string());
+        let file_id = Uuid::new_v4().simple().to_string();
+        prepare_files.push(http_client::PrepareFile {
+            file_id: file_id.clone(),
+            name: name.clone(),
+            size,
+            mime,
+            sha256: None, // MVP: skip hashing big files; add in Fase 8 polish
+            rel_path: None,
+        });
+        upload_plan.push((file_id, p, size));
+    }
+
     println!(
-        "[backend] send_files → peer={} files={}",
-        peer_id,
-        file_paths.len()
+        "[backend] send_files → peer={} ({}:{}) files={} session={}",
+        target.name,
+        target.ip,
+        target.port,
+        upload_plan.len(),
+        &session_id[..8]
     );
-    Ok(())
+
+    // Ask the peer; this blocks until the user accepts/rejects/times out.
+    let prep = http_client::prepare_upload(
+        &target.ip,
+        target.port,
+        &session_id,
+        &state.identity.alias,
+        &state.identity.fingerprint,
+        &prepare_files,
+    )
+    .await
+    .map_err(|e| format!("prepare: {e:#}"))?;
+
+    // Upload each file (sequential; same Client → keep-alive).
+    for (file_id, path, size) in &upload_plan {
+        let token = prep
+            .files
+            .get(file_id)
+            .ok_or_else(|| format!("no token for {}", &file_id[..8]))?;
+        http_client::upload_file(
+            app.clone(),
+            &target.ip,
+            target.port,
+            &session_id,
+            file_id,
+            token,
+            path,
+            *size,
+        )
+        .await
+        .map_err(|e| format!("upload {}: {e:#}", path.display()))?;
+    }
+
+    Ok(session_id)
 }
 
 #[tauri::command]
-fn toggle_favorite(
-    app: tauri::AppHandle,
-    state: tauri::State<AppState>,
+fn approve_session(session_id: String) -> Result<(), String> {
+    if http_server::resolve_approval(&session_id, true) {
+        Ok(())
+    } else {
+        Err("no pending session with that id".into())
+    }
+}
+
+#[tauri::command]
+fn reject_session(session_id: String) -> Result<(), String> {
+    if http_server::resolve_approval(&session_id, false) {
+        Ok(())
+    } else {
+        Err("no pending session with that id".into())
+    }
+}
+
+#[tauri::command]
+async fn cancel_session(
+    state: tauri::State<'_, AppState>,
     peer_id: String,
+    session_id: String,
+) -> Result<(), String> {
+    let target = state
+        .discovery
+        .peers
+        .lock()
+        .unwrap()
+        .get(&peer_id)
+        .cloned()
+        .ok_or_else(|| format!("peer {} not on the grid", peer_id))?;
+    http_client::cancel_upload(&target.ip, target.port, &session_id)
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
+
+// ---------------------------------------------------------------------------
+// Settings commands (Fase 7)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn get_settings(state: tauri::State<AppState>) -> UserSettings {
+    let s = state.settings.snapshot();
+    UserSettings {
+        download_dir: s.download_dir.to_string_lossy().to_string(),
+        auto_accept_favorites: s.auto_accept_favorites,
+    }
+}
+
+#[tauri::command]
+fn set_download_dir(state: tauri::State<AppState>, path: String) -> Result<(), String> {
+    state
+        .settings
+        .set_download_dir(PathBuf::from(path))
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+fn set_auto_accept_favorites(
+    state: tauri::State<AppState>,
     value: bool,
 ) -> Result<(), String> {
-    if value {
-        // We can only favorite a peer we currently know about, so we
-        // can snapshot its full card.
-        let fav = state
-            .discovery
-            .favorite_from_peer(&peer_id)
-            .ok_or_else(|| format!("peer {} is not on the grid right now", &peer_id[..8]))?;
-        state
-            .prefs
-            .add_favorite(fav)
-            .map_err(|e| format!("save prefs: {e:#}"))?;
-    } else {
-        state
-            .prefs
-            .remove_favorite(&peer_id)
-            .map_err(|e| format!("save prefs: {e:#}"))?;
-    }
-    println!("[backend] toggle_favorite → peer={} value={}", peer_id, value);
-    state.discovery.emit_snapshot(&app);
-    Ok(())
+    state
+        .settings
+        .set_auto_accept_favorites(value)
+        .map_err(|e| format!("{e:#}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -169,12 +340,12 @@ fn toggle_favorite(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            // 0. Pick a TLS crypto provider before anything uses rustls
-            //    (axum-server + reqwest both auto-select otherwise).
+            // 0. Install the rustls crypto provider before anything uses TLS.
             let _ = rustls::crypto::ring::default_provider().install_default();
 
-            // 1. Identity (load or generate cert) + persisted preferences
+            // 1. Identity + prefs + settings.
             let data_dir = app
                 .path()
                 .app_data_dir()
@@ -186,7 +357,23 @@ pub fn run() {
                     .expect("failed to setup preferences"),
             );
 
-            // 2. HTTPS server (background task)
+            // Compute a sensible default for incoming files. Avoid the
+            // Tauri path API here — calling desktop_dir() inside the
+            // setup callback can stall on Windows because the shell
+            // known-folder lookup runs before COM is fully ready.
+            let default_download = std::env::var_os("USERPROFILE")
+                .map(|p| PathBuf::from(p).join("Desktop"))
+                .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join("Desktop")))
+                .unwrap_or_else(std::env::temp_dir);
+            eprintln!("[setup] default_download_dir = {}", default_download.display());
+            eprintln!("[setup] loading settings...");
+            let settings_store = Arc::new(
+                settings::SettingsStore::load_or_default(&data_dir, default_download)
+                    .expect("failed to setup settings"),
+            );
+            eprintln!("[setup] settings loaded");
+
+            // 2. HTTPS server.
             let info = http_server::InfoResponse {
                 alias: identity.alias.clone(),
                 fingerprint: identity.fingerprint.clone(),
@@ -197,21 +384,29 @@ pub fn run() {
             let cert_pem = identity.cert_pem.clone();
             let key_pem = identity.key_pem.clone();
             let server_app = app.handle().clone();
+            let prefs_for_server = prefs.clone();
+            let settings_for_server = settings_store.clone();
+            eprintln!("[setup] spawning HTTPS server task...");
             tauri::async_runtime::spawn(async move {
+                eprintln!("[setup] http_server::run starting");
                 if let Err(e) = http_server::run(
                     server_app,
                     discovery::local_port(),
                     info,
                     cert_pem,
                     key_pem,
+                    prefs_for_server,
+                    settings_for_server,
                 )
                 .await
                 {
                     eprintln!("[http] server error: {e:?}");
                 }
             });
+            eprintln!("[setup] HTTPS server spawned");
 
-            // 3. mDNS discovery
+            // 3. mDNS discovery.
+            eprintln!("[setup] starting discovery...");
             let handle = app.handle().clone();
             let discovery_state = discovery::start(
                 handle,
@@ -220,11 +415,13 @@ pub fn run() {
                 prefs.clone(),
             )
             .expect("failed to start mDNS discovery");
+            eprintln!("[setup] discovery started");
 
             app.manage(AppState {
                 discovery: discovery_state,
                 identity,
                 prefs,
+                settings: settings_store,
             });
             Ok(())
         })
@@ -234,7 +431,13 @@ pub fn run() {
             rescan_peers,
             send_text,
             send_files,
+            approve_session,
+            reject_session,
+            cancel_session,
             toggle_favorite,
+            get_settings,
+            set_download_dir,
+            set_auto_accept_favorites,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

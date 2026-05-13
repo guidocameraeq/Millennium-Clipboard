@@ -1,6 +1,6 @@
 [package]
 name = "millennium-clipboard"
-version = "0.2.0"
+version = "0.3.0"
 description = "Share text and files between devices on the same LAN"
 authors = ["guidocameraeq"]
 edition = "2021"
@@ -34,8 +34,15 @@ hex = "0.4"
 anyhow = "1"
 
 # HTTPS client for sending payloads to peers (Fase 5)
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 
 # Force ring as the rustls crypto provider so axum-server + reqwest agree
 rustls = { version = "0.23", features = ["ring"] }
+
+# File transfer (Fase 7)
+tauri-plugin-dialog = "2"
+mime_guess = "2"
+bytes = "1"
+futures-util = "0.3"
+tokio-util = { version = "0.7", features = ["io"] }
 
