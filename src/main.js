@@ -7,6 +7,35 @@
   const { listen } = window.__TAURI__.event;
   const dialog = window.__TAURI__.dialog;
 
+  // Null-safe textContent setter. If the target element disappears
+  // (HTML rev mismatch, hot-reload, modal not yet rendered) we just log
+  // instead of breaking the whole event chain with a TypeError.
+  const setText = (el, value) => {
+    if (el) {
+      el.textContent = value;
+    } else {
+      console.warn('[setText] target element is null, value=', value);
+    }
+  };
+
+  // Surface uncaught JS errors in the status bar so users can paste them
+  // back. Without this, a release build hides every error.
+  window.addEventListener('error', (e) => {
+    console.error('[uncaught]', e);
+    try {
+      const sm = document.getElementById('status-msg');
+      if (sm) sm.textContent = `JS ERR · ${e.message} @ ${e.filename?.split(/[\\/]/).pop()}:${e.lineno}`;
+    } catch (_) {}
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    console.error('[unhandled rejection]', e);
+    try {
+      const sm = document.getElementById('status-msg');
+      const reason = e.reason?.message || e.reason || 'unknown';
+      if (sm) sm.textContent = `JS REJECT · ${reason}`;
+    } catch (_) {}
+  });
+
   // ---------- DOM refs -----------------------------------------------------
   const textarea = document.getElementById('text-composer');
   const charCount = document.getElementById('char-count');
@@ -108,7 +137,7 @@
   }
 
   // ---------- Status helpers -----------------------------------------------
-  function setStatus(msg) { statusMsg.textContent = msg; }
+  function setStatus(msg) { setText(statusMsg, msg); }
   function showToast(text) {
     toastText.innerHTML = '';
     toastText.textContent = text;
@@ -390,10 +419,10 @@
     const peer = state.peers.find((p) => p.id === id);
     if (!peer) return;
     state.selectedPeerId = id;
-    targetName.textContent = peer.name;
-    targetHex.textContent = peer.hexId;
+    setText(targetName, peer.name);
+    setText(targetHex, peer.hexId);
     const isOffline = peer.status === 'offline';
-    sendBtn.disabled = isOffline;
+    if (sendBtn) sendBtn.disabled = isOffline;
     setStatus(isOffline
       ? `PEER OFFLINE · ${peer.name} (waiting on grid)`
       : `PEER LOCKED · ${peer.name}`);
@@ -1232,17 +1261,18 @@
     // Drop selection if the selected peer vanished.
     if (state.selectedPeerId && !state.peers.find((p) => p.id === state.selectedPeerId)) {
       state.selectedPeerId = null;
-      targetName.textContent = '—';
-      targetHex.textContent = '—';
-      sendBtn.disabled = true;
+      setText(targetName, '—');
+      setText(targetHex, '—');
+      if (sendBtn) sendBtn.disabled = true;
     }
+
+    // Render the list ALWAYS so it stays in sync with state.peers.
+    renderPeers();
 
     // If nothing selected and peers exist, pick the first.
     if (!state.selectedPeerId && state.peers.length > 0) {
       state.selectedPeerId = state.peers[0].id;
       selectPeer(state.selectedPeerId);
-    } else {
-      renderPeers();
     }
 
     if (state.peers.length === 0) {
