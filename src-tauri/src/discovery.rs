@@ -88,6 +88,7 @@ pub struct DiscoveryState {
     pub manual: Arc<ManualPeerStore>,
     pub aliases: Arc<AliasStore>,
     pub clipboard: Arc<ClipboardSyncStore>,
+    pub icons: Arc<crate::icon_overrides::IconOverrideStore>,
     #[allow(dead_code)]
     pub daemon: ServiceDaemon,
 }
@@ -102,6 +103,7 @@ pub(crate) fn build_wire_list(
     manual: &ManualPeerStore,
     aliases: &AliasStore,
     clipboard: &ClipboardSyncStore,
+    icons: &crate::icon_overrides::IconOverrideStore,
 ) -> Vec<WirePeer> {
     let online = peers.lock().unwrap();
     let mut result: Vec<WirePeer> = Vec::new();
@@ -109,6 +111,8 @@ pub(crate) fn build_wire_list(
 
     let apply_alias =
         |fp: &str, default: String| -> String { aliases.get(fp).unwrap_or(default) };
+    let apply_icon =
+        |fp: &str, default: String| -> String { icons.get(fp).unwrap_or(default) };
 
     for record in online.values() {
         let is_fav = prefs.is_favorite(&record.id);
@@ -116,6 +120,7 @@ pub(crate) fn build_wire_list(
         let clip_sync = clipboard.is_enabled(&record.id);
         let mut wire = record.to_wire(is_fav, is_manual, clip_sync);
         wire.name = apply_alias(&record.id, wire.name);
+        wire.icon_type = apply_icon(&record.id, wire.icon_type);
         result.push(wire);
         seen.insert(record.id.clone());
     }
@@ -125,6 +130,7 @@ pub(crate) fn build_wire_list(
             continue;
         }
         let name = apply_alias(&m.fingerprint, m.alias);
+        let icon = apply_icon(&m.fingerprint, m.icon_type);
         result.push(WirePeer {
             id: m.fingerprint.clone(),
             name,
@@ -133,7 +139,7 @@ pub(crate) fn build_wire_list(
             port: m.port,
             status: "offline",
             favorite: prefs.is_favorite(&m.fingerprint),
-            icon_type: m.icon_type,
+            icon_type: icon,
             manual: true,
             clipboard_sync: clipboard.is_enabled(&m.fingerprint),
         });
@@ -145,6 +151,7 @@ pub(crate) fn build_wire_list(
             continue;
         }
         let name = apply_alias(&fav.fingerprint, fav.alias);
+        let icon = apply_icon(&fav.fingerprint, fav.icon_type);
         result.push(WirePeer {
             id: fav.fingerprint.clone(),
             name,
@@ -153,7 +160,7 @@ pub(crate) fn build_wire_list(
             port: fav.last_port,
             status: "offline",
             favorite: true,
-            icon_type: fav.icon_type,
+            icon_type: icon,
             manual: false,
             clipboard_sync: clipboard.is_enabled(&fav.fingerprint),
         });
@@ -163,7 +170,14 @@ pub(crate) fn build_wire_list(
 
 impl DiscoveryState {
     pub fn peers_for_wire(&self) -> Vec<WirePeer> {
-        build_wire_list(&self.peers, &self.prefs, &self.manual, &self.aliases, &self.clipboard)
+        build_wire_list(
+            &self.peers,
+            &self.prefs,
+            &self.manual,
+            &self.aliases,
+            &self.clipboard,
+            &self.icons,
+        )
     }
 
     /// Build a FavoritePeer payload from a currently-known peer, falling
@@ -212,6 +226,7 @@ pub fn start(
     manual: Arc<ManualPeerStore>,
     aliases: Arc<AliasStore>,
     clipboard: Arc<ClipboardSyncStore>,
+    icons: Arc<crate::icon_overrides::IconOverrideStore>,
 ) -> Result<DiscoveryState, mdns_sd::Error> {
     let daemon = ServiceDaemon::new()?;
 
@@ -253,6 +268,7 @@ pub fn start(
     let manual_for_task = manual.clone();
     let aliases_for_task = aliases.clone();
     let clipboard_for_task = clipboard.clone();
+    let icons_for_task = icons.clone();
     let my_fingerprint = identity.fingerprint.clone();
     let app_handle = app.clone();
 
@@ -269,6 +285,7 @@ pub fn start(
                         &manual_for_task,
                         &aliases_for_task,
                         &clipboard_for_task,
+                        &icons_for_task,
                         &app_handle,
                     );
                 }
@@ -300,9 +317,11 @@ pub fn start(
     let manual_for_poll = manual.clone();
     let aliases_for_poll = aliases.clone();
     let clipboard_for_poll = clipboard.clone();
+    let icons_for_poll = icons.clone();
     let app_for_poll = app.clone();
     let daemon_for_poll = daemon.clone();
     let my_fp_poll = identity.fingerprint.clone();
+    let my_ip_poll = identity.local_ip.clone();
 
     tauri::async_runtime::spawn(async move {
         use futures_util::future::join_all;
@@ -339,6 +358,29 @@ pub fn start(
                     .or_insert((f.last_ip, f.last_port, f.hex_id, f.icon_type));
             }
             by_fp.remove(&my_fp_poll);
+
+            // Drop candidates whose IP is in a different /24 than ours.
+            // They're unreachable so probing them just wastes 5s timeouts
+            // forever (e.g. a favorite from another network we used to
+            // be on). They still show up in the wire list as "offline".
+            let my_prefix = subnet_prefix_24(&my_ip_poll);
+            by_fp.retain(|fp, (ip, _, _, _)| {
+                if let (Some(mine), Some(theirs)) = (my_prefix.as_ref(), subnet_prefix_24(ip)) {
+                    if mine != &theirs {
+                        crate::runtime_log::info(format!(
+                            "[poll] skipping {} @ {} — different /24 from {} (unreachable)",
+                            &fp[..16.min(fp.len())],
+                            ip,
+                            my_ip_poll
+                        ));
+                        // Also drop from live cache so it doesn't keep
+                        // appearing online forever.
+                        peers_for_poll.lock().unwrap().remove(fp);
+                        return false;
+                    }
+                }
+                true
+            });
 
             if by_fp.is_empty() {
                 continue;
@@ -456,13 +498,14 @@ pub fn start(
                     &manual_for_poll,
                     &aliases_for_poll,
                     &clipboard_for_poll,
+                    &icons_for_poll,
                 );
                 let _ = app_for_poll.emit("peers-changed", &snapshot);
             }
         }
     });
 
-    Ok(DiscoveryState { peers, fullnames, prefs, manual, aliases, clipboard, daemon })
+    Ok(DiscoveryState { peers, fullnames, prefs, manual, aliases, clipboard, icons, daemon })
 }
 
 pub fn rebrowse(state: &DiscoveryState) -> Result<(), mdns_sd::Error> {
@@ -479,6 +522,21 @@ fn detect_icon_type() -> &'static str {
     } else {
         "desktop"
     }
+}
+
+/// Return the first three octets of an IPv4 string ("a.b.c.d" → "a.b.c").
+/// IPv6 or malformed inputs return None. Used to compare /24 subnets.
+fn subnet_prefix_24(ip: &str) -> Option<String> {
+    let parts: Vec<&str> = ip.split('.').collect();
+    if parts.len() != 4 {
+        return None;
+    }
+    for p in &parts {
+        if p.parse::<u8>().is_err() {
+            return None;
+        }
+    }
+    Some(format!("{}.{}.{}", parts[0], parts[1], parts[2]))
 }
 
 /// Strip the alias down to characters that are legal in a DNS label
@@ -539,6 +597,7 @@ fn handle_event(
     manual: &Arc<ManualPeerStore>,
     aliases: &Arc<AliasStore>,
     clipboard: &Arc<ClipboardSyncStore>,
+    icons: &Arc<crate::icon_overrides::IconOverrideStore>,
     app: &AppHandle,
 ) {
     match event {
@@ -627,7 +686,7 @@ fn handle_event(
                 f.insert(fullname, id);
             }
             if changed {
-                emit_peers_changed(app, peers, prefs, manual, aliases, clipboard);
+                emit_peers_changed(app, peers, prefs, manual, aliases, clipboard, icons);
             }
         }
         ServiceEvent::ServiceRemoved(_, fullname) => {
@@ -655,7 +714,8 @@ fn emit_peers_changed(
     manual: &Arc<ManualPeerStore>,
     aliases: &Arc<AliasStore>,
     clipboard: &Arc<ClipboardSyncStore>,
+    icons: &Arc<crate::icon_overrides::IconOverrideStore>,
 ) {
-    let snapshot = build_wire_list(peers, prefs, manual, aliases, clipboard);
+    let snapshot = build_wire_list(peers, prefs, manual, aliases, clipboard, icons);
     let _ = app.emit("peers-changed", &snapshot);
 }

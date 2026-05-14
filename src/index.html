@@ -240,6 +240,11 @@
         <span class="modal-title" id="peer-details-title">PEER</span>
       </header>
       <div class="modal-body">
+        <div class="icon-picker-block">
+          <div class="icon-current" id="peer-details-icon-current"></div>
+          <div class="icon-picker" id="peer-details-icon-picker"></div>
+          <div class="icon-picker-hint mono">CHOOSE ICON FOR THIS PEER</div>
+        </div>
         <div class="settings-row">
           <span class="settings-label">NAME</span>
           <input type="text" class="text-input" id="peer-details-name" maxlength="64" autocomplete="off" />
@@ -255,6 +260,10 @@
         <div class="settings-row settings-info">
           <span class="settings-label">STATUS</span>
           <span class="settings-value mono" id="peer-details-status"></span>
+        </div>
+        <div class="settings-row settings-info" id="peer-details-tags-row">
+          <span class="settings-label">TAGS</span>
+          <span class="settings-value mono" id="peer-details-tags" hidden></span>
         </div>
         <div class="settings-row">
           <span class="settings-label">★ FAVORITE</span>
@@ -276,9 +285,10 @@
             </label>
           </div>
         </div>
+        <p class="forget-hint mono">Forget clears all saved info. The peer will reappear in ALL if seen on the network again.</p>
       </div>
       <div class="modal-actions">
-        <button class="modal-btn reject" id="peer-details-remove" hidden>🗑 REMOVE PEER</button>
+        <button class="modal-btn reject" id="peer-details-remove">🗑 FORGET PEER</button>
         <button class="modal-btn accept" id="peer-details-close" onclick="document.getElementById('peer-details-modal').hidden=true">✓ DONE</button>
       </div>
     </div>
@@ -390,6 +400,18 @@
         <button class="modal-btn small" id="log-clear">⌫ CLEAR</button>
         <button class="modal-btn accept" id="log-close">✓ CLOSE</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Backend-error persistent banner (HTTPS bind failure, instance conflict) -->
+  <div class="backend-banner" id="backend-banner" hidden>
+    <div class="backend-banner-inner">
+      <span class="backend-banner-glyph">⚠</span>
+      <div class="backend-banner-text">
+        <div class="backend-banner-title">BACKEND ERROR</div>
+        <div class="backend-banner-msg mono" id="backend-banner-msg"></div>
+      </div>
+      <button class="backend-banner-close" id="backend-banner-close" title="Dismiss">✕</button>
     </div>
   </div>
 

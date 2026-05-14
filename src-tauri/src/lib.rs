@@ -15,6 +15,7 @@ mod clipboard_sync;
 mod discovery;
 mod http_client;
 mod http_server;
+mod icon_overrides;
 mod identity;
 mod manual_peers;
 mod preferences;
@@ -57,6 +58,8 @@ pub struct AppState {
     manual: Arc<manual_peers::ManualPeerStore>,
     aliases: Arc<aliases::AliasStore>,
     clipboard: Arc<clipboard_sync::ClipboardSyncStore>,
+    icons: Arc<icon_overrides::IconOverrideStore>,
+    server_port: u16,
 }
 
 // ---------------------------------------------------------------------------
@@ -70,7 +73,7 @@ fn get_local_info(state: tauri::State<AppState>) -> LocalInfo {
         alias: id.alias.clone(),
         host_id_hex: id.hex_id.clone(),
         ip: id.local_ip.clone(),
-        port: discovery::local_port(),
+        port: state.server_port,
         fingerprint: id.fingerprint.clone(),
         version: env!("CARGO_PKG_VERSION").into(),
     }
@@ -152,7 +155,7 @@ async fn send_text(
         text,
         state.identity.alias.clone(),
         state.identity.fingerprint.clone(),
-        discovery::local_port(),
+        state.server_port,
     )
     .await
     .map_err(|e| format!("send failed: {e:#}"))?;
@@ -245,7 +248,7 @@ async fn send_files(
         &session_id,
         &state.identity.alias,
         &state.identity.fingerprint,
-        discovery::local_port(),
+        state.server_port,
         &prepare_files,
     )
     .await
@@ -416,6 +419,49 @@ fn rename_peer(
             .set(peer_id, trimmed.to_string())
             .map_err(|e| format!("{e:#}"))?;
     }
+    state.discovery.emit_snapshot(&app);
+    Ok(())
+}
+
+#[tauri::command]
+fn set_peer_icon(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    peer_id: String,
+    icon: String,
+) -> Result<(), String> {
+    if icon.trim().is_empty() {
+        state.icons.clear(&peer_id).map_err(|e| format!("{e:#}"))?;
+    } else {
+        state
+            .icons
+            .set(peer_id, icon.trim().to_string())
+            .map_err(|e| format!("{e:#}"))?;
+    }
+    state.discovery.emit_snapshot(&app);
+    Ok(())
+}
+
+/// Wipe every trace of a peer from local state: live cache, manual
+/// entry, favorite flag, alias override, icon override, clipboard-sync
+/// setting. The peer will reappear in ALL if mDNS/UDP see it again,
+/// but with default name, default icon, no flags.
+#[tauri::command]
+fn forget_peer(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    peer_id: String,
+) -> Result<(), String> {
+    runtime_log::info(format!(
+        "[forget] wiping all state for peer {}",
+        &peer_id[..16.min(peer_id.len())]
+    ));
+    state.discovery.peers.lock().unwrap().remove(&peer_id);
+    let _ = state.manual.remove(&peer_id);
+    let _ = state.prefs.remove_favorite(&peer_id);
+    let _ = state.aliases.clear(&peer_id);
+    let _ = state.icons.clear(&peer_id);
+    let _ = state.clipboard.set(peer_id.clone(), false);
     state.discovery.emit_snapshot(&app);
     Ok(())
 }
@@ -621,7 +667,13 @@ pub fn run() {
         .setup(|app| {
             // 0a. Bind the in-memory runtime log to the AppHandle so each
             //     log line is emitted live to the frontend log panel.
+            //     Also bind a file appender at <data_dir>/runtime.log so
+            //     logs survive app crashes / restarts.
             runtime_log::bind_app(app.handle().clone());
+            if let Ok(data_dir_for_log) = app.path().app_data_dir() {
+                let _ = std::fs::create_dir_all(&data_dir_for_log);
+                runtime_log::bind_file(&data_dir_for_log);
+            }
             runtime_log::info(format!(
                 "[boot] Millennium Clipboard v{} starting",
                 env!("CARGO_PKG_VERSION")
@@ -683,6 +735,11 @@ pub fn run() {
             );
             runtime_log::info("[setup] settings loaded");
 
+            let icon_store = Arc::new(
+                icon_overrides::IconOverrideStore::load_or_new(&data_dir)
+                    .expect("failed to setup icon overrides"),
+            );
+
             // Identity / network / store diagnostic dump.
             runtime_log::info(format!(
                 "[diag] identity fp={} alias='{}' local_ip={}",
@@ -719,7 +776,66 @@ pub fn run() {
             let prefs_for_server = prefs.clone();
             let settings_for_server = settings_store.clone();
             let clipboard_for_server = clipboard_store.clone();
-            let server_port = discovery::local_port();
+
+            // Port auto-fallback. If 53319 is already taken (another
+            // instance, dev double-launch, OneDrive sync zombie) we try
+            // 53320..53328. mDNS/UDP carry the actual port in their
+            // payloads, so picking a different one is transparent to
+            // remote peers.
+            let requested_port = discovery::local_port();
+
+            // Probe localhost first to detect a running Millennium
+            // instance and surface it to the user (not just silently
+            // fall through to a different port).
+            let detect_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Ok(Ok(info)) = tokio::time::timeout(
+                    std::time::Duration::from_millis(800),
+                    crate::http_client::fetch_info("127.0.0.1", requested_port),
+                )
+                .await
+                {
+                    if info.protocol == "millennium/1" {
+                        runtime_log::warn(format!(
+                            "[boot] another Millennium instance is already running on :{} (fp={}, alias='{}')",
+                            requested_port,
+                            &info.fingerprint[..16.min(info.fingerprint.len())],
+                            info.alias
+                        ));
+                        let _ = detect_handle.emit(
+                            "instance-conflict",
+                            format!(
+                                "Otra instancia de Millennium ya está corriendo (alias '{}'). Esta se abrió en otro puerto.",
+                                info.alias
+                            ),
+                        );
+                    }
+                }
+            });
+
+            let server_port = http_server::find_free_tcp_port(requested_port, 10)
+                .unwrap_or_else(|| {
+                    runtime_log::err(format!(
+                        "[setup] no free TCP port found in {}..{} — bind WILL fail",
+                        requested_port,
+                        requested_port + 10
+                    ));
+                    let _ = app.handle().emit(
+                        "backend-error",
+                        format!(
+                            "No free TCP port in {}..{}. Close other Millennium instances and reopen.",
+                            requested_port,
+                            requested_port + 9
+                        ),
+                    );
+                    requested_port
+                });
+            if server_port != requested_port {
+                runtime_log::warn(format!(
+                    "[setup] port {} was taken — using {} instead",
+                    requested_port, server_port
+                ));
+            }
             runtime_log::info(format!(
                 "[setup] spawning HTTPS server on 0.0.0.0:{}",
                 server_port
@@ -770,28 +886,29 @@ pub fn run() {
                 }
             });
 
-            // 3. mDNS discovery.
+            // 3. mDNS discovery — announces with the *real* tcp port
+            //    we ended up bound to.
             runtime_log::info("[setup] starting mDNS discovery...");
             let handle = app.handle().clone();
             let discovery_state = discovery::start(
                 handle,
                 &identity,
-                discovery::local_port(),
+                server_port,
                 prefs.clone(),
                 manual.clone(),
                 alias_store.clone(),
                 clipboard_store.clone(),
+                icon_store.clone(),
             )
             .expect("failed to start mDNS discovery");
             runtime_log::info("[setup] mDNS discovery started");
 
-            // 4. UDP broadcast discovery — runs alongside mDNS so peers
-            //    appear even on networks that filter multicast.
+            // 4. UDP broadcast discovery — also carries the real tcp port.
             let udp_info = udp_discovery::LocalInfo {
                 alias: identity.alias.clone(),
                 fingerprint: identity.fingerprint.clone(),
                 hex_id: identity.hex_id.clone(),
-                tcp_port: discovery::local_port(),
+                tcp_port: server_port,
                 local_ip: identity.local_ip.clone(),
             };
             udp_discovery::spawn(
@@ -802,6 +919,7 @@ pub fn run() {
                 manual.clone(),
                 alias_store.clone(),
                 clipboard_store.clone(),
+                icon_store.clone(),
             );
 
             // 5. Clipboard-sync poller. Reads the OS clipboard every
@@ -821,6 +939,8 @@ pub fn run() {
                 manual,
                 aliases: alias_store,
                 clipboard: clipboard_store,
+                icons: icon_store,
+                server_port,
             });
             Ok(())
         })
@@ -846,6 +966,8 @@ pub fn run() {
             get_runtime_log,
             clear_runtime_log,
             record_frontend_log,
+            set_peer_icon,
+            forget_peer,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

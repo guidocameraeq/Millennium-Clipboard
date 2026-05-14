@@ -1618,3 +1618,252 @@ html, body {
   flex-wrap: wrap;
 }
 
+/* ==========================================================================
+   v0.8.6 — PEER CARD TOGGLES (★ FAV / 📋 CLIP SYNC) + ICON PICKER + BANNER
+   ========================================================================== */
+
+/* The status row now holds both the dot+label AND the two clickable
+   toggles, pushed to the right. */
+.peer-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.peer-toggles {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.peer-toggle {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  background: rgba(8, 14, 30, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-dim);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.16s, border-color 0.16s, color 0.16s,
+              box-shadow 0.16s, transform 0.12s;
+  -webkit-text-stroke: 0;
+  filter: grayscale(0.9);
+  opacity: 0.55;
+}
+
+.peer-toggle:hover {
+  opacity: 0.9;
+  border-color: rgba(255, 255, 255, 0.25);
+  transform: translateY(-1px);
+}
+
+.peer-toggle:active {
+  transform: translateY(0) scale(0.94);
+}
+
+.peer-toggle.fav-toggle.active {
+  background: rgba(255, 179, 71, 0.12);
+  border-color: var(--neon-amber);
+  color: var(--neon-amber);
+  box-shadow: 0 0 12px rgba(255, 179, 71, 0.55),
+              inset 0 0 8px rgba(255, 179, 71, 0.15);
+  filter: none;
+  opacity: 1;
+  text-shadow: 0 0 8px rgba(255, 179, 71, 0.7);
+}
+
+.peer-toggle.clip-toggle.active {
+  background: rgba(0, 240, 255, 0.10);
+  border-color: var(--neon-cyan);
+  color: var(--neon-cyan);
+  box-shadow: 0 0 12px var(--neon-cyan-glow),
+              inset 0 0 8px rgba(0, 240, 255, 0.15);
+  filter: none;
+  opacity: 1;
+  text-shadow: 0 0 8px var(--neon-cyan-glow);
+}
+
+/* Offline peers: dim the toggles so they don't compete with the dot. */
+.peer-item[data-status="offline"] .peer-toggle {
+  opacity: 0.3;
+}
+.peer-item[data-status="offline"] .peer-toggle.active {
+  opacity: 0.75;
+}
+
+/* The peer-name row now has all the space the badges used to eat.
+   Truncate gracefully if the name is too long. */
+.peer-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ICON PICKER inside the peer details modal ------------------------------ */
+.icon-picker-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 0 18px;
+  border-bottom: 1px solid var(--neon-cyan-soft);
+  margin-bottom: 14px;
+}
+
+.icon-current {
+  width: 64px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--neon-cyan);
+  color: var(--neon-cyan);
+  background: rgba(0, 240, 255, 0.06);
+  box-shadow: 0 0 18px var(--neon-cyan-glow),
+              inset 0 0 14px rgba(0, 240, 255, 0.08);
+}
+.icon-current svg { width: 38px; height: 38px; }
+
+.icon-picker {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.icon-pick {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  background: rgba(8, 14, 30, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.icon-pick svg { width: 22px; height: 22px; }
+.icon-pick:hover {
+  border-color: var(--neon-cyan-soft);
+  color: var(--neon-cyan);
+  transform: translateY(-1px);
+}
+.icon-pick.active {
+  border-color: var(--neon-cyan);
+  color: var(--neon-cyan);
+  background: rgba(0, 240, 255, 0.12);
+  box-shadow: 0 0 10px var(--neon-cyan-glow);
+}
+
+.icon-picker-hint {
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: var(--text-mute);
+  opacity: 0.7;
+}
+
+.forget-hint {
+  margin: 16px 0 0;
+  font-size: 10px;
+  letter-spacing: 1px;
+  line-height: 1.55;
+  color: var(--text-mute);
+  opacity: 0.75;
+}
+
+/* BACKEND ERROR BANNER --------------------------------------------------- */
+.backend-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 9000;
+  pointer-events: none;
+}
+
+.backend-banner[hidden] { display: none !important; }
+
+.backend-banner-inner {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 18px;
+  border-bottom: 2px solid #ff4d6b;
+  background: linear-gradient(180deg, rgba(60, 0, 12, 0.96), rgba(40, 0, 8, 0.92));
+  box-shadow: 0 4px 24px rgba(255, 77, 107, 0.35);
+  font-family: var(--font-display);
+  animation: banner-in 0.3s ease-out;
+}
+
+.backend-banner[data-level="warn"] .backend-banner-inner {
+  border-bottom-color: #ffc848;
+  background: linear-gradient(180deg, rgba(60, 44, 0, 0.95), rgba(40, 30, 0, 0.9));
+  box-shadow: 0 4px 24px rgba(255, 200, 72, 0.3);
+}
+
+@keyframes banner-in {
+  from { transform: translateY(-100%); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+
+.backend-banner-glyph {
+  font-size: 28px;
+  line-height: 1;
+  color: #ff4d6b;
+  text-shadow: 0 0 12px rgba(255, 77, 107, 0.7);
+  flex-shrink: 0;
+}
+.backend-banner[data-level="warn"] .backend-banner-glyph {
+  color: #ffc848;
+  text-shadow: 0 0 12px rgba(255, 200, 72, 0.6);
+}
+
+.backend-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.backend-banner-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  color: #ff4d6b;
+  text-shadow: 0 0 6px rgba(255, 77, 107, 0.5);
+}
+.backend-banner[data-level="warn"] .backend-banner-title {
+  color: #ffc848;
+  text-shadow: 0 0 6px rgba(255, 200, 72, 0.5);
+}
+
+.backend-banner-msg {
+  margin-top: 3px;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: #f5dde2;
+  word-break: break-word;
+}
+
+.backend-banner-close {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #f5dde2;
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+  font-size: 14px;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.backend-banner-close:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+

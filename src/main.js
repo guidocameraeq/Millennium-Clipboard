@@ -101,6 +101,23 @@
   const peerDetailsCloseBtn = document.getElementById('peer-details-close');
   let peerDetailsCurrentId = null;
 
+  const backendBanner = document.getElementById('backend-banner');
+  const backendBannerMsg = document.getElementById('backend-banner-msg');
+  const backendBannerClose = document.getElementById('backend-banner-close');
+
+  function showBackendBanner(level, msg) {
+    if (!backendBanner) return;
+    backendBanner.dataset.level = level || 'error';
+    setText(backendBannerMsg, msg || 'Unknown backend error');
+    backendBanner.hidden = false;
+  }
+  function hideBackendBanner() {
+    if (backendBanner) backendBanner.hidden = true;
+  }
+  if (backendBannerClose) {
+    backendBannerClose.addEventListener('click', hideBackendBanner);
+  }
+
   const settingsCheckUpdate = document.getElementById('settings-check-update');
   const settingsUpdateStatus = document.getElementById('settings-update-status');
   const settingsUpdateAction = document.getElementById('settings-update-action');
@@ -324,8 +341,21 @@
   // ---------- Peer rendering -----------------------------------------------
   const ICON_SVG = {
     desktop: `<svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none"><rect x="3" y="4" width="18" height="12" rx="1" /><line x1="2" y1="20" x2="22" y2="20" /><line x1="10" y1="16" x2="10" y2="20" /><line x1="14" y1="16" x2="14" y2="20" /></svg>`,
+    laptop: `<svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none"><rect x="4" y="4" width="16" height="11" rx="1" /><line x1="2" y1="19" x2="22" y2="19" /><line x1="6" y1="15" x2="18" y2="15" /></svg>`,
     phone: `<svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none"><rect x="7" y="2" width="10" height="20" rx="2" /><line x1="10" y1="19" x2="14" y2="19" /></svg>`,
     tablet: `<svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none"><rect x="3" y="3" width="18" height="18" rx="2" /><line x1="10" y1="18" x2="14" y2="18" /></svg>`,
+    server: `<svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none"><rect x="3" y="3" width="18" height="6" rx="1" /><rect x="3" y="11" width="18" height="6" rx="1" /><circle cx="7" cy="6" r="0.6" fill="currentColor"/><circle cx="7" cy="14" r="0.6" fill="currentColor"/><line x1="11" y1="6" x2="18" y2="6"/><line x1="11" y1="14" x2="18" y2="14"/></svg>`,
+    gaming: `<svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none"><path d="M6 8 C3 8, 2 11, 2 14 C2 16, 3 18, 5 18 C6 18, 7 17, 8 16 L16 16 C17 17, 18 18, 19 18 C21 18, 22 16, 22 14 C22 11, 21 8, 18 8 Z"/><line x1="6" y1="12" x2="9" y2="12"/><line x1="7.5" y1="10.5" x2="7.5" y2="13.5"/><circle cx="15" cy="11" r="0.7" fill="currentColor"/><circle cx="17.5" cy="13" r="0.7" fill="currentColor"/></svg>`,
+    media: `<svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none"><rect x="2" y="5" width="20" height="13" rx="1"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="18" x2="12" y2="21"/><polygon points="10,9 10,14 15,11.5" fill="currentColor" stroke="none"/></svg>`,
+  };
+  const ICON_KEYS = ['desktop', 'laptop', 'phone', 'server', 'gaming', 'media'];
+  const ICON_LABELS = {
+    desktop: 'DESKTOP',
+    laptop: 'LAPTOP',
+    phone: 'PHONE',
+    server: 'SERVER',
+    gaming: 'GAMING',
+    media: 'MEDIA',
   };
 
   function renderPeers() {
@@ -397,12 +427,22 @@
     setText(li.querySelector('.peer-hex'), p.hexId);
     setText(li.querySelector('.peer-ip'), p.ip);
 
-    const manualBadge = li.querySelector('.manual-badge');
-    if (manualBadge) manualBadge.hidden = !p.manual;
-    const favInd = li.querySelector('.fav-ind');
-    if (favInd) favInd.hidden = !p.favorite;
-    const clipInd = li.querySelector('.clip-ind');
-    if (clipInd) clipInd.hidden = !p.clipboardSync;
+    const iconWrap = li.querySelector('.peer-icon');
+    if (iconWrap && iconWrap.dataset.icon !== p.iconType) {
+      iconWrap.innerHTML = ICON_SVG[p.iconType] || ICON_SVG.desktop;
+      iconWrap.dataset.icon = p.iconType;
+    }
+
+    const favBtn = li.querySelector('.fav-toggle');
+    if (favBtn) {
+      favBtn.classList.toggle('active', !!p.favorite);
+      favBtn.setAttribute('aria-pressed', p.favorite ? 'true' : 'false');
+    }
+    const clipBtn = li.querySelector('.clip-toggle');
+    if (clipBtn) {
+      clipBtn.classList.toggle('active', !!p.clipboardSync);
+      clipBtn.setAttribute('aria-pressed', p.clipboardSync ? 'true' : 'false');
+    }
 
     const statusEl = li.querySelector('.peer-status');
     if (statusEl) {
@@ -422,23 +462,24 @@
     li.dataset.manual = p.manual ? 'true' : 'false';
 
     li.innerHTML = `
-      <div class="peer-icon">${ICON_SVG[p.iconType] || ICON_SVG.desktop}</div>
+      <div class="peer-icon" data-icon="${p.iconType}">${ICON_SVG[p.iconType] || ICON_SVG.desktop}</div>
       <div class="peer-info">
         <div class="peer-name-row">
-          <span class="peer-name-wrap">
-            <span class="peer-name" title="Double-click to rename"></span>
-            <span class="peer-indicator fav-ind" hidden title="Favorite">★</span>
-            <span class="peer-indicator clip-ind" hidden title="Clipboard sync">📋</span>
-            <span class="peer-badge manual-badge" hidden>MANUAL</span>
-          </span>
+          <span class="peer-name" title="Double-click to rename"></span>
           <button class="peer-action-btn details-btn" title="Peer details">⋯</button>
         </div>
         <div class="peer-meta">
           <span class="peer-hex mono"></span>
           <span class="peer-ip mono"></span>
         </div>
-        <div class="peer-status">
-          <span class="status-dot"></span><span class="status-label"></span>
+        <div class="peer-status-row">
+          <div class="peer-status">
+            <span class="status-dot"></span><span class="status-label"></span>
+          </div>
+          <div class="peer-toggles">
+            <button class="peer-toggle fav-toggle" title="Toggle favorite" aria-pressed="false">★</button>
+            <button class="peer-toggle clip-toggle" title="Toggle clipboard sync" aria-pressed="false">📋</button>
+          </div>
         </div>
       </div>
     `;
@@ -447,17 +488,15 @@
     setText(li.querySelector('.peer-hex'), p.hexId);
     setText(li.querySelector('.peer-ip'), p.ip);
 
-    if (p.manual) {
-      const b = li.querySelector('.manual-badge');
-      if (b) b.hidden = false;
-    }
+    const favBtn = li.querySelector('.fav-toggle');
     if (p.favorite) {
-      const b = li.querySelector('.fav-ind');
-      if (b) b.hidden = false;
+      favBtn.classList.add('active');
+      favBtn.setAttribute('aria-pressed', 'true');
     }
+    const clipBtn = li.querySelector('.clip-toggle');
     if (p.clipboardSync) {
-      const b = li.querySelector('.clip-ind');
-      if (b) b.hidden = false;
+      clipBtn.classList.add('active');
+      clipBtn.setAttribute('aria-pressed', 'true');
     }
 
     const statusEl = li.querySelector('.peer-status');
@@ -486,7 +525,7 @@
   }
 
   // ---------- Peer list events (delegated) ---------------------------------
-  peerList.addEventListener('click', (e) => {
+  peerList.addEventListener('click', async (e) => {
     const detailsBtn = e.target.closest('.details-btn');
     if (detailsBtn) {
       e.stopPropagation();
@@ -495,6 +534,38 @@
       if (!id) return;
       const peer = state.peers.find((p) => p.id === id);
       if (peer) openPeerDetails(peer);
+      return;
+    }
+    const favBtn = e.target.closest('.fav-toggle');
+    if (favBtn) {
+      e.stopPropagation();
+      const item = favBtn.closest('.peer-item');
+      const id = item?.dataset.id;
+      if (!id) return;
+      const peer = state.peers.find((p) => p.id === id);
+      const newVal = !(peer && peer.favorite);
+      try {
+        await invoke('toggle_favorite', { peerId: id, value: newVal });
+        blip(newVal ? 1320 : 660, 0.06);
+      } catch (err) {
+        setStatus(`ERR favorite · ${err}`);
+      }
+      return;
+    }
+    const clipBtn = e.target.closest('.clip-toggle');
+    if (clipBtn) {
+      e.stopPropagation();
+      const item = clipBtn.closest('.peer-item');
+      const id = item?.dataset.id;
+      if (!id) return;
+      const peer = state.peers.find((p) => p.id === id);
+      const newVal = !(peer && peer.clipboardSync);
+      try {
+        await invoke('set_clipboard_sync', { peerId: id, enabled: newVal });
+        blip(newVal ? 1760 : 880, 0.06);
+      } catch (err) {
+        setStatus(`ERR clipboard sync · ${err}`);
+      }
       return;
     }
     const item = e.target.closest('.peer-item');
@@ -1076,20 +1147,43 @@
     peerDetailsFp.textContent = peer.id.slice(0, 32) + '…';
     peerDetailsFp.title = peer.id;
     peerDetailsAddr.textContent = `${peer.ip || '?'}:${peer.port}`;
+    setText(peerDetailsStatus, peer.status === 'online' ? '● ONLINE' : '○ OFFLINE');
 
-    const tags = [];
-    if (peer.status === 'online') tags.push('ONLINE');
-    else tags.push('OFFLINE');
-    if (peer.manual) tags.push('MANUAL');
-    if (peer.favorite) tags.push('FAV');
-    peerDetailsStatus.textContent = tags.join(' · ');
+    // Tags row: MANUAL · OFFLINE FAVORITE · etc. (the stuff we removed
+    // from the card so it doesn't clutter the small layout.)
+    const tagsList = [];
+    if (peer.manual) tagsList.push('MANUAL');
+    if (peer.favorite && peer.status === 'offline') tagsList.push('OFFLINE FAVORITE');
+    const tagsEl = document.getElementById('peer-details-tags');
+    if (tagsEl) {
+      if (tagsList.length) {
+        tagsEl.textContent = tagsList.join(' · ');
+        tagsEl.hidden = false;
+      } else {
+        tagsEl.hidden = true;
+      }
+    }
+
+    // Render the big current icon + the 6-picker.
+    const bigIcon = document.getElementById('peer-details-icon-current');
+    if (bigIcon) bigIcon.innerHTML = ICON_SVG[peer.iconType] || ICON_SVG.desktop;
+    const picker = document.getElementById('peer-details-icon-picker');
+    if (picker) {
+      picker.innerHTML = ICON_KEYS.map((key) => `
+        <button class="icon-pick ${key === peer.iconType ? 'active' : ''}" data-icon="${key}" title="${ICON_LABELS[key]}">
+          ${ICON_SVG[key]}
+        </button>
+      `).join('');
+    }
 
     peerDetailsFav.checked = !!peer.favorite;
     peerDetailsFavLabel.textContent = peer.favorite ? 'ON' : 'OFF';
     peerDetailsClip.checked = !!peer.clipboardSync;
     peerDetailsClipLabel.textContent = peer.clipboardSync ? 'ON' : 'OFF';
 
-    peerDetailsRemove.hidden = !peer.manual;
+    // Forget button is always visible now (used to be only for manuals).
+    peerDetailsRemove.hidden = false;
+    peerDetailsRemove.textContent = '🗑 FORGET PEER';
 
     peerDetailsModal.hidden = false;
   }
@@ -1153,15 +1247,46 @@
     if (!peerDetailsCurrentId) return;
     const peer = state.peers.find((p) => p.id === peerDetailsCurrentId);
     if (!peer) return;
-    const ok = confirm(`Remove manual peer "${peer.name}"?\nFavorite + clipboard settings are kept.`);
+    const ok = confirm(
+      `Forget peer "${peer.name}"?\n\n` +
+      'This clears:\n' +
+      '  • manual entry (if any)\n' +
+      '  • favorite flag\n' +
+      '  • custom name\n' +
+      '  • custom icon\n' +
+      '  • clipboard sync setting\n' +
+      '  • live cache\n\n' +
+      'The peer will reappear in ALL if seen on the network again.'
+    );
     if (!ok) return;
     try {
-      await invoke('remove_manual_peer', { peerId: peer.id });
+      await invoke('forget_peer', { peerId: peer.id });
       blip(440, 0.08);
-      setStatus(`Removed ${peer.name}`);
+      setStatus(`Forgot ${peer.name}`);
       closePeerDetailsModal();
     } catch (err) {
-      setStatus(`ERR remove · ${err}`);
+      setStatus(`ERR forget · ${err}`);
+    }
+  });
+
+  // Icon picker — delegated click handler on the picker container.
+  document.addEventListener('click', async (e) => {
+    const pick = e.target.closest('#peer-details-icon-picker .icon-pick');
+    if (!pick || !peerDetailsCurrentId) return;
+    const icon = pick.dataset.icon;
+    if (!icon) return;
+    try {
+      await invoke('set_peer_icon', { peerId: peerDetailsCurrentId, icon });
+      // Visual update: mark this one active, others inactive.
+      pick.parentElement.querySelectorAll('.icon-pick').forEach((b) => {
+        b.classList.toggle('active', b === pick);
+      });
+      // Update the big preview too.
+      const bigIcon = document.getElementById('peer-details-icon-current');
+      if (bigIcon) bigIcon.innerHTML = ICON_SVG[icon] || ICON_SVG.desktop;
+      blip(880, 0.04);
+    } catch (err) {
+      setStatus(`ERR icon · ${err}`);
     }
   });
   settingsModal.addEventListener('click', (e) => {
@@ -1338,12 +1463,20 @@
       applyPeers(event.payload, /* initial = */ false);
     });
 
-    // Backend failures (HTTPS server bind, etc.) — surfacing to the user
-    // so a silent crash doesn't read as "no peers".
+    // Backend failures (HTTPS server bind, etc.) — surface a big
+    // persistent banner over the peer list so this can't be missed.
     await listen('backend-error', (event) => {
       const msg = typeof event.payload === 'string' ? event.payload : JSON.stringify(event.payload);
+      showBackendBanner('error', msg);
       setStatus(`BACKEND ERR · ${msg}`);
       console.error('[backend-error]', event.payload);
+    });
+
+    // Another instance already running — informational banner (yellow).
+    await listen('instance-conflict', (event) => {
+      const msg = typeof event.payload === 'string' ? event.payload : JSON.stringify(event.payload);
+      showBackendBanner('warn', msg);
+      console.warn('[instance-conflict]', event.payload);
     });
 
     // Live runtime log lines — append into the in-page buffer so when

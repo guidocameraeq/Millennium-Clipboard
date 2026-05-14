@@ -87,6 +87,25 @@ struct IncomingFile {
 // Server entry
 // ---------------------------------------------------------------------------
 
+/// Find the first free TCP port in `[start, start+max_tries)` by trying to
+/// bind a temporary listener. The listener is dropped immediately so the
+/// caller can rebind through axum-server. There is a tiny race window
+/// where another process could steal the port between drop and rebind,
+/// but in practice this is fine — and far better than failing silently.
+pub fn find_free_tcp_port(start: u16, max_tries: u16) -> Option<u16> {
+    for offset in 0..max_tries {
+        let port = start + offset;
+        match std::net::TcpListener::bind(("0.0.0.0", port)) {
+            Ok(listener) => {
+                drop(listener);
+                return Some(port);
+            }
+            Err(_) => continue,
+        }
+    }
+    None
+}
+
 pub async fn run(
     app: AppHandle,
     port: u16,
@@ -120,9 +139,10 @@ pub async fn run(
         .context("load TLS config")?;
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    crate::runtime_log::info(format!("[http] HTTPS server listening on {}", addr));
 
-    axum_server::bind_rustls(addr, tls)
+    let server = axum_server::bind_rustls(addr, tls);
+    crate::runtime_log::info(format!("[http] HTTPS server now listening on {}", addr));
+    server
         .serve(router.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .context("axum server")?;

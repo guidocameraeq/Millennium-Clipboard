@@ -64,9 +64,10 @@ pub fn spawn(
     manual: Arc<ManualPeerStore>,
     aliases: Arc<AliasStore>,
     clipboard: Arc<ClipboardSyncStore>,
+    icons: Arc<crate::icon_overrides::IconOverrideStore>,
 ) {
     tauri::async_runtime::spawn(async move {
-        run(app, info, peers, prefs, manual, aliases, clipboard).await;
+        run(app, info, peers, prefs, manual, aliases, clipboard, icons).await;
     });
 }
 
@@ -79,6 +80,7 @@ async fn run(
     manual: Arc<ManualPeerStore>,
     aliases: Arc<AliasStore>,
     clipboard: Arc<ClipboardSyncStore>,
+    icons: Arc<crate::icon_overrides::IconOverrideStore>,
 ) {
     let socket = match build_socket() {
         Ok(s) => s,
@@ -169,6 +171,7 @@ async fn run(
                             &manual,
                             &aliases,
                             &clipboard,
+                            &icons,
                         );
                     }
                     Err(e) => {
@@ -225,6 +228,7 @@ fn handle_packet(
     manual: &Arc<ManualPeerStore>,
     aliases: &Arc<AliasStore>,
     clipboard: &Arc<ClipboardSyncStore>,
+    icons: &Arc<crate::icon_overrides::IconOverrideStore>,
 ) {
     let pkt: DiscoveryPacket = match serde_json::from_slice(bytes) {
         Ok(p) => p,
@@ -282,7 +286,7 @@ fn handle_packet(
             "[udp] NEW peer {} '{}' via broadcast from {} (payload tcp_port={})",
             fp_short, pkt.alias, peer_addr, pkt.tcp_port
         ));
-        let snapshot = build_wire_list(peers, prefs, manual, aliases, clipboard);
+        let snapshot = build_wire_list(peers, prefs, manual, aliases, clipboard, icons);
         let _ = app.emit("peers-changed", &snapshot);
     }
 }
