@@ -1,6 +1,6 @@
 [package]
 name = "millennium-clipboard"
-version = "0.9.0"
+version = "0.10.0"
 description = "Share text and files between devices on the same LAN"
 authors = ["guidocameraeq"]
 edition = "2021"
@@ -13,7 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon", "image-ico", "image-png"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -42,6 +42,10 @@ rustls = { version = "0.23", features = ["ring"] }
 # File transfer (Fase 7)
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
+tauri-plugin-autostart = "2"
+
+# QR code generation (Fase v0.10 — peer pairing)
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
 # Thumbnail generation (Fase 3) + clipboard image (Fase 4)
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
@@ -58,4 +62,8 @@ arboard = "3"
 socket2 = { version = "0.5", features = ["all"] }
 env_logger = "0.11"
 log = "0.4"
+
+# Windows registry access for AUMID notification fix
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = "0.55"
 

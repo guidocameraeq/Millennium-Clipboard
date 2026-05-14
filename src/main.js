@@ -104,6 +104,12 @@
   const settingsCloseBtn = document.getElementById('settings-close');
   const settingsNotifications = document.getElementById('settings-notifications');
   const settingsNotificationsLabel = document.getElementById('settings-notifications-label');
+  const settingsAutostart = document.getElementById('settings-autostart');
+  const settingsAutostartLabel = document.getElementById('settings-autostart-label');
+  const settingsCloseTray = document.getElementById('settings-close-tray');
+  const settingsCloseTrayLabel = document.getElementById('settings-close-tray-label');
+  const settingsSendTo = document.getElementById('settings-send-to');
+  const settingsSendToLabel = document.getElementById('settings-send-to-label');
 
   const addPeerBtn = document.getElementById('add-peer-btn');
   const addPeerModal = document.getElementById('add-peer-modal');
@@ -904,6 +910,8 @@
         }
       } else if (action === 'history') {
         openLogModal();
+      } else if (action === 'qr') {
+        openQrModal();
       } else if (action === 'settings') {
         openSettingsModal();
       }
@@ -1032,6 +1040,21 @@
       settingsNotifications.checked = notifOn;
       settingsNotificationsLabel.textContent = notifOn ? 'ON' : 'OFF';
     }
+    if (settingsAutostart) {
+      const v = !!state.settings.startWithWindows;
+      settingsAutostart.checked = v;
+      settingsAutostartLabel.textContent = v ? 'ON' : 'OFF';
+    }
+    if (settingsCloseTray) {
+      const v = state.settings.closeToTray !== false;
+      settingsCloseTray.checked = v;
+      settingsCloseTrayLabel.textContent = v ? 'ON' : 'OFF';
+    }
+    if (settingsSendTo) {
+      const v = !!state.settings.registerSendTo;
+      settingsSendTo.checked = v;
+      settingsSendToLabel.textContent = v ? 'ON' : 'OFF';
+    }
     // Reset update UI to a known state each time the modal opens
     settingsUpdateStatus.textContent = `current v${(window.__LOCAL_INFO || {}).version || '?'}`;
     settingsUpdateAction.hidden = true;
@@ -1156,6 +1179,87 @@
     });
   }
 
+  // ---------- QR pairing modal ----------------------------------------------
+  const qrModal = document.getElementById('qr-modal');
+  const qrCanvas = document.getElementById('qr-canvas');
+  const qrPayload = document.getElementById('qr-payload');
+  const qrPasteInput = document.getElementById('qr-paste-input');
+  const qrAddError = document.getElementById('qr-add-error');
+  const qrCopyBtn = document.getElementById('qr-copy-payload');
+  const qrAddSubmit = document.getElementById('qr-add-submit');
+  const qrCloseBtn = document.getElementById('qr-close');
+  let qrCurrentPayload = '';
+
+  async function openQrModal() {
+    if (!qrModal) return;
+    qrModal.hidden = false;
+    setQrTab('show');
+    try {
+      const data = await invoke('generate_pair_qr');
+      qrCanvas.innerHTML = data.svg || '';
+      qrCurrentPayload = data.payload || '';
+      setText(qrPayload, qrCurrentPayload);
+    } catch (err) {
+      qrCanvas.innerHTML = `<div style="padding:24px;color:#ff4d6b">${err}</div>`;
+      qrCurrentPayload = '';
+    }
+  }
+  function closeQrModal() { if (qrModal) qrModal.hidden = true; }
+
+  function setQrTab(name) {
+    document.querySelectorAll('.qr-tab').forEach((t) => {
+      t.classList.toggle('active', t.dataset.qrTab === name);
+    });
+    document.getElementById('qr-pane-show').hidden = name !== 'show';
+    document.getElementById('qr-pane-add').hidden = name !== 'add';
+    if (qrCopyBtn) qrCopyBtn.hidden = name !== 'show';
+    if (qrAddSubmit) qrAddSubmit.hidden = name !== 'add';
+    if (qrAddError) qrAddError.hidden = true;
+  }
+  document.querySelectorAll('.qr-tab').forEach((t) => {
+    t.addEventListener('click', () => setQrTab(t.dataset.qrTab));
+  });
+  if (qrCloseBtn) qrCloseBtn.addEventListener('click', closeQrModal);
+  if (qrModal) {
+    qrModal.addEventListener('click', (e) => {
+      if (e.target === qrModal) closeQrModal();
+    });
+  }
+  if (qrCopyBtn) {
+    qrCopyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(qrCurrentPayload);
+        const orig = qrCopyBtn.textContent;
+        qrCopyBtn.textContent = '✓ COPIED';
+        setTimeout(() => { qrCopyBtn.textContent = orig; }, 1400);
+      } catch (err) {
+        setStatus(`ERR copy · ${err}`);
+      }
+    });
+  }
+  if (qrAddSubmit) {
+    qrAddSubmit.addEventListener('click', async () => {
+      const txt = (qrPasteInput.value || '').trim();
+      if (!txt) {
+        qrAddError.textContent = 'Paste the QR contents first.';
+        qrAddError.hidden = false;
+        return;
+      }
+      qrAddSubmit.disabled = true;
+      qrAddError.hidden = true;
+      try {
+        const msg = await invoke('pair_with_qr_payload', { payload: txt });
+        setStatus(msg);
+        closeQrModal();
+      } catch (err) {
+        qrAddError.textContent = String(err);
+        qrAddError.hidden = false;
+      } finally {
+        qrAddSubmit.disabled = false;
+      }
+    });
+  }
+
   // Wire frontend error catchers to also ship into the backend buffer so
   // a UI crash leaves a trace in the same log the user is going to paste.
   function reportToBackend(level, msg) {
@@ -1181,6 +1285,7 @@
       if (!addPeerModal.hidden) closeAddPeerModal();
       if (!peerDetailsModal.hidden) closePeerDetailsModal();
       if (logModal && !logModal.hidden) closeLogModal();
+      if (qrModal && !qrModal.hidden) closeQrModal();
     }
   });
 
@@ -1433,6 +1538,51 @@
     });
   }
 
+  if (settingsAutostart) {
+    settingsAutostart.addEventListener('change', async () => {
+      const value = settingsAutostart.checked;
+      try {
+        await invoke('set_start_with_windows', { value });
+        if (state.settings) state.settings.startWithWindows = value;
+        settingsAutostartLabel.textContent = value ? 'ON' : 'OFF';
+        blip(value ? 1320 : 440, 0.06);
+      } catch (err) {
+        settingsAutostart.checked = !value;
+        setStatus(`ERR autostart · ${err}`);
+      }
+    });
+  }
+
+  if (settingsCloseTray) {
+    settingsCloseTray.addEventListener('change', async () => {
+      const value = settingsCloseTray.checked;
+      try {
+        await invoke('set_close_to_tray', { value });
+        if (state.settings) state.settings.closeToTray = value;
+        settingsCloseTrayLabel.textContent = value ? 'ON' : 'OFF';
+        blip(value ? 1320 : 440, 0.06);
+      } catch (err) {
+        settingsCloseTray.checked = !value;
+        setStatus(`ERR close-tray · ${err}`);
+      }
+    });
+  }
+
+  if (settingsSendTo) {
+    settingsSendTo.addEventListener('change', async () => {
+      const value = settingsSendTo.checked;
+      try {
+        await invoke('set_register_send_to', { value });
+        if (state.settings) state.settings.registerSendTo = value;
+        settingsSendToLabel.textContent = value ? 'ON' : 'OFF';
+        blip(value ? 1320 : 440, 0.06);
+      } catch (err) {
+        settingsSendTo.checked = !value;
+        setStatus(`ERR send-to · ${err}`);
+      }
+    });
+  }
+
   // ---------- Add peer by IP (Fase 8) --------------------------------------
   function openAddPeerModal() {
     addPeerError.hidden = true;
@@ -1545,6 +1695,45 @@
     await listen('log-line', (event) => {
       if (typeof event.payload === 'string') {
         appendLogLine(event.payload);
+      }
+    });
+
+    // Files passed to us via Windows "Send To → Millennium". The
+    // backend collects argv paths at startup and fires this event once
+    // the frontend is up.
+    await listen('incoming-share-files', async (event) => {
+      const paths = event.payload || [];
+      if (!Array.isArray(paths) || paths.length === 0) return;
+      for (const p of paths) {
+        await addPathToQueue(p);
+      }
+      setStatus(`SHARE → ${paths.length} file(s) queued. Pick a peer and SEND.`);
+      blip(1320, 0.06);
+    });
+
+    // System tray menu actions. The tray itself is built in Rust; the
+    // menu items emit a `tray-action` event with a string payload so
+    // we can react from the same place the in-app buttons do.
+    await listen('tray-action', async (event) => {
+      const action = event.payload;
+      if (action === 'log') {
+        openLogModal();
+      } else if (action === 'send') {
+        // Focus the peer list — user picks a peer manually for now.
+        setStatus('Pick a peer to send to.');
+      } else if (action === 'toggle-clipboard') {
+        // Best-effort: flip clipboard sync for every peer that already has it.
+        const onPeers = (state.peers || []).filter((p) => p.clipboardSync);
+        if (onPeers.length === 0) {
+          setStatus('No peer has clipboard sync enabled.');
+        } else {
+          for (const p of onPeers) {
+            try {
+              await invoke('set_clipboard_sync', { peerId: p.id, enabled: false });
+            } catch (_) {}
+          }
+          setStatus(`Clipboard sync disabled for ${onPeers.length} peer(s).`);
+        }
       }
     });
 

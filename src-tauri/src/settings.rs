@@ -18,10 +18,17 @@ pub struct Settings {
     pub auto_accept_favorites: bool,
     #[serde(default = "default_notifications_enabled")]
     pub notifications_enabled: bool,
+    #[serde(default)]
+    pub start_with_windows: bool,
+    #[serde(default = "default_close_to_tray")]
+    pub close_to_tray: bool,
+    #[serde(default)]
+    pub register_send_to: bool,
 }
 
 fn default_auto_accept() -> bool { false }
 fn default_notifications_enabled() -> bool { true }
+fn default_close_to_tray() -> bool { true }
 
 pub struct SettingsStore {
     path: PathBuf,
@@ -52,6 +59,9 @@ impl SettingsStore {
                     download_dir: default_download_dir.clone(),
                     auto_accept_favorites: false,
                     notifications_enabled: true,
+                    start_with_windows: false,
+                    close_to_tray: true,
+                    register_send_to: false,
                 }
             })
         } else {
@@ -60,6 +70,9 @@ impl SettingsStore {
                 download_dir: default_download_dir,
                 auto_accept_favorites: false,
                 notifications_enabled: true,
+                start_with_windows: false,
+                close_to_tray: true,
+                register_send_to: false,
             }
         };
 
@@ -101,6 +114,33 @@ impl SettingsStore {
         let payload = {
             let mut s = self.inner.lock().unwrap();
             s.notifications_enabled = value;
+            serde_json::to_string_pretty(&*s).context("serialize settings")?
+        };
+        self.persist(payload)
+    }
+
+    pub fn set_start_with_windows(&self, value: bool) -> Result<()> {
+        let payload = {
+            let mut s = self.inner.lock().unwrap();
+            s.start_with_windows = value;
+            serde_json::to_string_pretty(&*s).context("serialize settings")?
+        };
+        self.persist(payload)
+    }
+
+    pub fn set_close_to_tray(&self, value: bool) -> Result<()> {
+        let payload = {
+            let mut s = self.inner.lock().unwrap();
+            s.close_to_tray = value;
+            serde_json::to_string_pretty(&*s).context("serialize settings")?
+        };
+        self.persist(payload)
+    }
+
+    pub fn set_register_send_to(&self, value: bool) -> Result<()> {
+        let payload = {
+            let mut s = self.inner.lock().unwrap();
+            s.register_send_to = value;
             serde_json::to_string_pretty(&*s).context("serialize settings")?
         };
         self.persist(payload)

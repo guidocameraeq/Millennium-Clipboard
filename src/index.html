@@ -54,6 +54,9 @@
         <button class="hud-btn" data-action="history" title="Past transfers">
           <span class="hud-btn-glyph">≡</span>LOG
         </button>
+        <button class="hud-btn" data-action="qr" title="QR pairing">
+          <span class="hud-btn-glyph">▣</span>QR
+        </button>
         <button class="hud-btn" data-action="settings" title="Settings">
           <span class="hud-btn-glyph">⚙</span>CONF
         </button>
@@ -325,7 +328,7 @@
 
   <!-- Settings modal -->
   <div class="modal-backdrop" id="settings-modal" hidden>
-    <div class="modal">
+    <div class="modal settings-modal-wide">
       <div class="card-corners">
         <span></span><span></span><span></span><span></span>
       </div>
@@ -333,7 +336,10 @@
         <span class="modal-glyph">⚙</span>
         <span class="modal-title">SETTINGS</span>
       </header>
-      <div class="modal-body">
+      <div class="modal-body settings-body">
+
+        <!-- ▸ GENERAL -->
+        <h3 class="settings-section">▸ GENERAL</h3>
         <div class="settings-row">
           <span class="settings-label">DOWNLOAD FOLDER</span>
           <div class="settings-control">
@@ -341,6 +347,9 @@
             <button class="modal-btn small" id="settings-pick-dir">▸ CHANGE</button>
           </div>
         </div>
+
+        <!-- ▸ TRANSFERS -->
+        <h3 class="settings-section">▸ TRANSFERS</h3>
         <div class="settings-row">
           <span class="settings-label">AUTO-ACCEPT FROM FAVORITES</span>
           <div class="settings-control">
@@ -351,6 +360,9 @@
             </label>
           </div>
         </div>
+
+        <!-- ▸ NOTIFICATIONS -->
+        <h3 class="settings-section">▸ NOTIFICATIONS</h3>
         <div class="settings-row">
           <span class="settings-label">DESKTOP NOTIFICATIONS</span>
           <div class="settings-control">
@@ -361,6 +373,42 @@
             </label>
           </div>
         </div>
+
+        <!-- ▸ SYSTEM -->
+        <h3 class="settings-section">▸ SYSTEM</h3>
+        <div class="settings-row">
+          <span class="settings-label">START WITH WINDOWS</span>
+          <div class="settings-control">
+            <label class="sound-toggle">
+              <input type="checkbox" id="settings-autostart" />
+              <span class="sound-track"><span class="sound-thumb"></span></span>
+              <span class="settings-value mono" id="settings-autostart-label">OFF</span>
+            </label>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">CLOSE TO TRAY</span>
+          <div class="settings-control">
+            <label class="sound-toggle">
+              <input type="checkbox" id="settings-close-tray" />
+              <span class="sound-track"><span class="sound-thumb"></span></span>
+              <span class="settings-value mono" id="settings-close-tray-label">ON</span>
+            </label>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">REGISTER IN "SEND TO" MENU</span>
+          <div class="settings-control">
+            <label class="sound-toggle">
+              <input type="checkbox" id="settings-send-to" />
+              <span class="sound-track"><span class="sound-thumb"></span></span>
+              <span class="settings-value mono" id="settings-send-to-label">OFF</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- ▸ UPDATES -->
+        <h3 class="settings-section">▸ UPDATES</h3>
         <div class="settings-row">
           <span class="settings-label">APP UPDATES</span>
           <div class="settings-control" style="flex-direction:column;align-items:stretch;gap:6px">
@@ -374,6 +422,9 @@
             </div>
           </div>
         </div>
+
+        <!-- ▸ DIAGNOSTICS -->
+        <h3 class="settings-section">▸ DIAGNOSTICS</h3>
         <div class="settings-row settings-info">
           <span class="settings-label">DATA DIR</span>
           <span class="settings-value mono" id="settings-data-dir">%APPDATA%\com.guidocameraeq.millennium</span>
@@ -409,6 +460,43 @@
         <button class="modal-btn small" id="log-export">▸ EXPORT .TXT</button>
         <button class="modal-btn small" id="log-clear">⌫ CLEAR</button>
         <button class="modal-btn accept" id="log-close">✓ CLOSE</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- QR pairing modal -->
+  <div class="modal-backdrop" id="qr-modal" hidden>
+    <div class="modal qr-modal">
+      <div class="card-corners">
+        <span></span><span></span><span></span><span></span>
+      </div>
+      <header class="modal-head">
+        <span class="modal-glyph">▣</span>
+        <span class="modal-title">QR PAIRING</span>
+      </header>
+      <div class="qr-tabs">
+        <button class="qr-tab active" data-qr-tab="show">SHOW MY QR</button>
+        <button class="qr-tab" data-qr-tab="add">ADD FROM QR</button>
+      </div>
+      <div class="modal-body">
+        <div id="qr-pane-show" class="qr-pane">
+          <div class="qr-canvas" id="qr-canvas"></div>
+          <p class="qr-hint mono">Scan from another Millennium peer (Android or another desktop). The QR encodes your fingerprint, alias and the local IP/port where you're listening.</p>
+          <div class="settings-row settings-info">
+            <span class="settings-label">PAYLOAD</span>
+            <span class="settings-value mono" id="qr-payload" style="font-size:9px;word-break:break-all"></span>
+          </div>
+        </div>
+        <div id="qr-pane-add" class="qr-pane" hidden>
+          <p class="qr-hint mono">Paste the QR's contents below. On the next version (Android) you'll be able to scan from the camera directly. The peer will be added as MANUAL + favourite.</p>
+          <textarea class="text-input qr-paste" id="qr-paste-input" placeholder='{"v":1,"type":"millennium-pair",...}'></textarea>
+          <div class="modal-error mono" id="qr-add-error" hidden></div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="modal-btn small" id="qr-copy-payload">▸ COPY PAYLOAD</button>
+        <button class="modal-btn accept" id="qr-add-submit" hidden>▸ PAIR</button>
+        <button class="modal-btn accept" id="qr-close">✓ DONE</button>
       </div>
     </div>
   </div>

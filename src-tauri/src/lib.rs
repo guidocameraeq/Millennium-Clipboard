@@ -24,6 +24,8 @@ mod settings;
 mod thumbnails;
 mod udp_discovery;
 mod updater;
+#[cfg(target_os = "windows")]
+mod windows_integration;
 
 // ---------------------------------------------------------------------------
 // Wire types shared with the frontend
@@ -360,6 +362,170 @@ fn set_notifications_enabled(
     state
         .settings
         .set_notifications_enabled(value)
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+async fn set_start_with_windows(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    value: bool,
+) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    if value {
+        manager.enable().map_err(|e| format!("autostart enable: {e}"))?;
+    } else {
+        manager.disable().map_err(|e| format!("autostart disable: {e}"))?;
+    }
+    state
+        .settings
+        .set_start_with_windows(value)
+        .map_err(|e| format!("{e:#}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_close_to_tray(
+    state: tauri::State<AppState>,
+    value: bool,
+) -> Result<(), String> {
+    state
+        .settings
+        .set_close_to_tray(value)
+        .map_err(|e| format!("{e:#}"))
+}
+
+/// Build the JSON payload we encode into the QR. Kept minimal so the
+/// QR can stay scannable at small sizes:
+///   { v: 1, fp: "<full fingerprint>", alias, hex, ip, port }
+fn build_pair_payload(state: &AppState) -> String {
+    let id = &state.identity;
+    serde_json::json!({
+        "v": 1,
+        "type": "millennium-pair",
+        "fp": id.fingerprint,
+        "alias": id.alias,
+        "hex": id.hex_id,
+        "ip": id.local_ip,
+        "port": state.server_port,
+    })
+    .to_string()
+}
+
+#[tauri::command]
+fn generate_pair_qr(state: tauri::State<AppState>) -> Result<serde_json::Value, String> {
+    use qrcode::render::svg;
+    use qrcode::QrCode;
+
+    let payload = build_pair_payload(&state);
+    let code = QrCode::new(payload.as_bytes()).map_err(|e| format!("qr build: {e}"))?;
+    let svg = code
+        .render::<svg::Color>()
+        .min_dimensions(320, 320)
+        .dark_color(svg::Color("#00f0ff"))
+        .light_color(svg::Color("#050a14"))
+        .quiet_zone(true)
+        .build();
+    Ok(serde_json::json!({
+        "svg": svg,
+        "payload": build_pair_payload(&state),
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PairPayload {
+    #[serde(default)]
+    v: u32,
+    #[serde(default, rename = "type")]
+    msg_type: String,
+    fp: String,
+    #[serde(default)]
+    alias: String,
+    #[serde(default)]
+    hex: String,
+    ip: String,
+    port: u16,
+}
+
+#[tauri::command]
+async fn pair_with_qr_payload(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    payload: String,
+) -> Result<String, String> {
+    let parsed: PairPayload = serde_json::from_str(payload.trim())
+        .map_err(|e| format!("not a valid Millennium QR payload: {e}"))?;
+    if parsed.msg_type != "millennium-pair" || parsed.v != 1 {
+        return Err("QR doesn't look like a Millennium pair payload".into());
+    }
+    if parsed.fp == state.identity.fingerprint {
+        return Err("That's our own QR — scan one from another peer.".into());
+    }
+
+    // Reuse the manual-peer path: probe first, then save with the real
+    // fingerprint returned by /info. This mirrors add_peer_by_ip.
+    let info = http_client::fetch_info(&parsed.ip, parsed.port)
+        .await
+        .map_err(|e| format!("probe {}:{}: {e:#}", parsed.ip, parsed.port))?;
+    if info.fingerprint != parsed.fp {
+        return Err(format!(
+            "QR claimed fp {} but {}:{} answered with {} — refusing to pair",
+            &parsed.fp[..16.min(parsed.fp.len())],
+            parsed.ip,
+            parsed.port,
+            &info.fingerprint[..16.min(info.fingerprint.len())]
+        ));
+    }
+
+    let manual = manual_peers::ManualPeer {
+        fingerprint: info.fingerprint.clone(),
+        alias: if parsed.alias.is_empty() { info.alias.clone() } else { parsed.alias.clone() },
+        hex_id: if parsed.hex.is_empty() { info.hex_id.clone() } else { parsed.hex.clone() },
+        icon_type: "desktop".to_string(),
+        ip: parsed.ip.clone(),
+        port: parsed.port,
+    };
+    state
+        .manual
+        .add(manual.clone())
+        .map_err(|e| format!("save manual: {e:#}"))?;
+
+    // Also mark favorite so the new peer is immediately visible in the
+    // default FAVORITES filter.
+    let fav = preferences::FavoritePeer {
+        fingerprint: info.fingerprint.clone(),
+        alias: manual.alias.clone(),
+        hex_id: manual.hex_id.clone(),
+        icon_type: manual.icon_type.clone(),
+        last_ip: parsed.ip.clone(),
+        last_port: parsed.port,
+    };
+    let _ = state.prefs.add_favorite(fav);
+
+    state.discovery.emit_snapshot(&app);
+    Ok(format!("Paired with {} ({}:{})", manual.alias, parsed.ip, parsed.port))
+}
+
+#[tauri::command]
+fn set_register_send_to(
+    state: tauri::State<AppState>,
+    value: bool,
+) -> Result<(), String> {
+    // Backed by Phase 6 (windows_integration::install_send_to_shortcut).
+    // For now just persist; the shortcut wiring lives in that module.
+    #[cfg(target_os = "windows")]
+    {
+        if value {
+            windows_integration::install_send_to_shortcut();
+        } else {
+            windows_integration::remove_send_to_shortcut();
+        }
+    }
+    state
+        .settings
+        .set_register_send_to(value)
         .map_err(|e| format!("{e:#}"))
 }
 
@@ -760,6 +926,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--autostart"]),
+        ))
         .setup(|app| {
             // 0a. Bind the in-memory runtime log to the AppHandle so each
             //     log line is emitted live to the frontend log panel.
@@ -774,6 +944,65 @@ pub fn run() {
                 "[boot] Millennium Clipboard v{} starting",
                 env!("CARGO_PKG_VERSION")
             ));
+
+            // 0a.1 Register an AppUserModelID in HKCU so Windows accepts
+            //      toast notifications from this portable .exe.
+            #[cfg(target_os = "windows")]
+            {
+                let icon_candidate = std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+                windows_integration::register_aumid_for_notifications(
+                    icon_candidate.as_deref(),
+                );
+            }
+
+            // 0a.2 Force the window header icon to use our embedded .ico
+            //      so it doesn't fall back to the Tauri default glyph.
+            if let Some(main_win) = app.get_webview_window("main") {
+                let icon = tauri::include_image!("icons/icon.ico");
+                let _ = main_win.set_icon(icon);
+            }
+
+            // 0a.3 System tray. The window-close handler (see bottom of
+            //      this setup) hides the window instead of quitting if
+            //      `close_to_tray` is on. The tray menu is the only way
+            //      to fully exit when that mode is active.
+            build_tray(app.handle())?;
+
+            // 0a.4 If launched by Windows autostart (--autostart flag),
+            //      keep the window hidden so we just sit in the tray.
+            let launched_hidden = std::env::args().any(|a| a == "--autostart");
+            if launched_hidden {
+                if let Some(main_win) = app.get_webview_window("main") {
+                    let _ = main_win.hide();
+                }
+                runtime_log::info("[boot] launched via autostart — window hidden, tray-only");
+            }
+
+            // 0a.5 If the OS launched us through "Send To → Millennium",
+            //      argv will have the dropped file paths after argv[0].
+            //      Collect existing ones and surface them to the frontend
+            //      so it can pre-fill the send queue.
+            let shared_files: Vec<String> = std::env::args()
+                .skip(1)
+                .filter(|a| a != "--autostart" && !a.starts_with('-'))
+                .filter(|a| std::path::Path::new(a).exists())
+                .collect();
+            if !shared_files.is_empty() {
+                runtime_log::info(format!(
+                    "[boot] received {} shared file(s) via argv",
+                    shared_files.len()
+                ));
+                let app_handle = app.handle().clone();
+                let files = shared_files.clone();
+                tauri::async_runtime::spawn(async move {
+                    // Wait a beat so the frontend has finished bootstrapping
+                    // its listeners before we fire the event.
+                    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                    let _ = app_handle.emit("incoming-share-files", &files);
+                });
+            }
 
             // 0b. Logging — enabled only when RUST_LOG is set, so it's
             //     silent by default but can be flipped on for debug.
@@ -1065,7 +1294,102 @@ pub fn run() {
             set_peer_icon,
             forget_peer,
             set_notifications_enabled,
+            set_start_with_windows,
+            set_close_to_tray,
+            set_register_send_to,
+            generate_pair_qr,
+            pair_with_qr_payload,
         ])
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Read the current close_to_tray setting; if ON, hide
+                // the window and keep the process alive in the tray.
+                let state = window.app_handle().state::<AppState>();
+                if state.settings.snapshot().close_to_tray {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+    use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
+
+    let open_i = MenuItem::with_id(app, "tray_open", "Open Millennium", true, None::<&str>)?;
+    let send_i = MenuItem::with_id(app, "tray_send", "Send to peer…", true, None::<&str>)?;
+    let clip_i = MenuItem::with_id(
+        app,
+        "tray_clip_toggle",
+        "Toggle clipboard sync (all)",
+        true,
+        None::<&str>,
+    )?;
+    let log_i = MenuItem::with_id(app, "tray_log", "Open log", true, None::<&str>)?;
+    let sep = PredefinedMenuItem::separator(app)?;
+    let quit_i = MenuItem::with_id(app, "tray_quit", "Quit", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open_i, &send_i, &clip_i, &log_i, &sep, &quit_i])?;
+
+    let icon = tauri::include_image!("icons/icon.ico");
+
+    TrayIconBuilder::with_id("main-tray")
+        .icon(icon)
+        .icon_as_template(false)
+        .tooltip("Millennium Clipboard")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "tray_open" => {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.unminimize();
+                    let _ = w.set_focus();
+                }
+            }
+            "tray_send" => {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.unminimize();
+                    let _ = w.set_focus();
+                    let _ = w.emit("tray-action", "send");
+                }
+            }
+            "tray_clip_toggle" => {
+                let _ = app.emit("tray-action", "toggle-clipboard");
+            }
+            "tray_log" => {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.unminimize();
+                    let _ = w.set_focus();
+                    let _ = w.emit("tray-action", "log");
+                }
+            }
+            "tray_quit" => {
+                app.exit(0);
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            // Double-click (left button, "up" twice in a row counts as
+            // DoubleClick on most platforms — Tauri's TrayIconEvent
+            // surfaces it directly as DoubleClick).
+            if let TrayIconEvent::DoubleClick {
+                button: MouseButton::Left,
+                ..
+            } = event
+            {
+                if let Some(w) = tray.app_handle().get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.unminimize();
+                    let _ = w.set_focus();
+                }
+            }
+        })
+        .build(app)?;
+
+    Ok(())
 }
