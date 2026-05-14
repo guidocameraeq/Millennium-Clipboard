@@ -113,6 +113,8 @@ pub struct PrepareFile {
     pub mime: Option<String>,
     pub sha256: Option<String>,
     pub rel_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -178,6 +180,39 @@ struct SenderProgressEvent {
 
 /// Stream the given file's body to the peer. Emits
 /// `transfer-progress-sender` events with bytes uploaded.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadProgress {
+    bytes_received: u64,
+    #[allow(dead_code)]
+    total: u64,
+    #[allow(dead_code)]
+    completed: bool,
+}
+
+/// Best-effort: how many bytes does the receiver already have for this
+/// file? Used to compute a Range start so we can resume an interrupted
+/// upload instead of restarting from byte 0.
+async fn fetch_upload_progress(
+    ip: &str,
+    port: u16,
+    session_id: &str,
+    file_id: &str,
+    token: &str,
+) -> u64 {
+    let url = format!(
+        "https://{}:{}/upload/{}/{}/progress?token={}",
+        ip, port, session_id, file_id, token
+    );
+    match client().get(&url).send().await {
+        Ok(resp) if resp.status().is_success() => match resp.json::<UploadProgress>().await {
+            Ok(p) => p.bytes_received,
+            Err(_) => 0,
+        },
+        _ => 0,
+    }
+}
+
 pub async fn upload_file(
     app: AppHandle,
     ip: &str,
@@ -188,16 +223,90 @@ pub async fn upload_file(
     path: &Path,
     total: u64,
 ) -> Result<()> {
+    // Up to 3 retries (~initial + 2 resume attempts). Failures within
+    // a retry call `fetch_upload_progress` so the next attempt only
+    // re-sends what the receiver doesn't have. Backoff is short — for
+    // long Wi-Fi blackouts the user retries by hand.
+    const MAX_ATTEMPTS: usize = 3;
+    let mut attempt = 0usize;
+    loop {
+        attempt += 1;
+        let resume_from = if attempt == 1 {
+            0
+        } else {
+            fetch_upload_progress(ip, port, session_id, file_id, token).await
+        };
+        match upload_file_once(
+            app.clone(),
+            ip,
+            port,
+            session_id,
+            file_id,
+            token,
+            path,
+            total,
+            resume_from,
+        )
+        .await
+        {
+            Ok(()) => return Ok(()),
+            Err(e) if attempt < MAX_ATTEMPTS => {
+                eprintln!(
+                    "[upload] attempt {}/{} for {} failed: {} — retrying",
+                    attempt, MAX_ATTEMPTS, file_id, e
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(800 * attempt as u64)).await;
+                continue;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+async fn upload_file_once(
+    app: AppHandle,
+    ip: &str,
+    port: u16,
+    session_id: &str,
+    file_id: &str,
+    token: &str,
+    path: &Path,
+    total: u64,
+    resume_from: u64,
+) -> Result<()> {
     let url = format!(
         "https://{}:{}/upload/{}/{}?token={}",
         ip, port, session_id, file_id, token
     );
 
-    let file = tokio::fs::File::open(path)
+    let mut file = tokio::fs::File::open(path)
         .await
         .with_context(|| format!("open {}", path.display()))?;
 
-    let progress = Arc::new(AtomicU64::new(0));
+    if resume_from > 0 && resume_from < total {
+        use tokio::io::AsyncSeekExt;
+        file.seek(std::io::SeekFrom::Start(resume_from))
+            .await
+            .with_context(|| format!("seek to {} in {}", resume_from, path.display()))?;
+        eprintln!(
+            "[upload] resuming {} from byte {} of {}",
+            file_id, resume_from, total
+        );
+    } else if resume_from >= total && total > 0 {
+        // The receiver already has the whole thing. Just confirm.
+        let _ = app.emit(
+            "transfer-progress-sender",
+            &SenderProgressEvent {
+                session_id: session_id.into(),
+                file_id: file_id.into(),
+                bytes_sent: total,
+                total,
+            },
+        );
+        return Ok(());
+    }
+
+    let progress = Arc::new(AtomicU64::new(resume_from));
     let progress_clone = progress.clone();
     let app_clone = app.clone();
     let sid = session_id.to_string();
@@ -228,15 +337,19 @@ pub async fn upload_file(
         chunk
     });
 
-    let resp = client()
+    let remaining = total.saturating_sub(resume_from);
+    let mut req = client()
         .post(&url)
-        .header("content-length", total.to_string())
+        .header("content-length", remaining.to_string());
+    if resume_from > 0 {
+        req = req.header("range", format!("bytes={}-", resume_from));
+    }
+    let resp = req
         .body(reqwest::Body::wrap_stream(reader))
         .send()
         .await
         .with_context(|| format!("POST {}", url))?;
 
-    // Final progress tick (in case the throttle skipped the last chunk)
     let _ = app.emit(
         "transfer-progress-sender",
         &SenderProgressEvent {
@@ -291,6 +404,45 @@ pub async fn post_clipboard(
     }
     if !resp.status().is_success() {
         bail!("clipboard endpoint returned {}", resp.status());
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipboardImagePayload<'a> {
+    png_base64: &'a str,
+    sender_alias: &'a str,
+    sender_fingerprint: &'a str,
+}
+
+pub async fn post_clipboard_image(
+    ip: &str,
+    port: u16,
+    png_base64: &str,
+    sender_alias: &str,
+    sender_fingerprint: &str,
+) -> Result<()> {
+    let url = format!("https://{}:{}/clipboard/image", ip, port);
+    let resp = client()
+        .post(&url)
+        .json(&ClipboardImagePayload {
+            png_base64,
+            sender_alias,
+            sender_fingerprint,
+        })
+        .send()
+        .await
+        .with_context(|| format!("POST {}", url))?;
+    if resp.status() == reqwest::StatusCode::FORBIDDEN
+        || resp.status() == reqwest::StatusCode::NOT_FOUND
+    {
+        // Either the peer didn't enable sync, or it's an older client
+        // without the image endpoint — silent skip in both cases.
+        return Ok(());
+    }
+    if !resp.status().is_success() {
+        bail!("clipboard/image endpoint returned {}", resp.status());
     }
     Ok(())
 }

@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use axum::{
     body::Body,
     extract::{ConnectInfo, Path as AxumPath, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
 };
@@ -130,8 +130,13 @@ pub async fn run(
         .route("/text", post(handle_text))
         .route("/prepare-upload", post(handle_prepare_upload))
         .route("/upload/{session_id}/{file_id}", post(handle_upload))
+        .route(
+            "/upload/{session_id}/{file_id}/progress",
+            get(handle_upload_progress),
+        )
         .route("/cancel/{session_id}", post(handle_cancel))
         .route("/clipboard", post(handle_clipboard))
+        .route("/clipboard/image", post(handle_clipboard_image))
         .with_state(state);
 
     let tls = RustlsConfig::from_pem(cert_pem.into_bytes(), key_pem.into_bytes())
@@ -223,6 +228,8 @@ struct PrepareFile {
     sha256: Option<String>,
     #[serde(default)]
     rel_path: Option<String>,
+    #[serde(default)]
+    thumbnail: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -288,6 +295,8 @@ struct IncomingFilePreview {
     size: u64,
     mime: Option<String>,
     rel_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thumbnail: Option<String>,
 }
 
 async fn handle_prepare_upload(
@@ -329,6 +338,7 @@ async fn handle_prepare_upload(
                 size: f.size,
                 mime: f.mime.clone(),
                 rel_path: f.rel_path.clone(),
+                thumbnail: f.thumbnail.clone(),
             })
             .collect(),
         auto_accepted: auto_accept,
@@ -453,10 +463,47 @@ struct SessionCompletedEvent {
     destination_dir: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadProgress {
+    bytes_received: u64,
+    total: u64,
+    completed: bool,
+}
+
+async fn handle_upload_progress(
+    State(state): State<ServerState>,
+    AxumPath((session_id, file_id)): AxumPath<(String, String)>,
+    Query(q): Query<UploadQuery>,
+) -> Result<Json<UploadProgress>, StatusCode> {
+    let sessions = state.sessions.lock().unwrap();
+    let session = sessions.get(&session_id).ok_or(StatusCode::NOT_FOUND)?;
+    let file = session.files.get(&file_id).ok_or(StatusCode::NOT_FOUND)?;
+    if file.token != q.token {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    Ok(Json(UploadProgress {
+        bytes_received: file.bytes_received.load(Ordering::Relaxed),
+        total: file.size,
+        completed: file.completed.load(Ordering::Relaxed),
+    }))
+}
+
+/// Parse a single "bytes=N-" Range header. Anything more elaborate
+/// (multipart, suffix ranges) is ignored — we only support resume.
+fn parse_range_start(headers: &HeaderMap) -> Option<u64> {
+    let val = headers.get("range")?.to_str().ok()?;
+    let rest = val.strip_prefix("bytes=")?;
+    let dash = rest.find('-')?;
+    let start_str = &rest[..dash];
+    start_str.parse::<u64>().ok()
+}
+
 async fn handle_upload(
     State(state): State<ServerState>,
     AxumPath((session_id, file_id)): AxumPath<(String, String)>,
     Query(q): Query<UploadQuery>,
+    headers: HeaderMap,
     body: Body,
 ) -> StatusCode {
     // Look up the session + file.
@@ -486,15 +533,57 @@ async fn handle_upload(
         }
     }
 
-    let mut handle = match tokio::fs::File::create(&target_path).await {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("[http] create {} failed: {}", target_path.display(), e);
-            return StatusCode::INTERNAL_SERVER_ERROR;
+    // Resume support: if the client sends `Range: bytes=N-`, open the
+    // file for read+write, seek to N, and resume. Otherwise truncate as
+    // before. Hashing is disabled on resumed transfers because we
+    // can't rebuild the prefix hash without re-reading what's on disk
+    // (acceptable trade-off — final-size + per-file completion still
+    // catches truncated transfers).
+    let resume_from = parse_range_start(&headers).unwrap_or(0);
+    let resumed = resume_from > 0;
+    let mut handle = if resumed {
+        match tokio::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&target_path)
+            .await
+        {
+            Ok(mut f) => {
+                use tokio::io::AsyncSeekExt;
+                if let Err(e) = f
+                    .seek(std::io::SeekFrom::Start(resume_from))
+                    .await
+                {
+                    eprintln!("[http] seek to {} failed: {}", resume_from, e);
+                    return StatusCode::INTERNAL_SERVER_ERROR;
+                }
+                file.bytes_received.store(resume_from, Ordering::Relaxed);
+                eprintln!(
+                    "[http] /upload resuming {} from byte {}",
+                    file.name, resume_from
+                );
+                f
+            }
+            Err(e) => {
+                eprintln!("[http] open for resume {} failed: {}", target_path.display(), e);
+                return StatusCode::INTERNAL_SERVER_ERROR;
+            }
+        }
+    } else {
+        match tokio::fs::File::create(&target_path).await {
+            Ok(f) => {
+                file.bytes_received.store(0, Ordering::Relaxed);
+                f
+            }
+            Err(e) => {
+                eprintln!("[http] create {} failed: {}", target_path.display(), e);
+                return StatusCode::INTERNAL_SERVER_ERROR;
+            }
         }
     };
 
-    let mut hasher = file.sha256.is_some().then(Sha256::new);
+    // Hashing only when we sent the whole file in one shot.
+    let mut hasher = (!resumed && file.sha256.is_some()).then(Sha256::new);
     let total = file.size;
     let mut stream = body.into_data_stream();
     let mut last_emit = Instant::now();
@@ -666,6 +755,91 @@ async fn handle_clipboard(
             text: payload.text,
             sender_alias: payload.sender_alias,
             sender_fingerprint: payload.sender_fingerprint,
+            received_at: unix_now(),
+        },
+    );
+    StatusCode::OK
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipboardImagePayload {
+    /// Base64-encoded PNG (no data: prefix).
+    png_base64: String,
+    sender_alias: String,
+    sender_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipboardImageReceivedEvent {
+    sender_alias: String,
+    sender_fingerprint: String,
+    width: u32,
+    height: u32,
+    received_at: i64,
+}
+
+async fn handle_clipboard_image(
+    State(state): State<ServerState>,
+    Json(payload): Json<ClipboardImagePayload>,
+) -> StatusCode {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+
+    // Mutual-consent: same gate as text clipboard sync.
+    if !state.clipboard.is_enabled(&payload.sender_fingerprint) {
+        return StatusCode::FORBIDDEN;
+    }
+    let bytes = match B64.decode(payload.png_base64.as_bytes()) {
+        Ok(b) => b,
+        Err(_) => return StatusCode::BAD_REQUEST,
+    };
+    if bytes.is_empty() || bytes.len() > 32 * 1024 * 1024 {
+        return StatusCode::PAYLOAD_TOO_LARGE;
+    }
+
+    // Loop prevention shares the same hash channel as text — image bytes
+    // are hashed instead, but `is_recent` / `note_synced` work the same.
+    let hash = crate::clipboard_sync::hash_bytes(&bytes);
+    state.clipboard.note_synced(hash);
+
+    // Decode + rewrite to OS clipboard on a blocking thread. arboard
+    // wants an ImageData with RGBA8 pixels, so we go PNG → DynamicImage
+    // → RGBA8 raw.
+    let decoded = tokio::task::spawn_blocking(move || -> Result<(u32, u32), String> {
+        let img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+        let rgba = img.to_rgba8();
+        let (w, h) = (rgba.width(), rgba.height());
+        let image_data = arboard::ImageData {
+            width: w as usize,
+            height: h as usize,
+            bytes: std::borrow::Cow::Owned(rgba.into_raw()),
+        };
+        let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+        cb.set_image(image_data).map_err(|e| e.to_string())?;
+        Ok((w, h))
+    })
+    .await;
+
+    let (width, height) = match decoded {
+        Ok(Ok(dims)) => dims,
+        Ok(Err(e)) => {
+            eprintln!("[clipboard] failed to write image clipboard: {}", e);
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+        Err(e) => {
+            eprintln!("[clipboard] blocking task crashed: {}", e);
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    };
+
+    let _ = state.app.emit(
+        "clipboard-image-received",
+        &ClipboardImageReceivedEvent {
+            sender_alias: payload.sender_alias,
+            sender_fingerprint: payload.sender_fingerprint,
+            width,
+            height,
             received_at: unix_now(),
         },
     );

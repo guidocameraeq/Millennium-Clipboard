@@ -21,6 +21,7 @@ mod manual_peers;
 mod preferences;
 mod runtime_log;
 mod settings;
+mod thumbnails;
 mod udp_discovery;
 mod updater;
 
@@ -221,6 +222,10 @@ async fn send_files(
             .first()
             .map(|m| m.essence_str().to_string());
         let file_id = Uuid::new_v4().simple().to_string();
+        // Best-effort thumbnail. Failures (corrupt image, unsupported
+        // format, oversize) just produce None and the receiver shows a
+        // generic icon — never blocks the transfer.
+        let thumbnail = thumbnails::generate_for(&p, size).unwrap_or(None);
         prepare_files.push(http_client::PrepareFile {
             file_id: file_id.clone(),
             name: name.clone(),
@@ -228,6 +233,7 @@ async fn send_files(
             mime,
             sha256: None, // MVP: skip hashing big files; add in Fase 8 polish
             rel_path: None,
+            thumbnail,
         });
         upload_plan.push((file_id, p, size));
     }
@@ -343,6 +349,17 @@ fn set_auto_accept_favorites(
     state
         .settings
         .set_auto_accept_favorites(value)
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+fn set_notifications_enabled(
+    state: tauri::State<AppState>,
+    value: bool,
+) -> Result<(), String> {
+    state
+        .settings
+        .set_notifications_enabled(value)
         .map_err(|e| format!("{e:#}"))
 }
 
@@ -528,6 +545,11 @@ fn install_panic_hook() {
 // Clipboard sync (v0.6.0)
 // ---------------------------------------------------------------------------
 
+enum ClipSnapshot {
+    Text(String),
+    Image { png_base64: String, hash: String },
+}
+
 fn spawn_clipboard_poller(
     peers: discovery::PeerMap,
     store: Arc<clipboard_sync::ClipboardSyncStore>,
@@ -535,40 +557,94 @@ fn spawn_clipboard_poller(
     my_fingerprint: String,
 ) {
     tauri::async_runtime::spawn(async move {
-        let mut last_seen: Option<String> = None;
+        let mut last_text: Option<String> = None;
+        let mut last_image_hash: Option<String> = None;
         let mut tick = tokio::time::interval(std::time::Duration::from_millis(500));
-        tick.tick().await; // skip immediate first tick
+        tick.tick().await;
         loop {
             tick.tick().await;
 
-            // Reading the OS clipboard is blocking — keep it off the
-            // tokio worker pool.
-            let text: Option<String> = tokio::task::spawn_blocking(|| {
-                arboard::Clipboard::new()
-                    .ok()
-                    .and_then(|mut cb| cb.get_text().ok())
+            // Pull whatever the OS clipboard currently holds on a blocking
+            // worker (arboard reads are blocking).
+            let snap: Option<ClipSnapshot> = tokio::task::spawn_blocking(|| {
+                let mut cb = match arboard::Clipboard::new() {
+                    Ok(c) => c,
+                    Err(_) => return None,
+                };
+                if let Ok(text) = cb.get_text() {
+                    if !text.is_empty() && text.len() <= 1_000_000 {
+                        return Some(ClipSnapshot::Text(text));
+                    }
+                }
+                if let Ok(img) = cb.get_image() {
+                    let w = img.width as u32;
+                    let h = img.height as u32;
+                    if w == 0 || h == 0 || w > 8192 || h > 8192 {
+                        return None;
+                    }
+                    let raw: Vec<u8> = img.bytes.into_owned();
+                    let buf = match image::RgbaImage::from_raw(w, h, raw) {
+                        Some(b) => b,
+                        None => return None,
+                    };
+                    let mut png_bytes: Vec<u8> = Vec::with_capacity(256 * 1024);
+                    {
+                        let mut cursor = std::io::Cursor::new(&mut png_bytes);
+                        if image::DynamicImage::ImageRgba8(buf)
+                            .write_to(&mut cursor, image::ImageFormat::Png)
+                            .is_err()
+                        {
+                            return None;
+                        }
+                    }
+                    if png_bytes.len() > 32 * 1024 * 1024 {
+                        return None;
+                    }
+                    let hash = crate::clipboard_sync::hash_bytes(&png_bytes);
+                    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+                    let png_base64 = B64.encode(&png_bytes);
+                    return Some(ClipSnapshot::Image { png_base64, hash });
+                }
+                None
             })
             .await
             .ok()
             .flatten();
 
-            let Some(text) = text else { continue };
-            if text.is_empty() || text.len() > 1_000_000 {
-                continue;
-            }
-            if last_seen.as_deref() == Some(text.as_str()) {
-                continue;
-            }
-            last_seen = Some(text.clone());
+            let snap = match snap {
+                Some(s) => s,
+                None => continue,
+            };
 
-            let hash = clipboard_sync::hash_text(&text);
-            // Loop prevention: skip if we just applied this hash from a peer.
-            if store.is_recent(&hash) {
-                continue;
+            // Diff-and-debounce: only sync when something actually changed
+            // from the last poll, AND it's not the same payload we just
+            // received from a peer (loop prevention).
+            match &snap {
+                ClipSnapshot::Text(t) => {
+                    if last_text.as_deref() == Some(t.as_str()) {
+                        continue;
+                    }
+                    last_text = Some(t.clone());
+                    last_image_hash = None;
+                    let hash = clipboard_sync::hash_text(t);
+                    if store.is_recent(&hash) {
+                        continue;
+                    }
+                    store.note_synced(hash);
+                }
+                ClipSnapshot::Image { hash, .. } => {
+                    if last_image_hash.as_deref() == Some(hash.as_str()) {
+                        continue;
+                    }
+                    last_image_hash = Some(hash.clone());
+                    last_text = None;
+                    if store.is_recent(hash) {
+                        continue;
+                    }
+                    store.note_synced(hash.clone());
+                }
             }
-            store.note_synced(hash.clone());
 
-            // Collect enabled+online targets.
             let targets: Vec<(String, u16)> = {
                 let enabled = store.enabled_snapshot();
                 if enabled.is_empty() {
@@ -587,16 +663,35 @@ fn spawn_clipboard_poller(
             }
 
             for (ip, port) in targets {
-                let text = text.clone();
                 let alias = my_alias.clone();
                 let fp = my_fingerprint.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(e) =
-                        http_client::post_clipboard(&ip, port, &text, &alias, &fp).await
-                    {
-                        eprintln!("[clipboard] sync to {}:{} failed: {}", ip, port, e);
+                match &snap {
+                    ClipSnapshot::Text(t) => {
+                        let text = t.clone();
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(e) =
+                                http_client::post_clipboard(&ip, port, &text, &alias, &fp).await
+                            {
+                                eprintln!("[clipboard] text sync to {}:{} failed: {}", ip, port, e);
+                            }
+                        });
                     }
-                });
+                    ClipSnapshot::Image { png_base64, .. } => {
+                        let b64 = png_base64.clone();
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(e) = http_client::post_clipboard_image(
+                                &ip, port, &b64, &alias, &fp,
+                            )
+                            .await
+                            {
+                                eprintln!(
+                                    "[clipboard] image sync to {}:{} failed: {}",
+                                    ip, port, e
+                                );
+                            }
+                        });
+                    }
+                }
             }
         }
     });
@@ -664,6 +759,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             // 0a. Bind the in-memory runtime log to the AppHandle so each
             //     log line is emitted live to the frontend log panel.
@@ -968,6 +1064,7 @@ pub fn run() {
             record_frontend_log,
             set_peer_icon,
             forget_peer,
+            set_notifications_enabled,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

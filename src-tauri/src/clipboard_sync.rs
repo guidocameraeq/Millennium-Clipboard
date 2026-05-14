@@ -104,3 +104,9 @@ pub fn hash_text(text: &str) -> String {
     h.update(text.as_bytes());
     hex::encode(h.finalize())
 }
+
+pub fn hash_bytes(bytes: &[u8]) -> String {
+    let mut h = Sha256::new();
+    h.update(bytes);
+    hex::encode(h.finalize())
+}

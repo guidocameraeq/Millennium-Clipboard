@@ -16,9 +16,12 @@ pub struct Settings {
     pub download_dir: PathBuf,
     #[serde(default = "default_auto_accept")]
     pub auto_accept_favorites: bool,
+    #[serde(default = "default_notifications_enabled")]
+    pub notifications_enabled: bool,
 }
 
 fn default_auto_accept() -> bool { false }
+fn default_notifications_enabled() -> bool { true }
 
 pub struct SettingsStore {
     path: PathBuf,
@@ -48,6 +51,7 @@ impl SettingsStore {
                 Settings {
                     download_dir: default_download_dir.clone(),
                     auto_accept_favorites: false,
+                    notifications_enabled: true,
                 }
             })
         } else {
@@ -55,6 +59,7 @@ impl SettingsStore {
             Settings {
                 download_dir: default_download_dir,
                 auto_accept_favorites: false,
+                notifications_enabled: true,
             }
         };
 
@@ -87,6 +92,15 @@ impl SettingsStore {
         let payload = {
             let mut s = self.inner.lock().unwrap();
             s.auto_accept_favorites = value;
+            serde_json::to_string_pretty(&*s).context("serialize settings")?
+        };
+        self.persist(payload)
+    }
+
+    pub fn set_notifications_enabled(&self, value: bool) -> Result<()> {
+        let payload = {
+            let mut s = self.inner.lock().unwrap();
+            s.notifications_enabled = value;
             serde_json::to_string_pretty(&*s).context("serialize settings")?
         };
         self.persist(payload)

@@ -6,6 +6,29 @@
   const { invoke } = window.__TAURI__.core;
   const { listen } = window.__TAURI__.event;
   const dialog = window.__TAURI__.dialog;
+  const notification = window.__TAURI__.notification;
+
+  // Native OS notification wrapper. Honors the settings toggle and falls
+  // back silently if the user hasn't granted permission yet (we ask on
+  // first use). Title + body keep it readable in the Windows toast.
+  let nativePermissionAsked = false;
+  async function notify(title, body) {
+    if (!state.settings || state.settings.notificationsEnabled === false) return;
+    if (!notification) return;
+    try {
+      let granted = await notification.isPermissionGranted();
+      if (!granted && !nativePermissionAsked) {
+        nativePermissionAsked = true;
+        const perm = await notification.requestPermission();
+        granted = perm === 'granted';
+      }
+      if (granted) {
+        await notification.sendNotification({ title, body });
+      }
+    } catch (err) {
+      console.warn('[notify]', err);
+    }
+  }
 
   // Null-safe textContent setter. If the target element disappears
   // (HTML rev mismatch, hot-reload, modal not yet rendered) we just log
@@ -79,6 +102,8 @@
   const settingsAutoAccept = document.getElementById('settings-auto-accept');
   const settingsAutoAcceptLabel = document.getElementById('settings-auto-accept-label');
   const settingsCloseBtn = document.getElementById('settings-close');
+  const settingsNotifications = document.getElementById('settings-notifications');
+  const settingsNotificationsLabel = document.getElementById('settings-notifications-label');
 
   const addPeerBtn = document.getElementById('add-peer-btn');
   const addPeerModal = document.getElementById('add-peer-modal');
@@ -339,23 +364,30 @@
   });
 
   // ---------- Peer rendering -----------------------------------------------
+  // Millennium Items — each peer-card icon is one of the 7 Items of the
+  // Millennium (Yu-Gi-Oh!). The Puzzle is reserved for the app itself.
+  // We keep the original semantic keys (desktop/laptop/phone/...) so peers
+  // running older clients still announce a valid icon_type; we just paint
+  // them with the Millennium Item visuals.
+  const peerIconImg = (key, file, alt) =>
+    `<img src="assets/peer-icons/${file}" alt="${alt}" class="peer-item-img" data-icon-key="${key}" />`;
   const ICON_SVG = {
-    desktop: `<svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none"><rect x="3" y="4" width="18" height="12" rx="1" /><line x1="2" y1="20" x2="22" y2="20" /><line x1="10" y1="16" x2="10" y2="20" /><line x1="14" y1="16" x2="14" y2="20" /></svg>`,
-    laptop: `<svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none"><rect x="4" y="4" width="16" height="11" rx="1" /><line x1="2" y1="19" x2="22" y2="19" /><line x1="6" y1="15" x2="18" y2="15" /></svg>`,
-    phone: `<svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none"><rect x="7" y="2" width="10" height="20" rx="2" /><line x1="10" y1="19" x2="14" y2="19" /></svg>`,
-    tablet: `<svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none"><rect x="3" y="3" width="18" height="18" rx="2" /><line x1="10" y1="18" x2="14" y2="18" /></svg>`,
-    server: `<svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none"><rect x="3" y="3" width="18" height="6" rx="1" /><rect x="3" y="11" width="18" height="6" rx="1" /><circle cx="7" cy="6" r="0.6" fill="currentColor"/><circle cx="7" cy="14" r="0.6" fill="currentColor"/><line x1="11" y1="6" x2="18" y2="6"/><line x1="11" y1="14" x2="18" y2="14"/></svg>`,
-    gaming: `<svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none"><path d="M6 8 C3 8, 2 11, 2 14 C2 16, 3 18, 5 18 C6 18, 7 17, 8 16 L16 16 C17 17, 18 18, 19 18 C21 18, 22 16, 22 14 C22 11, 21 8, 18 8 Z"/><line x1="6" y1="12" x2="9" y2="12"/><line x1="7.5" y1="10.5" x2="7.5" y2="13.5"/><circle cx="15" cy="11" r="0.7" fill="currentColor"/><circle cx="17.5" cy="13" r="0.7" fill="currentColor"/></svg>`,
-    media: `<svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="1.5" fill="none"><rect x="2" y="5" width="20" height="13" rx="1"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="18" x2="12" y2="21"/><polygon points="10,9 10,14 15,11.5" fill="currentColor" stroke="none"/></svg>`,
+    desktop: peerIconImg('desktop', 'eye.png',   'Millennium Eye'),
+    laptop:  peerIconImg('laptop',  'ring.png',  'Millennium Ring'),
+    phone:   peerIconImg('phone',   'rod.png',   'Millennium Rod'),
+    tablet:  peerIconImg('tablet',  'tauk.png',  'Millennium Tauk'),
+    server:  peerIconImg('server',  'key.png',   'Millennium Key'),
+    gaming:  peerIconImg('gaming',  'scale.png', 'Millennium Scale'),
+    media:   peerIconImg('media',   'tauk.png',  'Millennium Tauk'),
   };
   const ICON_KEYS = ['desktop', 'laptop', 'phone', 'server', 'gaming', 'media'];
   const ICON_LABELS = {
-    desktop: 'DESKTOP',
-    laptop: 'LAPTOP',
-    phone: 'PHONE',
-    server: 'SERVER',
-    gaming: 'GAMING',
-    media: 'MEDIA',
+    desktop: 'EYE',
+    laptop:  'RING',
+    phone:   'ROD',
+    server:  'KEY',
+    gaming:  'SCALE',
+    media:   'TAUK',
   };
 
   function renderPeers() {
@@ -888,7 +920,15 @@
     incomingFileList.innerHTML = '';
     (payload.files || []).forEach((f) => {
       const li = document.createElement('li');
-      li.innerHTML = `<span class="file-name">${escapeHtml(f.name)}</span><span class="file-size">${formatBytes(f.size)}</span>`;
+      li.className = 'incoming-file-li';
+      const thumb = f.thumbnail
+        ? `<img class="incoming-thumb" src="${f.thumbnail}" alt="" />`
+        : `<span class="incoming-thumb incoming-thumb-empty">📄</span>`;
+      li.innerHTML = `
+        ${thumb}
+        <span class="file-name">${escapeHtml(f.name)}</span>
+        <span class="file-size">${formatBytes(f.size)}</span>
+      `;
       incomingFileList.appendChild(li);
     });
 
@@ -987,6 +1027,11 @@
     settingsDownloadDir.textContent = state.settings.downloadDir;
     settingsAutoAccept.checked = state.settings.autoAcceptFavorites;
     settingsAutoAcceptLabel.textContent = state.settings.autoAcceptFavorites ? 'ON' : 'OFF';
+    if (settingsNotifications) {
+      const notifOn = state.settings.notificationsEnabled !== false;
+      settingsNotifications.checked = notifOn;
+      settingsNotificationsLabel.textContent = notifOn ? 'ON' : 'OFF';
+    }
     // Reset update UI to a known state each time the modal opens
     settingsUpdateStatus.textContent = `current v${(window.__LOCAL_INFO || {}).version || '?'}`;
     settingsUpdateAction.hidden = true;
@@ -1372,6 +1417,22 @@
     }
   });
 
+  if (settingsNotifications) {
+    settingsNotifications.addEventListener('change', async () => {
+      const value = settingsNotifications.checked;
+      try {
+        await invoke('set_notifications_enabled', { value });
+        if (state.settings) state.settings.notificationsEnabled = value;
+        settingsNotificationsLabel.textContent = value ? 'ON' : 'OFF';
+        blip(value ? 1320 : 440, 0.06);
+        if (value) notify('🔔 Notifications enabled', 'Millennium will now toast on activity.');
+      } catch (err) {
+        settingsNotifications.checked = !value;
+        setStatus(`ERR notif · ${err}`);
+      }
+    });
+  }
+
   // ---------- Add peer by IP (Fase 8) --------------------------------------
   function openAddPeerModal() {
     addPeerError.hidden = true;
@@ -1493,17 +1554,26 @@
       showIncomingText(text, senderAlias, senderFingerprint, senderIp, senderPort);
       blip(1320, 0.12);
       setTimeout(() => blip(1760, 0.1), 130);
+      const preview = text.length > 80 ? text.slice(0, 80) + '…' : text;
+      notify(`✉ Text from ${senderAlias}`, preview);
     });
 
     // Incoming file transfer request — show modal (Fase 7)
     await listen('incoming-files-request', (event) => {
       const payload = event.payload;
       if (payload.autoAccepted) {
-        // Backend auto-accepted (favorite + auto-accept enabled) — show brief toast.
         setStatus(`RX · auto-accepting ${payload.fileCount} file(s) from ${payload.senderAlias}`);
+        notify(
+          `⇣ ${payload.senderAlias} — ${payload.fileCount} file(s)`,
+          `${formatBytes(payload.totalSize)} · auto-accepted (favorite)`
+        );
         return;
       }
       openIncomingModal(payload);
+      notify(
+        `? ${payload.senderAlias} wants to send ${payload.fileCount} file(s)`,
+        `${formatBytes(payload.totalSize)} · waiting for your decision`
+      );
     });
 
     await listen('incoming-files-timeout', () => {
@@ -1551,6 +1621,10 @@
       showToast(`${senderAlias} → ${fileCount} FILE(S) · ${formatBytes(totalSize)} · saved to ${destinationDir}`);
       blip(1760, 0.12);
       setTimeout(() => blip(2200, 0.16), 130);
+      notify(
+        `✓ ${fileCount} file(s) received from ${senderAlias}`,
+        `${formatBytes(totalSize)} saved to ${destinationDir}`
+      );
     });
 
     await listen('session-cancelled', () => {
@@ -1565,6 +1639,15 @@
       const preview = text.length > 40 ? text.slice(0, 40) + '...' : text;
       setStatus(`📋 ${senderAlias} → clipboard: ${preview}`);
       blip(880, 0.06);
+      notify(`📋 Clipboard from ${senderAlias}`, preview);
+    });
+
+    // Image clipboard (v0.9.0) — peer pushed an image into our OS clipboard.
+    await listen('clipboard-image-received', (event) => {
+      const { senderAlias, width, height } = event.payload;
+      setStatus(`🖼 ${senderAlias} → image clipboard: ${width}×${height}`);
+      blip(1320, 0.06);
+      notify(`🖼 Image clipboard from ${senderAlias}`, `${width}×${height} ready to paste`);
     });
 
     // Preload settings (used by transmit + settings modal)
