@@ -800,7 +800,7 @@
           setStatus(`ERR rescan · ${err}`);
         }
       } else if (action === 'history') {
-        setStatus('LOG · panel TBD (Fase 8+)');
+        openLogModal();
       } else if (action === 'settings') {
         openSettingsModal();
       }
@@ -930,6 +930,132 @@
 
   settingsCloseBtn.addEventListener('click', closeSettingsModal);
 
+  // ---------- Runtime log modal --------------------------------------------
+  const logModal = document.getElementById('log-modal');
+  const logPane = document.getElementById('log-pane');
+  const logLineCount = document.getElementById('log-line-count');
+  const logAutoscroll = document.getElementById('log-autoscroll');
+  const logCopyBtn = document.getElementById('log-copy');
+  const logExportBtn = document.getElementById('log-export');
+  const logClearBtn = document.getElementById('log-clear');
+  const logCloseBtn = document.getElementById('log-close');
+
+  let logBuffer = '';
+  let logLines = 0;
+
+  function classifyLogLine(line) {
+    if (line.includes('[ERR ]') || line.includes('[ERR]')) return 'lvl-err';
+    if (line.includes('[WARN]')) return 'lvl-warn';
+    return 'lvl-info';
+  }
+
+  function appendLogLine(line) {
+    logBuffer += (logBuffer ? '\n' : '') + line;
+    logLines += 1;
+    if (logModal && !logModal.hidden) {
+      const span = document.createElement('span');
+      span.className = classifyLogLine(line);
+      span.textContent = (logPane.childElementCount ? '\n' : '') + line;
+      logPane.appendChild(span);
+      if (logLineCount) logLineCount.textContent = `${logLines} lines`;
+      if (logAutoscroll && logAutoscroll.checked) {
+        logPane.scrollTop = logPane.scrollHeight;
+      }
+    }
+  }
+
+  function repaintLog() {
+    if (!logPane) return;
+    logPane.innerHTML = '';
+    const lines = logBuffer.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const span = document.createElement('span');
+      span.className = classifyLogLine(lines[i]);
+      span.textContent = (i ? '\n' : '') + lines[i];
+      logPane.appendChild(span);
+    }
+    if (logLineCount) logLineCount.textContent = `${logLines} lines`;
+    if (logAutoscroll && logAutoscroll.checked) {
+      logPane.scrollTop = logPane.scrollHeight;
+    }
+  }
+
+  async function openLogModal() {
+    try {
+      const full = await invoke('get_runtime_log');
+      logBuffer = full || '';
+      logLines = logBuffer ? logBuffer.split('\n').length : 0;
+    } catch (err) {
+      logBuffer = `[ui] failed to fetch log: ${err}`;
+      logLines = 1;
+    }
+    logModal.hidden = false;
+    repaintLog();
+  }
+
+  function closeLogModal() {
+    logModal.hidden = true;
+  }
+
+  if (logCloseBtn) logCloseBtn.addEventListener('click', closeLogModal);
+
+  if (logCopyBtn) {
+    logCopyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(logBuffer);
+        const orig = logCopyBtn.textContent;
+        logCopyBtn.textContent = '✓ COPIED';
+        setTimeout(() => { logCopyBtn.textContent = orig; }, 1400);
+      } catch (err) {
+        setStatus(`ERR copy · ${err}`);
+      }
+    });
+  }
+
+  if (logExportBtn) {
+    logExportBtn.addEventListener('click', () => {
+      const blob = new Blob([logBuffer], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      a.href = url;
+      a.download = `millennium-log-${stamp}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    });
+  }
+
+  if (logClearBtn) {
+    logClearBtn.addEventListener('click', async () => {
+      try {
+        await invoke('clear_runtime_log');
+        logBuffer = '';
+        logLines = 0;
+        repaintLog();
+      } catch (err) {
+        setStatus(`ERR clear · ${err}`);
+      }
+    });
+  }
+
+  // Wire frontend error catchers to also ship into the backend buffer so
+  // a UI crash leaves a trace in the same log the user is going to paste.
+  function reportToBackend(level, msg) {
+    try {
+      invoke('record_frontend_log', { level, msg }).catch(() => {});
+    } catch (_) {}
+  }
+  window.addEventListener('error', (e) => {
+    reportToBackend('ERR', `uncaught ${e.message} @ ${e.filename?.split(/[\\/]/).pop()}:${e.lineno}`);
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    const reason = e.reason?.message || e.reason || 'unknown';
+    reportToBackend('ERR', `unhandled rejection: ${reason}`);
+  });
+
+
   // Close any modal on ESC or click outside the panel (defensive layer
   // in case a stray JS error elsewhere skips listeners).
   document.addEventListener('keydown', (e) => {
@@ -938,6 +1064,7 @@
       if (!incomingModal.hidden) closeIncomingModal();
       if (!addPeerModal.hidden) closeAddPeerModal();
       if (!peerDetailsModal.hidden) closePeerDetailsModal();
+      if (logModal && !logModal.hidden) closeLogModal();
     }
   });
 
@@ -1217,6 +1344,14 @@
       const msg = typeof event.payload === 'string' ? event.payload : JSON.stringify(event.payload);
       setStatus(`BACKEND ERR · ${msg}`);
       console.error('[backend-error]', event.payload);
+    });
+
+    // Live runtime log lines — append into the in-page buffer so when
+    // the user opens the LOG modal they see everything that happened.
+    await listen('log-line', (event) => {
+      if (typeof event.payload === 'string') {
+        appendLogLine(event.payload);
+      }
     });
 
     // Incoming text from a peer (Fase 5)

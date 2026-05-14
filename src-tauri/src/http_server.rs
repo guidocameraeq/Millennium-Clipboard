@@ -120,7 +120,7 @@ pub async fn run(
         .context("load TLS config")?;
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    println!("[http] HTTPS server listening on {}", addr);
+    crate::runtime_log::info(format!("[http] HTTPS server listening on {}", addr));
 
     axum_server::bind_rustls(addr, tls)
         .serve(router.into_make_service_with_connect_info::<SocketAddr>())

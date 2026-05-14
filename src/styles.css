@@ -1565,3 +1565,56 @@ html, body {
   .hud-center { justify-content: center; flex-wrap: wrap; }
   .hud-right { justify-content: center; }
 }
+
+/* ==========================================================================
+   RUNTIME LOG MODAL
+   ========================================================================== */
+.log-modal {
+  width: min(1040px, 96vw);
+  max-height: 92vh;
+}
+
+.log-body {
+  flex: 1;
+  display: flex;
+  padding: 0;
+  overflow: hidden;
+  background: #050a10;
+  border-top: 1px solid var(--neon-cyan-soft);
+  border-bottom: 1px solid var(--neon-cyan-soft);
+}
+
+.log-pane {
+  flex: 1;
+  margin: 0;
+  padding: 12px 16px;
+  overflow-y: auto;
+  overflow-x: auto;
+  font-size: 11px;
+  line-height: 1.55;
+  color: #b8d8e0;
+  white-space: pre;
+  background: transparent;
+  scrollbar-width: thin;
+  scrollbar-color: var(--neon-cyan) #0a1218;
+}
+
+.log-pane::-webkit-scrollbar { width: 10px; height: 10px; }
+.log-pane::-webkit-scrollbar-track { background: #0a1218; }
+.log-pane::-webkit-scrollbar-thumb {
+  background: var(--neon-cyan);
+  box-shadow: 0 0 6px var(--neon-cyan-glow);
+}
+
+.log-pane .lvl-err  { color: #ff4d6b; text-shadow: 0 0 4px rgba(255,77,107,0.4); }
+.log-pane .lvl-warn { color: #ffc848; }
+.log-pane .lvl-info { color: #b8d8e0; }
+.log-pane .lvl-time { color: #5d7780; }
+
+.log-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+

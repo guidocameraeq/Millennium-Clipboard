@@ -224,11 +224,20 @@ pub fn start(
     // went out the virtual switch and no peer ever saw us.
     if let Ok(local_ip) = identity.local_ip.parse::<std::net::IpAddr>() {
         match daemon.enable_interface(IfKind::Addr(local_ip)) {
-            Ok(_) => eprintln!("[mdns] explicitly enabled interface {}", local_ip),
-            Err(e) => eprintln!("[mdns] enable_interface({}) failed (keeping defaults): {}", local_ip, e),
+            Ok(_) => crate::runtime_log::info(format!(
+                "[mdns] explicitly enabled interface {}",
+                local_ip
+            )),
+            Err(e) => crate::runtime_log::warn(format!(
+                "[mdns] enable_interface({}) failed (keeping defaults): {}",
+                local_ip, e
+            )),
         }
     } else {
-        eprintln!("[mdns] could not parse local_ip='{}', using default bind", identity.local_ip);
+        crate::runtime_log::warn(format!(
+            "[mdns] could not parse local_ip='{}', using default bind",
+            identity.local_ip
+        ));
     }
 
     let peers: PeerMap = Arc::new(Mutex::new(HashMap::new()));
@@ -264,7 +273,7 @@ pub fn start(
                     );
                 }
                 Err(e) => {
-                    eprintln!("[mdns] channel closed: {}", e);
+                    crate::runtime_log::err(format!("[mdns] channel closed: {}", e));
                     break;
                 }
             }
@@ -351,14 +360,21 @@ pub fn start(
 
             let mut changed = false;
             for (fp, ip, port, hex_id, icon_type, res) in results {
+                let fp_short = &fp[..16.min(fp.len())];
                 match res {
                     Ok(Ok(info)) if info.fingerprint == fp => {
-                        failures.remove(&fp);
+                        let prev_failures = failures.remove(&fp).unwrap_or(0);
+                        if prev_failures > 0 {
+                            crate::runtime_log::info(format!(
+                                "[poll] OK {} @ {}:{} (recovered after {} fail(s))",
+                                fp_short, ip, port, prev_failures
+                            ));
+                        }
                         let record = PeerRecord {
                             id: fp.clone(),
                             name: info.alias,
                             hex_id,
-                            ip,
+                            ip: ip.clone(),
                             port,
                             icon_type,
                             last_seen: std::time::Instant::now(),
@@ -369,37 +385,58 @@ pub fn start(
                             .insert(fp.clone(), record)
                             .is_none();
                         if was_new {
+                            crate::runtime_log::info(format!(
+                                "[poll] first sight {} @ {}:{} (via probe)",
+                                fp_short, ip, port
+                            ));
                             changed = true;
                         }
                     }
                     Ok(Ok(info)) => {
                         // Fingerprint drift — someone else now answers at that IP:port.
-                        eprintln!(
-                            "[poll] drift {}:{}: expected {} got {}",
+                        crate::runtime_log::warn(format!(
+                            "[poll] DRIFT {}:{} expected={} got={} — dropping",
                             ip,
                             port,
-                            &fp[..16.min(fp.len())],
+                            fp_short,
                             &info.fingerprint[..16.min(info.fingerprint.len())]
-                        );
+                        ));
                         if peers_for_poll.lock().unwrap().remove(&fp).is_some() {
                             changed = true;
                         }
                     }
-                    _ => {
-                        // 3 consecutive failures (~18s @ 6s tick) before
-                        // dropping. Previously 2 (~12s) — too aggressive
-                        // for TLS handshakes over flaky Wi-Fi, especially
-                        // when UDP keeps reannouncing every 5s.
+                    Ok(Err(e)) => {
                         let count = failures.entry(fp.clone()).or_insert(0);
                         *count += 1;
-                        if *count >= 3 {
-                            if peers_for_poll.lock().unwrap().remove(&fp).is_some() {
-                                changed = true;
-                                eprintln!(
-                                    "[poll] dropped {} after 3 failed probes",
-                                    &fp[..16.min(fp.len())]
-                                );
-                            }
+                        crate::runtime_log::warn(format!(
+                            "[poll] probe failed {} @ {}:{} ({}/3): {}",
+                            fp_short, ip, port, count, e
+                        ));
+                        if *count >= 3
+                            && peers_for_poll.lock().unwrap().remove(&fp).is_some()
+                        {
+                            changed = true;
+                            crate::runtime_log::err(format!(
+                                "[poll] DROPPED {} @ {}:{} after 3 failed probes",
+                                fp_short, ip, port
+                            ));
+                        }
+                    }
+                    Err(_) => {
+                        let count = failures.entry(fp.clone()).or_insert(0);
+                        *count += 1;
+                        crate::runtime_log::warn(format!(
+                            "[poll] probe TIMEOUT {} @ {}:{} ({}/3)",
+                            fp_short, ip, port, count
+                        ));
+                        if *count >= 3
+                            && peers_for_poll.lock().unwrap().remove(&fp).is_some()
+                        {
+                            changed = true;
+                            crate::runtime_log::err(format!(
+                                "[poll] DROPPED {} @ {}:{} after 3 timeouts",
+                                fp_short, ip, port
+                            ));
                         }
                     }
                 }
@@ -483,13 +520,13 @@ fn register_self(daemon: &ServiceDaemon, id: &Identity, port: u16) -> Result<(),
         Some(props),
     )?;
     daemon.register(service)?;
-    println!(
+    crate::runtime_log::info(format!(
         "[mdns] registered {} on {}:{} (fp={})",
         instance_name,
         id.local_ip,
         port,
         &id.fingerprint[..16]
-    );
+    ));
     Ok(())
 }
 
@@ -534,12 +571,13 @@ fn handle_event(
 
             let port = info.get_port();
             let fullname = info.get_fullname().to_string();
+            let all_addrs: Vec<String> = info
+                .get_addresses()
+                .iter()
+                .map(|a| a.to_string())
+                .collect();
+            let fp_short = &id[..16.min(id.len())];
 
-            // Only emit peers-changed when something the UI actually
-            // shows has changed. Without this, every mDNS re-resolve
-            // (which happens every few seconds because we re-browse on
-            // the poller tick) rebuilds the peer list DOM and looks
-            // like a flap to the user.
             let changed = {
                 let mut p = peers.lock().unwrap();
                 match p.get_mut(&id) {
@@ -551,6 +589,10 @@ fn handle_event(
                             && existing.icon_type == icon_type;
                         existing.last_seen = Instant::now();
                         if !same {
+                            crate::runtime_log::info(format!(
+                                "[mdns] resolve {} '{}' changed: ip {}->{} port {}->{} (announced addrs: {:?})",
+                                fp_short, alias, existing.ip, ip, existing.port, port, all_addrs
+                            ));
                             existing.name = alias;
                             existing.hex_id = hex_id;
                             existing.ip = ip;
@@ -560,6 +602,10 @@ fn handle_event(
                         !same
                     }
                     None => {
+                        crate::runtime_log::info(format!(
+                            "[mdns] resolve {} '{}' NEW @ {}:{} (announced addrs: {:?})",
+                            fp_short, alias, ip, port, all_addrs
+                        ));
                         p.insert(
                             id.clone(),
                             PeerRecord {
@@ -591,7 +637,12 @@ fn handle_event(
             // when a peer goes offline. Here we only forget the fullname
             // mapping so the next ServiceResolved can reattach cleanly.
             let mut f = fullnames.lock().unwrap();
-            f.remove(&fullname);
+            if f.remove(&fullname).is_some() {
+                crate::runtime_log::info(format!(
+                    "[mdns] ServiceRemoved '{}' (fullname forgotten; TCP poller still owns liveness)",
+                    fullname
+                ));
+            }
         }
         _ => {}
     }

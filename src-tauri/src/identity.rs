@@ -43,7 +43,11 @@ impl Identity {
             let mut id: Identity = serde_json::from_str(&raw)
                 .with_context(|| format!("parse {}", identity_file.display()))?;
             id.local_ip = compute_local_ip();
-            println!("[identity] loaded existing identity hex_id={}", id.hex_id);
+            crate::runtime_log::info(format!(
+                "[identity] loaded existing identity hex_id={} fp={}",
+                id.hex_id,
+                &id.fingerprint[..16.min(id.fingerprint.len())]
+            ));
             return Ok(id);
         }
 
@@ -77,11 +81,12 @@ impl Identity {
         let json = serde_json::to_string_pretty(&identity).context("serialize identity")?;
         fs::write(&identity_file, json)
             .with_context(|| format!("write {}", identity_file.display()))?;
-        println!(
-            "[identity] generated new identity hex_id={} saved to {}",
+        crate::runtime_log::info(format!(
+            "[identity] generated NEW identity hex_id={} fp={} saved to {}",
             identity.hex_id,
+            &identity.fingerprint[..16.min(identity.fingerprint.len())],
             identity_file.display()
-        );
+        ));
 
         Ok(identity)
     }

@@ -365,6 +365,34 @@
     </div>
   </div>
 
+  <!-- Runtime log modal -->
+  <div class="modal-backdrop" id="log-modal" hidden>
+    <div class="modal log-modal">
+      <div class="card-corners">
+        <span></span><span></span><span></span><span></span>
+      </div>
+      <header class="modal-head">
+        <span class="modal-glyph">≡</span>
+        <span class="modal-title">RUNTIME LOG</span>
+        <span class="mono" id="log-line-count" style="margin-left:auto;font-size:10px;opacity:0.6">0 lines</span>
+      </header>
+      <div class="modal-body log-body">
+        <pre class="log-pane mono" id="log-pane"></pre>
+      </div>
+      <div class="modal-actions log-actions">
+        <label class="sound-toggle" style="display:flex;gap:6px;align-items:center">
+          <input type="checkbox" id="log-autoscroll" checked />
+          <span class="sound-track"><span class="sound-thumb"></span></span>
+          <span class="mono" style="font-size:10px">AUTOSCROLL</span>
+        </label>
+        <button class="modal-btn small" id="log-copy">▸ COPY ALL</button>
+        <button class="modal-btn small" id="log-export">▸ EXPORT .TXT</button>
+        <button class="modal-btn small" id="log-clear">⌫ CLEAR</button>
+        <button class="modal-btn accept" id="log-close">✓ CLOSE</button>
+      </div>
+    </div>
+  </div>
+
   <script src="main.js"></script>
 </body>
 </html>

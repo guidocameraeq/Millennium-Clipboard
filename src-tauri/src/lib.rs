@@ -18,6 +18,7 @@ mod http_server;
 mod identity;
 mod manual_peers;
 mod preferences;
+mod runtime_log;
 mod settings;
 mod udp_discovery;
 mod updater;
@@ -583,6 +584,25 @@ async fn apply_update(app: tauri::AppHandle, download_url: String) -> Result<(),
     Ok(())
 }
 
+#[tauri::command]
+fn get_runtime_log() -> String {
+    runtime_log::dump_all()
+}
+
+#[tauri::command]
+fn clear_runtime_log() {
+    runtime_log::clear();
+}
+
+#[tauri::command]
+fn record_frontend_log(level: String, msg: String) {
+    match level.as_str() {
+        "ERR" | "ERROR" | "err" | "error" => runtime_log::err(format!("[ui] {}", msg)),
+        "WARN" | "warn" => runtime_log::warn(format!("[ui] {}", msg)),
+        _ => runtime_log::info(format!("[ui] {}", msg)),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -599,15 +619,27 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            // 0a. Logging — enabled only when RUST_LOG is set, so it's
+            // 0a. Bind the in-memory runtime log to the AppHandle so each
+            //     log line is emitted live to the frontend log panel.
+            runtime_log::bind_app(app.handle().clone());
+            runtime_log::info(format!(
+                "[boot] Millennium Clipboard v{} starting",
+                env!("CARGO_PKG_VERSION")
+            ));
+
+            // 0b. Logging — enabled only when RUST_LOG is set, so it's
             //     silent by default but can be flipped on for debug.
             let _ = env_logger::Builder::from_env(
                 env_logger::Env::default().default_filter_or("warn"),
             )
             .try_init();
 
-            // 0b. Install the rustls crypto provider before anything uses TLS.
+            // 0c. Install the rustls crypto provider before anything uses TLS.
             let _ = rustls::crypto::ring::default_provider().install_default();
+
+            // 0d. Snapshot every IPv4 NIC so we can tell from the log
+            //     whether local_ip resolved to the right one.
+            runtime_log::log_network_interfaces();
 
             // 1. Identity + prefs + settings.
             let data_dir = app
@@ -641,34 +673,36 @@ pub fn run() {
                 .map(|p| PathBuf::from(p).join("Desktop"))
                 .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join("Desktop")))
                 .unwrap_or_else(std::env::temp_dir);
-            eprintln!("[setup] default_download_dir = {}", default_download.display());
-            eprintln!("[setup] loading settings...");
+            runtime_log::info(format!(
+                "[setup] default_download_dir = {}",
+                default_download.display()
+            ));
             let settings_store = Arc::new(
                 settings::SettingsStore::load_or_default(&data_dir, default_download)
                     .expect("failed to setup settings"),
             );
-            eprintln!("[setup] settings loaded");
+            runtime_log::info("[setup] settings loaded");
 
-            // Identity / network / store diagnostic dump. Without this it
-            // is impossible to tell from a user report whether the right
-            // identity is loaded, what local IP got picked (WSL/Hyper-V
-            // pollution), and what the manual-peer store actually contains.
-            eprintln!(
+            // Identity / network / store diagnostic dump.
+            runtime_log::info(format!(
                 "[diag] identity fp={} alias='{}' local_ip={}",
                 &identity.fingerprint[..16.min(identity.fingerprint.len())],
                 identity.alias,
                 identity.local_ip
-            );
+            ));
             let manual_snap = manual.snapshot();
-            eprintln!("[diag] manual-peers count = {}", manual_snap.len());
+            runtime_log::info(format!(
+                "[diag] manual-peers count = {}",
+                manual_snap.len()
+            ));
             for m in &manual_snap {
-                eprintln!(
+                runtime_log::info(format!(
                     "[diag]   manual: fp={} alias='{}' {}:{}",
                     &m.fingerprint[..16.min(m.fingerprint.len())],
                     m.alias,
                     m.ip,
                     m.port
-                );
+                ));
             }
 
             // 2. HTTPS server.
@@ -685,13 +719,16 @@ pub fn run() {
             let prefs_for_server = prefs.clone();
             let settings_for_server = settings_store.clone();
             let clipboard_for_server = clipboard_store.clone();
-            eprintln!("[setup] spawning HTTPS server task...");
+            let server_port = discovery::local_port();
+            runtime_log::info(format!(
+                "[setup] spawning HTTPS server on 0.0.0.0:{}",
+                server_port
+            ));
             tauri::async_runtime::spawn(async move {
-                eprintln!("[setup] http_server::run starting");
                 let err_handle = server_app.clone();
                 if let Err(e) = http_server::run(
                     server_app,
-                    discovery::local_port(),
+                    server_port,
                     info,
                     cert_pem,
                     key_pem,
@@ -701,16 +738,40 @@ pub fn run() {
                 )
                 .await
                 {
-                    eprintln!("[http] server error: {e:?}");
-                    // Surface the failure to the frontend — without this
-                    // the user sees "no peers" with no clue why.
+                    runtime_log::err(format!("[http] server error: {e:?}"));
                     let _ = err_handle.emit("backend-error", format!("HTTPS server failed: {e}"));
                 }
             });
-            eprintln!("[setup] HTTPS server spawned");
+
+            // Self-ping the HTTPS server after a brief delay to confirm
+            // it bound successfully. If this fails the user knows port
+            // 53319 is unusable on this machine without having to read
+            // stderr.
+            let selfping_port = server_port;
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(3),
+                    crate::http_client::fetch_info("127.0.0.1", selfping_port),
+                )
+                .await
+                {
+                    Ok(Ok(info)) => runtime_log::info(format!(
+                        "[selfping] OK — local /info responded fp={} alias='{}'",
+                        &info.fingerprint[..16.min(info.fingerprint.len())],
+                        info.alias
+                    )),
+                    Ok(Err(e)) => runtime_log::err(format!(
+                        "[selfping] FAILED — local /info errored: {e:?}"
+                    )),
+                    Err(_) => runtime_log::err(
+                        "[selfping] FAILED — local /info timed out (server didn't bind?)",
+                    ),
+                }
+            });
 
             // 3. mDNS discovery.
-            eprintln!("[setup] starting discovery...");
+            runtime_log::info("[setup] starting mDNS discovery...");
             let handle = app.handle().clone();
             let discovery_state = discovery::start(
                 handle,
@@ -722,7 +783,7 @@ pub fn run() {
                 clipboard_store.clone(),
             )
             .expect("failed to start mDNS discovery");
-            eprintln!("[setup] discovery started");
+            runtime_log::info("[setup] mDNS discovery started");
 
             // 4. UDP broadcast discovery — runs alongside mDNS so peers
             //    appear even on networks that filter multicast.
@@ -782,6 +843,9 @@ pub fn run() {
             check_for_update,
             apply_update,
             set_clipboard_sync,
+            get_runtime_log,
+            clear_runtime_log,
+            record_frontend_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

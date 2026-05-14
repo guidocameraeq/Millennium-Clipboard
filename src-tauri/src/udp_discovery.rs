@@ -83,14 +83,19 @@ async fn run(
     let socket = match build_socket() {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("[udp] failed to bind UDP {}: {e:#}", UDP_DISCOVERY_PORT);
+            crate::runtime_log::err(format!(
+                "[udp] failed to bind UDP {}: {e:#}",
+                UDP_DISCOVERY_PORT
+            ));
             return;
         }
     };
-    eprintln!(
-        "[udp] discovery active on 0.0.0.0:{} (announcing as {})",
-        UDP_DISCOVERY_PORT, info.alias
-    );
+    crate::runtime_log::info(format!(
+        "[udp] discovery active on 0.0.0.0:{} (announcing as {} fp={})",
+        UDP_DISCOVERY_PORT,
+        info.alias,
+        &info.fingerprint[..16.min(info.fingerprint.len())]
+    ));
 
     let payload = DiscoveryPacket {
         msg_type: MAGIC.to_string(),
@@ -108,7 +113,7 @@ async fn run(
     let bytes = match serde_json::to_vec(&payload) {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("[udp] serialize payload failed: {e}");
+            crate::runtime_log::err(format!("[udp] serialize payload failed: {e}"));
             return;
         }
     };
@@ -118,18 +123,37 @@ async fn run(
         UDP_DISCOVERY_PORT,
     );
     let subnet_broadcast = derive_subnet_broadcast(&info.local_ip);
+    crate::runtime_log::info(format!(
+        "[udp] broadcasting to 255.255.255.255:{} and subnet {:?} every {}s",
+        UDP_DISCOVERY_PORT, subnet_broadcast, BROADCAST_INTERVAL_SECS
+    ));
 
     let mut buf = vec![0u8; 4096];
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(BROADCAST_INTERVAL_SECS));
+    let mut send_count: u64 = 0;
 
     loop {
         tokio::select! {
             _ = tick.tick() => {
-                if let Err(e) = socket.send_to(&bytes, broadcast).await {
-                    eprintln!("[udp] broadcast send failed: {}", e);
+                match socket.send_to(&bytes, broadcast).await {
+                    Ok(_) => {
+                        send_count += 1;
+                        // Log every 12th tick (~1min) so the buffer doesn't drown.
+                        if send_count % 12 == 1 {
+                            crate::runtime_log::info(format!(
+                                "[udp] still broadcasting (sent {} hellos so far)",
+                                send_count
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        crate::runtime_log::err(format!("[udp] broadcast send failed: {}", e));
+                    }
                 }
                 if let Some(sb) = subnet_broadcast {
-                    let _ = socket.send_to(&bytes, sb).await;
+                    if let Err(e) = socket.send_to(&bytes, sb).await {
+                        crate::runtime_log::warn(format!("[udp] subnet send to {} failed: {}", sb, e));
+                    }
                 }
             }
             recv = socket.recv_from(&mut buf) => {
@@ -148,7 +172,7 @@ async fn run(
                         );
                     }
                     Err(e) => {
-                        eprintln!("[udp] recv error: {}", e);
+                        crate::runtime_log::err(format!("[udp] recv error: {}", e));
                         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     }
                 }
@@ -211,11 +235,9 @@ fn handle_packet(
         return;
     }
 
-    // If the peer is already in the map, only refresh last_seen and alias.
-    // We do NOT overwrite ip/port: the TCP poller already validated those,
-    // and the UDP source ip (from peer_addr) may come from a different
-    // route (subnet broadcast vs unicast, virtual NIC, etc.) — overwriting
-    // with it can break the next /info probe and cause the peer to flap.
+    let fp_short = &pkt.fingerprint[..16.min(pkt.fingerprint.len())];
+    let src_ip = peer_addr.ip().to_string();
+
     let was_new = {
         let mut p = peers.lock().unwrap();
         match p.get_mut(&pkt.fingerprint) {
@@ -223,6 +245,17 @@ fn handle_packet(
                 existing.last_seen = Instant::now();
                 if existing.name != pkt.alias {
                     existing.name = pkt.alias.clone();
+                }
+                // CRITICAL DIAGNOSTIC: if the IP this UDP datagram came from
+                // disagrees with the IP currently stored for this peer, log
+                // it. This is the smoking gun for the "mDNS advertised the
+                // wrong IP, UDP knows the right one but we ignore it"
+                // pattern that causes the asymmetric flap.
+                if existing.ip != src_ip {
+                    crate::runtime_log::warn(format!(
+                        "[udp] IP DISAGREEMENT for {}: stored={} datagram_src={} (UDP currently ignores the correction — TCP probe will fail against stored IP)",
+                        fp_short, existing.ip, src_ip
+                    ));
                 }
                 false
             }
@@ -233,7 +266,7 @@ fn handle_packet(
                         id: pkt.fingerprint.clone(),
                         name: pkt.alias.clone(),
                         hex_id: pkt.hex_id.clone(),
-                        ip: peer_addr.ip().to_string(),
+                        ip: src_ip.clone(),
                         port: pkt.tcp_port,
                         icon_type: pkt.icon_type.clone(),
                         last_seen: Instant::now(),
@@ -245,11 +278,10 @@ fn handle_packet(
     };
 
     if was_new {
-        eprintln!(
-            "[udp] discovered {} via broadcast at {}",
-            &pkt.fingerprint[..16.min(pkt.fingerprint.len())],
-            peer_addr
-        );
+        crate::runtime_log::info(format!(
+            "[udp] NEW peer {} '{}' via broadcast from {} (payload tcp_port={})",
+            fp_short, pkt.alias, peer_addr, pkt.tcp_port
+        ));
         let snapshot = build_wire_list(peers, prefs, manual, aliases, clipboard);
         let _ = app.emit("peers-changed", &snapshot);
     }
