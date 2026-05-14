@@ -508,26 +508,6 @@ async fn pair_with_qr_payload(
     Ok(format!("Paired with {} ({}:{})", manual.alias, parsed.ip, parsed.port))
 }
 
-#[tauri::command]
-fn set_register_send_to(
-    state: tauri::State<AppState>,
-    value: bool,
-) -> Result<(), String> {
-    // Backed by Phase 6 (windows_integration::install_send_to_shortcut).
-    // For now just persist; the shortcut wiring lives in that module.
-    #[cfg(target_os = "windows")]
-    {
-        if value {
-            windows_integration::install_send_to_shortcut();
-        } else {
-            windows_integration::remove_send_to_shortcut();
-        }
-    }
-    state
-        .settings
-        .set_register_send_to(value)
-        .map_err(|e| format!("{e:#}"))
-}
 
 // ---------------------------------------------------------------------------
 // Manual peers (Fase 8) — register a peer by IP for networks where mDNS is
@@ -922,7 +902,27 @@ pub fn run() {
     // which swallows stderr — without this hook every panic is invisible.
     install_panic_hook();
 
+    // Best-effort: clean up any millennium-clipboard.exe processes left
+    // behind by a previous crashed launch BEFORE tauri tries to bind
+    // anything. The single-instance plugin handles the normal "second
+    // launch" case; this is for zombies that own the port but no longer
+    // respond.
+    #[cfg(target_os = "windows")]
+    windows_integration::kill_other_millennium_processes();
+
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // Second instance attempted to launch — focus ours instead.
+            use tauri::Manager;
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+            // Drain any leftover argv (used to be Send To file paths;
+            // feature removed in v0.10.1 but stay tolerant).
+            let _ = argv;
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -947,6 +947,7 @@ pub fn run() {
 
             // 0a.1 Register an AppUserModelID in HKCU so Windows accepts
             //      toast notifications from this portable .exe.
+            //      Also drop the legacy Send To shortcut from v0.10.0.
             #[cfg(target_os = "windows")]
             {
                 let icon_candidate = std::env::current_exe()
@@ -955,13 +956,28 @@ pub fn run() {
                 windows_integration::register_aumid_for_notifications(
                     icon_candidate.as_deref(),
                 );
+                windows_integration::cleanup_legacy_send_to_shortcut();
             }
 
             // 0a.2 Force the window header icon to use our embedded .ico
             //      so it doesn't fall back to the Tauri default glyph.
             if let Some(main_win) = app.get_webview_window("main") {
-                let icon = tauri::include_image!("icons/icon.ico");
+                let icon = tauri::include_image!("icons/icon.png");
                 let _ = main_win.set_icon(icon);
+
+                // Tauri's set_icon doesn't always update the Win32 title-bar
+                // small icon — go direct via WM_SETICON to make sure the
+                // header shows the Puzzle and not the default Tauri glyph.
+                #[cfg(target_os = "windows")]
+                {
+                    if let Ok(hwnd) = main_win.hwnd() {
+                        windows_integration::apply_window_icon_win32(hwnd.0 as isize);
+                    } else {
+                        runtime_log::warn("[boot] could not resolve hwnd for main window");
+                    }
+                }
+            } else {
+                runtime_log::warn("[boot] no webview window 'main' to set icon on");
             }
 
             // 0a.3 System tray. The window-close handler (see bottom of
@@ -980,29 +996,6 @@ pub fn run() {
                 runtime_log::info("[boot] launched via autostart — window hidden, tray-only");
             }
 
-            // 0a.5 If the OS launched us through "Send To → Millennium",
-            //      argv will have the dropped file paths after argv[0].
-            //      Collect existing ones and surface them to the frontend
-            //      so it can pre-fill the send queue.
-            let shared_files: Vec<String> = std::env::args()
-                .skip(1)
-                .filter(|a| a != "--autostart" && !a.starts_with('-'))
-                .filter(|a| std::path::Path::new(a).exists())
-                .collect();
-            if !shared_files.is_empty() {
-                runtime_log::info(format!(
-                    "[boot] received {} shared file(s) via argv",
-                    shared_files.len()
-                ));
-                let app_handle = app.handle().clone();
-                let files = shared_files.clone();
-                tauri::async_runtime::spawn(async move {
-                    // Wait a beat so the frontend has finished bootstrapping
-                    // its listeners before we fire the event.
-                    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-                    let _ = app_handle.emit("incoming-share-files", &files);
-                });
-            }
 
             // 0b. Logging — enabled only when RUST_LOG is set, so it's
             //     silent by default but can be flipped on for debug.
@@ -1109,34 +1102,9 @@ pub fn run() {
             // remote peers.
             let requested_port = discovery::local_port();
 
-            // Probe localhost first to detect a running Millennium
-            // instance and surface it to the user (not just silently
-            // fall through to a different port).
-            let detect_handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                if let Ok(Ok(info)) = tokio::time::timeout(
-                    std::time::Duration::from_millis(800),
-                    crate::http_client::fetch_info("127.0.0.1", requested_port),
-                )
-                .await
-                {
-                    if info.protocol == "millennium/1" {
-                        runtime_log::warn(format!(
-                            "[boot] another Millennium instance is already running on :{} (fp={}, alias='{}')",
-                            requested_port,
-                            &info.fingerprint[..16.min(info.fingerprint.len())],
-                            info.alias
-                        ));
-                        let _ = detect_handle.emit(
-                            "instance-conflict",
-                            format!(
-                                "Otra instancia de Millennium ya está corriendo (alias '{}'). Esta se abrió en otro puerto.",
-                                info.alias
-                            ),
-                        );
-                    }
-                }
-            });
+            // The single-instance plugin + the zombie-kill we ran above
+            // before Tauri started should mean port 53319 is free now.
+            // Fallback below still tries 53319..53328 just in case.
 
             let server_port = http_server::find_free_tcp_port(requested_port, 10)
                 .unwrap_or_else(|| {
@@ -1296,7 +1264,6 @@ pub fn run() {
             set_notifications_enabled,
             set_start_with_windows,
             set_close_to_tray,
-            set_register_send_to,
             generate_pair_qr,
             pair_with_qr_payload,
         ])

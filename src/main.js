@@ -108,8 +108,6 @@
   const settingsAutostartLabel = document.getElementById('settings-autostart-label');
   const settingsCloseTray = document.getElementById('settings-close-tray');
   const settingsCloseTrayLabel = document.getElementById('settings-close-tray-label');
-  const settingsSendTo = document.getElementById('settings-send-to');
-  const settingsSendToLabel = document.getElementById('settings-send-to-label');
 
   const addPeerBtn = document.getElementById('add-peer-btn');
   const addPeerModal = document.getElementById('add-peer-modal');
@@ -1050,11 +1048,6 @@
       settingsCloseTray.checked = v;
       settingsCloseTrayLabel.textContent = v ? 'ON' : 'OFF';
     }
-    if (settingsSendTo) {
-      const v = !!state.settings.registerSendTo;
-      settingsSendTo.checked = v;
-      settingsSendToLabel.textContent = v ? 'ON' : 'OFF';
-    }
     // Reset update UI to a known state each time the modal opens
     settingsUpdateStatus.textContent = `current v${(window.__LOCAL_INFO || {}).version || '?'}`;
     settingsUpdateAction.hidden = true;
@@ -1568,20 +1561,6 @@
     });
   }
 
-  if (settingsSendTo) {
-    settingsSendTo.addEventListener('change', async () => {
-      const value = settingsSendTo.checked;
-      try {
-        await invoke('set_register_send_to', { value });
-        if (state.settings) state.settings.registerSendTo = value;
-        settingsSendToLabel.textContent = value ? 'ON' : 'OFF';
-        blip(value ? 1320 : 440, 0.06);
-      } catch (err) {
-        settingsSendTo.checked = !value;
-        setStatus(`ERR send-to · ${err}`);
-      }
-    });
-  }
 
   // ---------- Add peer by IP (Fase 8) --------------------------------------
   function openAddPeerModal() {
@@ -1683,12 +1662,6 @@
       console.error('[backend-error]', event.payload);
     });
 
-    // Another instance already running — informational banner (yellow).
-    await listen('instance-conflict', (event) => {
-      const msg = typeof event.payload === 'string' ? event.payload : JSON.stringify(event.payload);
-      showBackendBanner('warn', msg);
-      console.warn('[instance-conflict]', event.payload);
-    });
 
     // Live runtime log lines — append into the in-page buffer so when
     // the user opens the LOG modal they see everything that happened.
@@ -1696,19 +1669,6 @@
       if (typeof event.payload === 'string') {
         appendLogLine(event.payload);
       }
-    });
-
-    // Files passed to us via Windows "Send To → Millennium". The
-    // backend collects argv paths at startup and fires this event once
-    // the frontend is up.
-    await listen('incoming-share-files', async (event) => {
-      const paths = event.payload || [];
-      if (!Array.isArray(paths) || paths.length === 0) return;
-      for (const p of paths) {
-        await addPathToQueue(p);
-      }
-      setStatus(`SHARE → ${paths.length} file(s) queued. Pick a peer and SEND.`);
-      blip(1320, 0.06);
     });
 
     // System tray menu actions. The tray itself is built in Rust; the

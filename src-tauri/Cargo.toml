@@ -1,6 +1,6 @@
 [package]
 name = "millennium-clipboard"
-version = "0.10.0"
+version = "0.10.1"
 description = "Share text and files between devices on the same LAN"
 authors = ["guidocameraeq"]
 edition = "2021"
@@ -43,6 +43,7 @@ rustls = { version = "0.23", features = ["ring"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
+tauri-plugin-single-instance = "2"
 
 # QR code generation (Fase v0.10 — peer pairing)
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }

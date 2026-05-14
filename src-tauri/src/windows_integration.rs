@@ -61,89 +61,168 @@ pub fn register_aumid_for_notifications(icon_path: Option<&Path>) {
     set_current_process_aumid();
 }
 
-/// Path to the per-user "Send To" folder
-/// (`%APPDATA%\Microsoft\Windows\SendTo\`).
-fn send_to_dir() -> Option<std::path::PathBuf> {
-    let roaming = std::env::var_os("APPDATA")?;
-    Some(
-        std::path::PathBuf::from(roaming)
-            .join("Microsoft")
-            .join("Windows")
-            .join("SendTo"),
-    )
-}
-
-fn send_to_shortcut_path() -> Option<std::path::PathBuf> {
-    Some(send_to_dir()?.join("Millennium Clipboard.lnk"))
-}
-
-/// Create a shortcut in the user's Send To folder so right-clicking
-/// files in Explorer → Send to → Millennium Clipboard launches our exe
-/// with those paths as args. Uses PowerShell + WScript.Shell so we
-/// don't have to pull in a COM crate.
-pub fn install_send_to_shortcut() {
-    let Some(target) = std::env::current_exe().ok() else {
-        crate::runtime_log::warn("[win] could not resolve current_exe for Send To shortcut");
-        return;
-    };
-    let Some(shortcut) = send_to_shortcut_path() else { return };
-
-    let ps = format!(
-        r#"$w = New-Object -ComObject WScript.Shell;
-$s = $w.CreateShortcut('{lnk}');
-$s.TargetPath = '{exe}';
-$s.Arguments = '';
-$s.WorkingDirectory = '{cwd}';
-$s.IconLocation = '{exe},0';
-$s.Description = 'Millennium Clipboard';
-$s.Save()"#,
-        lnk = shortcut.to_string_lossy().replace('\'', "''"),
-        exe = target.to_string_lossy().replace('\'', "''"),
-        cwd = target
-            .parent()
-            .map(|p| p.to_string_lossy().replace('\'', "''"))
-            .unwrap_or_default(),
-    );
-    let res = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
-        .output();
-    match res {
-        Ok(o) if o.status.success() => {
-            crate::runtime_log::info(format!(
-                "[win] Send To shortcut installed at {}",
-                shortcut.display()
-            ));
-        }
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            crate::runtime_log::warn(format!(
-                "[win] Send To shortcut create failed: {}",
-                stderr.trim()
-            ));
-        }
-        Err(e) => {
-            crate::runtime_log::warn(format!("[win] powershell exec failed: {}", e));
+/// Clean up the legacy "Send To" shortcut at
+/// `%APPDATA%\Microsoft\Windows\SendTo\Millennium Clipboard.lnk` that
+/// v0.10.0 used to install. Removed entirely in v0.10.1 — this runs
+/// once on boot so any user that toggled it on previously gets it
+/// cleared without having to do anything.
+pub fn cleanup_legacy_send_to_shortcut() {
+    let Some(roaming) = std::env::var_os("APPDATA") else { return };
+    let p = std::path::PathBuf::from(roaming)
+        .join("Microsoft")
+        .join("Windows")
+        .join("SendTo")
+        .join("Millennium Clipboard.lnk");
+    if p.exists() {
+        match std::fs::remove_file(&p) {
+            Ok(_) => crate::runtime_log::info(format!(
+                "[win] removed legacy Send To shortcut: {}",
+                p.display()
+            )),
+            Err(e) => crate::runtime_log::warn(format!(
+                "[win] could not remove legacy Send To shortcut {}: {}",
+                p.display(),
+                e
+            )),
         }
     }
 }
 
-pub fn remove_send_to_shortcut() {
-    if let Some(p) = send_to_shortcut_path() {
-        if p.exists() {
-            if let Err(e) = std::fs::remove_file(&p) {
-                crate::runtime_log::warn(format!(
-                    "[win] could not remove Send To shortcut {}: {}",
-                    p.display(),
-                    e
-                ));
-            } else {
+/// Kill any other `millennium-clipboard.exe` process whose PID differs
+/// from ours. Called once at startup to clear zombies left over from a
+/// crashed previous launch (those zombies typically still hold the
+/// HTTPS port but no longer respond, which used to surface as the
+/// "another instance running" banner). Single-instance plugin handles
+/// the normal case; this covers the crash-recovery case.
+pub fn kill_other_millennium_processes() {
+    let our_pid = std::process::id();
+    let ps_cmd = format!(
+        "$ErrorActionPreference='SilentlyContinue'; Get-Process millennium-clipboard | Where-Object {{ $_.Id -ne {} }} | ForEach-Object {{ Stop-Process -Id $_.Id -Force; Write-Output $_.Id }}",
+        our_pid
+    );
+    match std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_cmd])
+        .output()
+    {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let killed_pids: Vec<String> = stdout
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect();
+            if !killed_pids.is_empty() {
                 crate::runtime_log::info(format!(
-                    "[win] Send To shortcut removed: {}",
-                    p.display()
+                    "[win] killed {} stale millennium-clipboard process(es): [{}] (our PID={})",
+                    killed_pids.len(),
+                    killed_pids.join(", "),
+                    our_pid
                 ));
+                // Give Windows a beat to release the TCP port held by
+                // the dead processes.
+                std::thread::sleep(std::time::Duration::from_millis(400));
             }
         }
+        Err(e) => {
+            crate::runtime_log::warn(format!("[win] zombie cleanup failed: {}", e));
+        }
     }
+}
+
+/// Force-apply our `.ico` to the given HWND via Win32 `WM_SETICON`.
+/// Tauri's `WebviewWindow::set_icon` on Windows reportedly updates the
+/// taskbar/alt-tab "big icon" but not the title-bar "small icon", so
+/// we set both explicitly here. `wry` doesn't expose this, so we go
+/// direct.
+pub fn apply_window_icon_win32(hwnd: isize) {
+    use std::os::windows::ffi::OsStrExt;
+
+    // Embedded copy of icon.ico — written to %TEMP% so LoadImageW
+    // (which wants a file path with LR_LOADFROMFILE) can read it.
+    const ICO_BYTES: &[u8] = include_bytes!("../icons/icon.ico");
+    let temp_path = std::env::temp_dir().join("millennium_window_icon.ico");
+    if !temp_path.exists()
+        || std::fs::metadata(&temp_path)
+            .map(|m| m.len() as usize != ICO_BYTES.len())
+            .unwrap_or(true)
+    {
+        if let Err(e) = std::fs::write(&temp_path, ICO_BYTES) {
+            crate::runtime_log::warn(format!(
+                "[win] could not extract icon to {}: {}",
+                temp_path.display(),
+                e
+            ));
+            return;
+        }
+    }
+
+    let path_wide: Vec<u16> = std::ffi::OsStr::new(&temp_path)
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+
+    const IMAGE_ICON: u32 = 1;
+    const LR_LOADFROMFILE: u32 = 0x00000010;
+    const LR_DEFAULTSIZE: u32 = 0x00000040;
+    const WM_SETICON: u32 = 0x0080;
+    const ICON_SMALL: usize = 0;
+    const ICON_BIG: usize = 1;
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn LoadImageW(
+            hinst: isize,
+            name: *const u16,
+            type_: u32,
+            cx: i32,
+            cy: i32,
+            fuload: u32,
+        ) -> isize;
+        fn SendMessageW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> isize;
+    }
+
+    let hicon_small = unsafe {
+        LoadImageW(
+            0,
+            path_wide.as_ptr(),
+            IMAGE_ICON,
+            16,
+            16,
+            LR_LOADFROMFILE | LR_DEFAULTSIZE,
+        )
+    };
+    let hicon_big = unsafe {
+        LoadImageW(
+            0,
+            path_wide.as_ptr(),
+            IMAGE_ICON,
+            32,
+            32,
+            LR_LOADFROMFILE | LR_DEFAULTSIZE,
+        )
+    };
+
+    if hicon_small == 0 && hicon_big == 0 {
+        crate::runtime_log::warn(
+            "[win] LoadImageW returned NULL for both icon sizes — header will fallback",
+        );
+        return;
+    }
+
+    if hicon_small != 0 {
+        unsafe {
+            SendMessageW(hwnd, WM_SETICON, ICON_SMALL, hicon_small);
+        }
+    }
+    if hicon_big != 0 {
+        unsafe {
+            SendMessageW(hwnd, WM_SETICON, ICON_BIG, hicon_big);
+        }
+    }
+    crate::runtime_log::info(format!(
+        "[win] WM_SETICON applied (small=0x{:x} big=0x{:x})",
+        hicon_small as usize, hicon_big as usize
+    ));
 }
 
 fn set_current_process_aumid() {

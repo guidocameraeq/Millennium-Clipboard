@@ -22,8 +22,6 @@ pub struct Settings {
     pub start_with_windows: bool,
     #[serde(default = "default_close_to_tray")]
     pub close_to_tray: bool,
-    #[serde(default)]
-    pub register_send_to: bool,
 }
 
 fn default_auto_accept() -> bool { false }
@@ -61,7 +59,6 @@ impl SettingsStore {
                     notifications_enabled: true,
                     start_with_windows: false,
                     close_to_tray: true,
-                    register_send_to: false,
                 }
             })
         } else {
@@ -72,7 +69,6 @@ impl SettingsStore {
                 notifications_enabled: true,
                 start_with_windows: false,
                 close_to_tray: true,
-                register_send_to: false,
             }
         };
 
@@ -132,15 +128,6 @@ impl SettingsStore {
         let payload = {
             let mut s = self.inner.lock().unwrap();
             s.close_to_tray = value;
-            serde_json::to_string_pretty(&*s).context("serialize settings")?
-        };
-        self.persist(payload)
-    }
-
-    pub fn set_register_send_to(&self, value: bool) -> Result<()> {
-        let payload = {
-            let mut s = self.inner.lock().unwrap();
-            s.register_send_to = value;
             serde_json::to_string_pretty(&*s).context("serialize settings")?
         };
         self.persist(payload)

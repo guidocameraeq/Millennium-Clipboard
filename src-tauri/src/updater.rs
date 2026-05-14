@@ -12,7 +12,26 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 
 const REPO: &str = "guidocameraeq/Millennium-Clipboard";
-const ASSET_TAIL: &str = "portable.exe";
+
+/// Pick which asset of a GitHub release is the portable Windows
+/// executable. Historically (v0.8.x – v0.10.0) we named the asset
+/// `Millennium-Clipboard_<ver>_portable.exe`, so we prefer that suffix
+/// when present (older releases the user might have installed). From
+/// v0.11.0 forward the asset is simply `Millennium Clipboard.exe`
+/// (the version lives in metadata + the release tag), so as a
+/// fallback we accept any `.exe` asset.
+fn pick_exe_asset(assets: &[serde_json::Value]) -> Option<&serde_json::Value> {
+    let by_suffix = |suffix: &str| {
+        assets.iter().find(|a| {
+            a["name"]
+                .as_str()
+                .map(|n| n.ends_with(suffix))
+                .unwrap_or(false)
+        })
+    };
+    by_suffix("portable.exe")
+        .or_else(|| by_suffix(".exe"))
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,14 +82,7 @@ pub async fn check_for_update() -> Result<UpdateInfo> {
 
     let download_url = release["assets"]
         .as_array()
-        .and_then(|arr| {
-            arr.iter().find(|a| {
-                a["name"]
-                    .as_str()
-                    .map(|n| n.ends_with(ASSET_TAIL))
-                    .unwrap_or(false)
-            })
-        })
+        .and_then(|arr| pick_exe_asset(arr.as_slice()))
         .and_then(|a| a["browser_download_url"].as_str().map(String::from));
 
     let current = env!("CARGO_PKG_VERSION").to_string();
