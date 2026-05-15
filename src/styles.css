@@ -2012,6 +2012,22 @@ html.is-mobile .settings-info .settings-value {
   display: block !important;
 }
 
+/* Settings sections / rows marked as desktop-only via .desktop-only on
+   the wrapper. We hide them when running under html.is-mobile (added
+   by the inline script in index.html based on UA / touch / width).
+   They stay visible on Windows. */
+html.is-mobile .desktop-only { display: none !important; }
+
+/* Clipboard sync is desktop-only by design (Android 10+ background
+   clipboard restrictions make it half-broken, and image-paste needs
+   a JNI bridge that lives in v0.14+). Hide every clipboard-sync
+   surface on Android: the per-peer toggle on cards and the toggle
+   row inside the peer-details modal. */
+html.is-mobile .clip-toggle,
+html.is-mobile #peer-details-clip-row {
+  display: none !important;
+}
+
 /* DOWNLOAD FOLDER specifically (and any future long-path value sitting
    inside a .settings-control flex row). The default `.settings-value`
    base rule uses `word-break: break-all` which produces 1-char columns
@@ -2035,6 +2051,28 @@ html.is-mobile #settings-download-dir {
   white-space: normal !important;
   line-height: 1.4 !important;
   display: block !important;
+}
+
+/* Settings → UPDATES row: same fix. The status text + the banner span
+   are long English strings that previously rendered one-letter-per
+   -line because of the global `max-width: 100%` + `mono` font + flex
+   pressure. */
+html.is-mobile #settings-update-status,
+html.is-mobile #settings-update-banner {
+  flex: 1 1 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  font-size: 11px !important;
+  word-break: normal !important;
+  overflow-wrap: anywhere !important;
+  white-space: normal !important;
+  line-height: 1.4 !important;
+  display: block !important;
+}
+html.is-mobile #settings-update-action {
+  flex-direction: column !important;
+  align-items: stretch !important;
+  gap: 6px !important;
 }
 html.is-mobile #settings-update-action {
   flex-direction: column !important;

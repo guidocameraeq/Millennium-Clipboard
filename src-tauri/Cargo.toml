@@ -1,6 +1,6 @@
 [package]
 name = "millennium-clipboard"
-version = "0.13.0"
+version = "0.14.0"
 description = "Share text and files between devices on the same LAN"
 authors = ["guidocameraeq"]
 edition = "2021"

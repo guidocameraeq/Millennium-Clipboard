@@ -298,7 +298,7 @@
             </label>
           </div>
         </div>
-        <div class="settings-row">
+        <div class="settings-row" id="peer-details-clip-row">
           <span class="settings-label">📋 CLIPBOARD SYNC</span>
           <div class="settings-control">
             <label class="sound-toggle">
@@ -368,52 +368,60 @@
           </div>
         </div>
 
-        <!-- ▸ TRANSFERS -->
-        <h3 class="settings-section">▸ TRANSFERS</h3>
-        <div class="settings-row">
-          <span class="settings-label">AUTO-ACCEPT FROM FAVORITES</span>
-          <div class="settings-control">
-            <label class="sound-toggle">
-              <input type="checkbox" id="settings-auto-accept" />
-              <span class="sound-track"><span class="sound-thumb"></span></span>
-              <span class="settings-value mono" id="settings-auto-accept-label">OFF</span>
-            </label>
+        <!-- ▸ TRANSFERS — desktop-only. On Android the OS shows an
+             accept prompt anyway and auto-accept makes less sense. -->
+        <div class="desktop-only">
+          <h3 class="settings-section">▸ TRANSFERS</h3>
+          <div class="settings-row">
+            <span class="settings-label">AUTO-ACCEPT FROM FAVORITES</span>
+            <div class="settings-control">
+              <label class="sound-toggle">
+                <input type="checkbox" id="settings-auto-accept" />
+                <span class="sound-track"><span class="sound-thumb"></span></span>
+                <span class="settings-value mono" id="settings-auto-accept-label">OFF</span>
+              </label>
+            </div>
           </div>
         </div>
 
-        <!-- ▸ NOTIFICATIONS -->
-        <h3 class="settings-section">▸ NOTIFICATIONS</h3>
-        <div class="settings-row">
-          <span class="settings-label">DESKTOP NOTIFICATIONS</span>
-          <div class="settings-control">
-            <label class="sound-toggle">
-              <input type="checkbox" id="settings-notifications" />
-              <span class="sound-track"><span class="sound-thumb"></span></span>
-              <span class="settings-value mono" id="settings-notifications-label">ON</span>
-            </label>
+        <!-- ▸ NOTIFICATIONS — desktop-only. Android uses native OS toasts;
+             the toggle here would do nothing on mobile. -->
+        <div class="desktop-only">
+          <h3 class="settings-section">▸ NOTIFICATIONS</h3>
+          <div class="settings-row">
+            <span class="settings-label">DESKTOP NOTIFICATIONS</span>
+            <div class="settings-control">
+              <label class="sound-toggle">
+                <input type="checkbox" id="settings-notifications" />
+                <span class="sound-track"><span class="sound-thumb"></span></span>
+                <span class="settings-value mono" id="settings-notifications-label">ON</span>
+              </label>
+            </div>
           </div>
         </div>
 
-        <!-- ▸ SYSTEM -->
-        <h3 class="settings-section">▸ SYSTEM</h3>
-        <div class="settings-row">
-          <span class="settings-label">START WITH WINDOWS</span>
-          <div class="settings-control">
-            <label class="sound-toggle">
-              <input type="checkbox" id="settings-autostart" />
-              <span class="sound-track"><span class="sound-thumb"></span></span>
-              <span class="settings-value mono" id="settings-autostart-label">OFF</span>
-            </label>
+        <!-- ▸ SYSTEM — every option below is desktop-only. -->
+        <div class="desktop-only">
+          <h3 class="settings-section">▸ SYSTEM</h3>
+          <div class="settings-row">
+            <span class="settings-label">START WITH WINDOWS</span>
+            <div class="settings-control">
+              <label class="sound-toggle">
+                <input type="checkbox" id="settings-autostart" />
+                <span class="sound-track"><span class="sound-thumb"></span></span>
+                <span class="settings-value mono" id="settings-autostart-label">OFF</span>
+              </label>
+            </div>
           </div>
-        </div>
-        <div class="settings-row">
-          <span class="settings-label">CLOSE TO TRAY</span>
-          <div class="settings-control">
-            <label class="sound-toggle">
-              <input type="checkbox" id="settings-close-tray" />
-              <span class="sound-track"><span class="sound-thumb"></span></span>
-              <span class="settings-value mono" id="settings-close-tray-label">ON</span>
-            </label>
+          <div class="settings-row">
+            <span class="settings-label">CLOSE TO TRAY</span>
+            <div class="settings-control">
+              <label class="sound-toggle">
+                <input type="checkbox" id="settings-close-tray" />
+                <span class="sound-track"><span class="sound-thumb"></span></span>
+                <span class="settings-value mono" id="settings-close-tray-label">ON</span>
+              </label>
+            </div>
           </div>
         </div>
 

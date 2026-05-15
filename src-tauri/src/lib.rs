@@ -1124,29 +1124,41 @@ pub fn run() {
             // Default download dir is platform-specific:
             //   - Windows/Linux/Mac: ~/Desktop (so received files land
             //     where the user can see them).
-            //   - Android: try the PUBLIC /storage/emulated/0/Download
-            //     (so files are visible in the Gallery and any file
-            //     manager). On Android 10+ direct file I/O to that
-            //     path works as long as we own a sub-folder we create
-            //     ourselves — Millennium/ inside Downloads gives us
-            //     write access without needing SAF for the basic case.
-            //     Fall back to app-scoped storage only if we can't
-            //     even create the sub-folder.
+            //   - Android: app-scoped Download folder. The "public"
+            //     `/storage/emulated/0/Download` path looks writable
+            //     (Rust's create_dir_all returns Ok if it already
+            //     exists) but scoped storage on Android 11+ rejects
+            //     the actual file write later, which turned into a
+            //     500 at receive time. The app-scoped folder
+            //     `Android/data/<pkg>/files/Download` always works,
+            //     no permissions needed, and Files app shows it. For
+            //     images we additionally publish to Pictures/Millennium
+            //     after the transfer completes (see http_server.rs).
+            #[cfg(target_os = "android")]
+            let default_download = app
+                .path()
+                .app_local_data_dir()
+                .ok()
+                .map(|p| p.join("Download"))
+                .or_else(|| app.path().app_cache_dir().ok().map(|p| p.join("Download")))
+                .unwrap_or_else(std::env::temp_dir);
+
+            // Pre-create + check writability on Android. If the dir the
+            // OS handed us isn't actually writable, fall back to a temp
+            // dir so we don't blow up at receive time with a 500.
             #[cfg(target_os = "android")]
             let default_download = {
-                let public_downloads = std::path::PathBuf::from(
-                    "/storage/emulated/0/Download/Millennium",
-                );
-                if std::fs::create_dir_all(&public_downloads).is_ok() {
-                    public_downloads
+                let _ = std::fs::create_dir_all(&default_download);
+                let probe = default_download.join(".write_probe");
+                if std::fs::write(&probe, b"ok").is_ok() {
+                    let _ = std::fs::remove_file(&probe);
+                    default_download
                 } else {
-                    app.path()
-                        .download_dir()
-                        .ok()
-                        .or_else(|| {
-                            app.path().app_local_data_dir().ok().map(|p| p.join("Download"))
-                        })
-                        .unwrap_or_else(|| std::path::PathBuf::from("/storage/emulated/0/Download"))
+                    runtime_log::warn(format!(
+                        "[setup] default_download_dir {} not writable, falling back to temp",
+                        default_download.display()
+                    ));
+                    std::env::temp_dir()
                 }
             };
 
@@ -1161,10 +1173,32 @@ pub fn run() {
                 default_download.display()
             ));
             let settings_store = Arc::new(
-                settings::SettingsStore::load_or_default(&data_dir, default_download)
+                settings::SettingsStore::load_or_default(&data_dir, default_download.clone())
                     .expect("failed to setup settings"),
             );
             runtime_log::info("[setup] settings loaded");
+
+            // Android migration: if the persisted download_dir (from
+            // v0.13.0 or earlier) points at a path that's no longer
+            // writable (e.g. /storage/emulated/0/Download/Millennium
+            // under scoped storage), reset it to the safe default so
+            // file receives don't fail with 500 at write time.
+            #[cfg(target_os = "android")]
+            {
+                let current = settings_store.snapshot().download_dir;
+                let _ = std::fs::create_dir_all(&current);
+                let probe = current.join(".write_probe");
+                if std::fs::write(&probe, b"ok").is_err() {
+                    runtime_log::warn(format!(
+                        "[setup] persisted download_dir {} not writable, reverting to {}",
+                        current.display(),
+                        default_download.display()
+                    ));
+                    let _ = settings_store.set_download_dir(default_download.clone());
+                } else {
+                    let _ = std::fs::remove_file(&probe);
+                }
+            }
 
             let icon_store = Arc::new(
                 icon_overrides::IconOverrideStore::load_or_new(&data_dir)

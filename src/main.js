@@ -1627,20 +1627,50 @@
     try {
       const result = await invoke('apply_update', { downloadUrl: updateInfoCache.downloadUrl });
       // On Windows the app exits before we get here. On Android the
-      // command returns the local APK path — we hand it off to the
-      // opener plugin via the underlying invoke. The injected global
-      // `window.__TAURI__.opener.openPath` wrapper isn't always
-      // present on Android builds, so we go straight through invoke
-      // and pass the exact `{path, with}` shape the Kotlin plugin
-      // expects (passing a bare string makes it try to deserialize
-      // the string itself into OpenArgs and fail).
+      // command returns the local APK path. The "open the system
+      // installer" step is fragile in Tauri 2.x — several args shapes
+      // exist depending on plugin version, and the Android WebView
+      // sometimes doesn't expose the JS wrapper at all. We try the
+      // known-good shapes in order and log each attempt to the
+      // runtime log so failures are diagnosable, then fall back to
+      // showing the path so the user can install manually from Files.
       if (isAndroid && result && typeof result === 'string') {
         settingsApplyUpdate.textContent = '◷ OPENING INSTALLER...';
-        try {
-          await invoke('plugin:opener|open_path', { path: result, with: null });
-        } catch (e) {
-          settingsApplyUpdate.textContent = `APK at ${result} — open manually`;
-          throw e;
+        const tryOpen = async (label, fn) => {
+          try {
+            await fn();
+            reportToBackend('INFO', `[updater] installer opened via ${label}`);
+            return true;
+          } catch (err) {
+            reportToBackend('WARN', `[updater] ${label} failed: ${err}`);
+            return false;
+          }
+        };
+
+        let opened = false;
+        // 1) invoke plugin opener directly with {path, with}
+        if (!opened) {
+          opened = await tryOpen('invoke(path+with:null)', () =>
+            invoke('plugin:opener|open_path', { path: result, with: null })
+          );
+        }
+        // 2) invoke plugin opener with just {path}
+        if (!opened) {
+          opened = await tryOpen('invoke(path-only)', () =>
+            invoke('plugin:opener|open_path', { path: result })
+          );
+        }
+        // 3) injected global wrapper if it exists
+        if (!opened && window.__TAURI__ && window.__TAURI__.opener && window.__TAURI__.opener.openPath) {
+          opened = await tryOpen('global.openPath(path)', () =>
+            window.__TAURI__.opener.openPath(result)
+          );
+        }
+
+        if (!opened) {
+          settingsApplyUpdate.textContent = '⚠ Open manually';
+          settingsUpdateBanner.textContent = `APK downloaded to: ${result}`;
+          setStatus('APK downloaded — open it from Files app to install.');
         }
       }
     } catch (err) {
@@ -1928,34 +1958,26 @@
       setStatus('Transfer cancelled.');
     });
 
-    // Clipboard sync — feedback when a peer pushes something to us (v0.6.0)
+    // Clipboard sync is desktop-only. On Android we skip both the
+    // notify and the status update so the feature is invisible to
+    // mobile users (it's also gated by mutual-consent so peers can't
+    // actually push to us if no toggle was ever flipped, which on
+    // Android can't even be flipped because the UI hides it).
+    const _clipboardIsAndroid = /android/i.test(navigator.userAgent);
     await listen('clipboard-received', (event) => {
+      if (_clipboardIsAndroid) return;
       const { senderAlias, text } = event.payload;
       const preview = text.length > 40 ? text.slice(0, 40) + '...' : text;
       setStatus(`📋 ${senderAlias} → clipboard: ${preview}`);
       blip(880, 0.06);
       notify(`📋 Clipboard from ${senderAlias}`, preview);
     });
-
-    // Image clipboard — peer pushed an image. Desktop pastes it
-    // straight into the system clipboard; Android (until v0.13) saves
-    // the PNG to Download/Millennium and asks the user to open it
-    // from there, because writing image clipboards on Android needs a
-    // FileProvider + JNI bridge that we haven't built yet.
     await listen('clipboard-image-received', (event) => {
+      if (_clipboardIsAndroid) return;
       const { senderAlias, width, height } = event.payload;
-      const isAndroid = /android/i.test(navigator.userAgent);
-      if (isAndroid) {
-        setStatus(`🖼 ${senderAlias} → image saved to Pictures/Millennium (${width}×${height})`);
-        notify(
-          `🖼 Image from ${senderAlias}`,
-          `Saved to Pictures/Millennium (${width}×${height}) — open in Gallery.`
-        );
-      } else {
-        setStatus(`🖼 ${senderAlias} → image clipboard: ${width}×${height}`);
-        notify(`🖼 Image clipboard from ${senderAlias}`, `${width}×${height} ready to paste`);
-      }
+      setStatus(`🖼 ${senderAlias} → image clipboard: ${width}×${height}`);
       blip(1320, 0.06);
+      notify(`🖼 Image clipboard from ${senderAlias}`, `${width}×${height} ready to paste`);
     });
 
     // Preload settings (used by transmit + settings modal)
