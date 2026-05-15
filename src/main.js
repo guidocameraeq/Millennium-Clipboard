@@ -1303,10 +1303,31 @@
           qrAddError.hidden = false;
           return;
         }
-        // Feed the scanned payload into the same pairing flow as paste.
+        // Try to peek at the alias inside the QR payload so the
+        // confirmation prompt mentions the peer by name. Best-effort —
+        // a malformed payload still goes through pair_with_qr_payload
+        // for validation.
+        let confirmLabel = 'this peer';
+        try {
+          const parsed = JSON.parse(content);
+          if (parsed && (parsed.alias || parsed.ip)) {
+            confirmLabel = parsed.alias
+              ? `${parsed.alias}${parsed.ip ? ` (${parsed.ip})` : ''}`
+              : parsed.ip;
+          }
+        } catch (_) {}
+        // Close the modal first so the native confirm() sits on top of
+        // the regular app screen, not behind the QR overlay (which is
+        // what made the previous flow feel stuck).
+        closeQrModal();
+        const ok = confirm(`Pair with ${confirmLabel}?\n\nIt will be added as a favourite peer.`);
+        if (!ok) {
+          setStatus('QR pairing cancelled.');
+          return;
+        }
         const msg = await invoke('pair_with_qr_payload', { payload: content });
         setStatus(msg);
-        closeQrModal();
+        notify('▣ Paired', confirmLabel);
       } catch (err) {
         qrAddError.textContent = `Scan failed: ${err}`;
         qrAddError.hidden = false;
@@ -1894,12 +1915,25 @@
       notify(`📋 Clipboard from ${senderAlias}`, preview);
     });
 
-    // Image clipboard (v0.9.0) — peer pushed an image into our OS clipboard.
+    // Image clipboard — peer pushed an image. Desktop pastes it
+    // straight into the system clipboard; Android (until v0.13) saves
+    // the PNG to Download/Millennium and asks the user to open it
+    // from there, because writing image clipboards on Android needs a
+    // FileProvider + JNI bridge that we haven't built yet.
     await listen('clipboard-image-received', (event) => {
       const { senderAlias, width, height } = event.payload;
-      setStatus(`🖼 ${senderAlias} → image clipboard: ${width}×${height}`);
+      const isAndroid = /android/i.test(navigator.userAgent);
+      if (isAndroid) {
+        setStatus(`🖼 ${senderAlias} → image saved to Downloads/Millennium (${width}×${height})`);
+        notify(
+          `🖼 Image from ${senderAlias}`,
+          `Saved to Download/Millennium (${width}×${height}) — open from Gallery to use it.`
+        );
+      } else {
+        setStatus(`🖼 ${senderAlias} → image clipboard: ${width}×${height}`);
+        notify(`🖼 Image clipboard from ${senderAlias}`, `${width}×${height} ready to paste`);
+      }
       blip(1320, 0.06);
-      notify(`🖼 Image clipboard from ${senderAlias}`, `${width}×${height} ready to paste`);
     });
 
     // Preload settings (used by transmit + settings modal)

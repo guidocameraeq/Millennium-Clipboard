@@ -1940,6 +1940,19 @@ html.is-mobile .app {
   gap: 0 !important;
   padding: 0 !important;
 }
+/* Android edge-to-edge: status bar (top) and gesture bar (bottom) sit
+   under our sticky HUD/footer. Pad each with the OS-provided insets so
+   no content slides under the system chrome. */
+html.is-mobile .hud {
+  padding-top: calc(10px + env(safe-area-inset-top, 0)) !important;
+  padding-left: calc(12px + env(safe-area-inset-left, 0)) !important;
+  padding-right: calc(12px + env(safe-area-inset-right, 0)) !important;
+}
+html.is-mobile .status-strip {
+  padding-bottom: calc(8px + env(safe-area-inset-bottom, 0)) !important;
+  padding-left: calc(10px + env(safe-area-inset-left, 0)) !important;
+  padding-right: calc(10px + env(safe-area-inset-right, 0)) !important;
+}
 html.is-mobile .grid {
   height: auto !important;
   min-height: 0 !important;
@@ -1988,9 +2001,15 @@ html.is-mobile .settings-info {
   align-items: flex-start !important;
 }
 html.is-mobile .settings-info .settings-value {
-  font-size: 9px !important;
-  word-break: break-all !important;
+  font-size: 10px !important;
+  /* Break only at natural boundaries (`/`, `-`, spaces) so long paths
+     wrap as multi-character chunks instead of one-letter-per-line. */
+  word-break: normal !important;
+  overflow-wrap: anywhere !important;
+  white-space: normal !important;
+  line-height: 1.4 !important;
   max-width: 100% !important;
+  display: block !important;
 }
 html.is-mobile #settings-update-action {
   flex-direction: column !important;

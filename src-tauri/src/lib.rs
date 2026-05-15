@@ -1099,18 +1099,31 @@ pub fn run() {
             // Default download dir is platform-specific:
             //   - Windows/Linux/Mac: ~/Desktop (so received files land
             //     where the user can see them).
-            //   - Android: the shared Download folder is locked behind
-            //     SAF since Android 10; fall back to the app-scoped
-            //     download dir which is visible from the Files app
-            //     under "Android/data/com.guidocameraeq.millennium/
-            //     files/Download". No special permissions needed.
+            //   - Android: try the PUBLIC /storage/emulated/0/Download
+            //     (so files are visible in the Gallery and any file
+            //     manager). On Android 10+ direct file I/O to that
+            //     path works as long as we own a sub-folder we create
+            //     ourselves — Millennium/ inside Downloads gives us
+            //     write access without needing SAF for the basic case.
+            //     Fall back to app-scoped storage only if we can't
+            //     even create the sub-folder.
             #[cfg(target_os = "android")]
-            let default_download = app
-                .path()
-                .download_dir()
-                .ok()
-                .or_else(|| app.path().app_local_data_dir().ok().map(|p| p.join("Download")))
-                .unwrap_or_else(|| std::path::PathBuf::from("/storage/emulated/0/Download"));
+            let default_download = {
+                let public_downloads = std::path::PathBuf::from(
+                    "/storage/emulated/0/Download/Millennium",
+                );
+                if std::fs::create_dir_all(&public_downloads).is_ok() {
+                    public_downloads
+                } else {
+                    app.path()
+                        .download_dir()
+                        .ok()
+                        .or_else(|| {
+                            app.path().app_local_data_dir().ok().map(|p| p.join("Download"))
+                        })
+                        .unwrap_or_else(|| std::path::PathBuf::from("/storage/emulated/0/Download"))
+                }
+            };
 
             #[cfg(not(target_os = "android"))]
             let default_download = std::env::var_os("USERPROFILE")
