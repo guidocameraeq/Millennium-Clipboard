@@ -24,6 +24,8 @@ mod settings;
 mod thumbnails;
 mod udp_discovery;
 mod updater;
+#[cfg(target_os = "android")]
+mod android_fs_bridge;
 #[cfg(target_os = "windows")]
 mod windows_integration;
 
@@ -921,6 +923,25 @@ fn clear_runtime_log() {
     runtime_log::clear();
 }
 
+/// Resolve a (possibly Android `content://`) path string to something
+/// `tokio::fs::File::open` can read. On non-Android targets and on
+/// Android paths that already look like filesystem paths, this is a
+/// passthrough.
+#[tauri::command]
+async fn prepare_file_for_send(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    path: String,
+) -> Result<String, String> {
+    #[cfg(target_os = "android")]
+    {
+        if path.starts_with("content://") {
+            let resolved = android_fs_bridge::resolve_content_uri(&app, path).await?;
+            return Ok(resolved.to_string_lossy().to_string());
+        }
+    }
+    Ok(path)
+}
+
 #[tauri::command]
 fn record_frontend_log(level: String, msg: String) {
     match level.as_str() {
@@ -978,6 +999,10 @@ pub fn run() {
     #[cfg(mobile)]
     {
         builder = builder.plugin(tauri_plugin_barcode_scanner::init());
+    }
+    #[cfg(target_os = "android")]
+    {
+        builder = builder.plugin(tauri_plugin_android_fs::init());
     }
 
     builder
@@ -1354,6 +1379,7 @@ pub fn run() {
             set_close_to_tray,
             generate_pair_qr,
             pair_with_qr_payload,
+            prepare_file_for_send,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

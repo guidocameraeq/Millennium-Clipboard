@@ -767,19 +767,24 @@
 
   async function addPathToQueue(path) {
     // Android Storage Access Framework returns content:// URIs from the
-    // file picker. tokio::fs in Rust can't open those — needs a JNI
-    // bridge through Android's ContentResolver, which we haven't built
-    // yet (TODO v0.12.0). Until then, surface a clear message instead
-    // of letting the user queue a file that will fail at TRANSMIT time.
+    // file picker that tokio::fs can't open directly. The backend's
+    // `prepare_file_for_send` command runs them through
+    // tauri-plugin-android-fs, which copies the content stream into our
+    // app cache and returns a real filesystem path. On desktop and on
+    // plain Android paths it's a passthrough.
+    let realPath = path;
     if (typeof path === 'string' && path.startsWith('content://')) {
-      setStatus('Cannot send files from this folder yet (Android SAF). Copy them to Downloads/Millennium first.');
-      blip(440, 0.1);
-      return;
+      try {
+        setStatus('Reading file from Android storage…');
+        realPath = await invoke('prepare_file_for_send', { path });
+      } catch (err) {
+        setStatus(`ERR · could not read file: ${err}`);
+        blip(440, 0.1);
+        return;
+      }
     }
-    // Derive name + size on Rust side would be ideal; for MVP we infer
-    // name from path and fetch size via fs metadata when sending.
-    const name = path.split(/[\\/]/).pop() || 'file';
-    state.queuedFiles.push({ path, name, size: 0 });
+    const name = realPath.split(/[\\/]/).pop() || 'file';
+    state.queuedFiles.push({ path: realPath, name, size: 0 });
     renderQueue();
   }
 
@@ -1327,6 +1332,15 @@
         }
         const msg = await invoke('pair_with_qr_payload', { payload: content });
         setStatus(msg);
+        // The camera intent backgrounded the WebView while it was
+        // scanning, which on some Android builds drops the
+        // `peers-changed` event the backend emits after pair. Pull
+        // the snapshot directly so the new peer appears without
+        // forcing the user to tap SCAN.
+        try {
+          const peers = await invoke('list_peers');
+          applyPeers(peers, /* initial */ false);
+        } catch (_) {}
         notify('▣ Paired', confirmLabel);
       } catch (err) {
         qrAddError.textContent = `Scan failed: ${err}`;
@@ -1351,6 +1365,10 @@
       try {
         const msg = await invoke('pair_with_qr_payload', { payload: txt });
         setStatus(msg);
+        try {
+          const peers = await invoke('list_peers');
+          applyPeers(peers, /* initial */ false);
+        } catch (_) {}
         closeQrModal();
       } catch (err) {
         qrAddError.textContent = String(err);
@@ -1610,15 +1628,19 @@
       const result = await invoke('apply_update', { downloadUrl: updateInfoCache.downloadUrl });
       // On Windows the app exits before we get here. On Android the
       // command returns the local APK path — we hand it off to the
-      // opener plugin which triggers Android's ACTION_VIEW intent
-      // (the system package installer takes over from there).
+      // opener plugin via the underlying invoke. The injected global
+      // `window.__TAURI__.opener.openPath` wrapper isn't always
+      // present on Android builds, so we go straight through invoke
+      // and pass the exact `{path, with}` shape the Kotlin plugin
+      // expects (passing a bare string makes it try to deserialize
+      // the string itself into OpenArgs and fail).
       if (isAndroid && result && typeof result === 'string') {
         settingsApplyUpdate.textContent = '◷ OPENING INSTALLER...';
-        const opener = window.__TAURI__ && window.__TAURI__.opener;
-        if (opener && opener.openPath) {
-          await opener.openPath(result);
-        } else {
-          settingsApplyUpdate.textContent = `APK at ${result}`;
+        try {
+          await invoke('plugin:opener|open_path', { path: result, with: null });
+        } catch (e) {
+          settingsApplyUpdate.textContent = `APK at ${result} — open manually`;
+          throw e;
         }
       }
     } catch (err) {
@@ -1924,10 +1946,10 @@
       const { senderAlias, width, height } = event.payload;
       const isAndroid = /android/i.test(navigator.userAgent);
       if (isAndroid) {
-        setStatus(`🖼 ${senderAlias} → image saved to Downloads/Millennium (${width}×${height})`);
+        setStatus(`🖼 ${senderAlias} → image saved to Pictures/Millennium (${width}×${height})`);
         notify(
           `🖼 Image from ${senderAlias}`,
-          `Saved to Download/Millennium (${width}×${height}) — open from Gallery to use it.`
+          `Saved to Pictures/Millennium (${width}×${height}) — open in Gallery.`
         );
       } else {
         setStatus(`🖼 ${senderAlias} → image clipboard: ${width}×${height}`);

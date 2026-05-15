@@ -2011,6 +2011,31 @@ html.is-mobile .settings-info .settings-value {
   max-width: 100% !important;
   display: block !important;
 }
+
+/* DOWNLOAD FOLDER specifically (and any future long-path value sitting
+   inside a .settings-control flex row). The default `.settings-value`
+   base rule uses `word-break: break-all` which produces 1-char columns
+   inside a narrow flex slot — these overrides force the whole row to
+   wrap so the path takes a full line with natural-boundary breaks. */
+html.is-mobile .settings-row:has(#settings-download-dir) {
+  flex-direction: column !important;
+  align-items: stretch !important;
+}
+html.is-mobile .settings-control:has(> #settings-download-dir) {
+  flex-wrap: wrap !important;
+  align-items: center !important;
+}
+html.is-mobile #settings-download-dir {
+  flex: 1 1 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  font-size: 10px !important;
+  word-break: normal !important;
+  overflow-wrap: anywhere !important;
+  white-space: normal !important;
+  line-height: 1.4 !important;
+  display: block !important;
+}
 html.is-mobile #settings-update-action {
   flex-direction: column !important;
   align-items: stretch !important;

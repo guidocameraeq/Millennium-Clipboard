@@ -837,41 +837,45 @@ async fn handle_clipboard_image(
         Ok((w, h))
     })
     .await;
-    // Android: writing arbitrary images to the system clipboard requires
-    // a FileProvider + JNI bridge to ClipboardManager.setPrimaryClip,
-    // which we'll add in v0.13.0. Until then, save the PNG to the
-    // public Downloads/Millennium/ folder so at least the user has the
-    // file and can paste it manually from Gallery / Files.
+    // Android: writing arbitrary images to the system clipboard
+    // requires a FileProvider + JNI bridge to ClipboardManager
+    // (v0.14.0 territory). What we CAN do today, thanks to
+    // tauri-plugin-android-fs, is drop the PNG into the public
+    // Pictures/Millennium/ MediaStore entry and ask the OS to scan it
+    // — Gallery / Photos see it instantly, the user just opens it from
+    // there. The whole thing happens off the http handler thread on
+    // purpose because the plugin internals do real Android JNI work.
     #[cfg(target_os = "android")]
-    let decoded = {
+    let decoded: Result<Result<(u32, u32), String>, tokio::task::JoinError> = {
         let bytes_for_save = bytes.clone();
-        tokio::task::spawn_blocking(move || -> Result<(u32, u32), String> {
-            let img = image::load_from_memory(&bytes_for_save).map_err(|e| e.to_string())?;
+        let app_handle = state.app.clone();
+        let inner: Result<(u32, u32), String> = async move {
+            let img = image::load_from_memory(&bytes_for_save)
+                .map_err(|e| format!("decode png: {e}"))?;
             let (w, h) = (img.width(), img.height());
-
-            // Try the public Downloads/Millennium first; if it fails
-            // (Android 11+ scoped storage), fall back to app cache.
-            let candidates: Vec<std::path::PathBuf> = vec![
-                std::path::PathBuf::from("/storage/emulated/0/Download/Millennium"),
-                std::env::temp_dir(),
-            ];
-            for dir in candidates {
-                if std::fs::create_dir_all(&dir).is_err() {
-                    continue;
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let filename = format!("clipboard_{}.png", ts);
+            match crate::android_fs_bridge::save_image_to_gallery(
+                &app_handle,
+                &filename,
+                &bytes_for_save,
+            )
+            .await
+            {
+                Ok(uri) => {
+                    eprintln!("[clipboard] saved incoming image to {uri}");
                 }
-                let ts = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                let out = dir.join(format!("clipboard_{}.png", ts));
-                if std::fs::write(&out, &bytes_for_save).is_ok() {
-                    eprintln!("[clipboard] saved incoming image to {}", out.display());
-                    return Ok((w, h));
+                Err(e) => {
+                    eprintln!("[clipboard] save_image_to_gallery failed: {e}");
                 }
             }
             Ok((w, h))
-        })
-        .await
+        }
+        .await;
+        Ok(inner)
     };
 
     let (width, height) = match decoded {
