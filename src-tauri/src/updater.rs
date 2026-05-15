@@ -20,7 +20,7 @@ const REPO: &str = "guidocameraeq/Millennium-Clipboard";
 /// v0.11.0 forward the asset is simply `Millennium Clipboard.exe`
 /// (the version lives in metadata + the release tag), so as a
 /// fallback we accept any `.exe` asset.
-fn pick_exe_asset(assets: &[serde_json::Value]) -> Option<&serde_json::Value> {
+fn pick_release_asset(assets: &[serde_json::Value]) -> Option<&serde_json::Value> {
     let by_suffix = |suffix: &str| {
         assets.iter().find(|a| {
             a["name"]
@@ -29,8 +29,14 @@ fn pick_exe_asset(assets: &[serde_json::Value]) -> Option<&serde_json::Value> {
                 .unwrap_or(false)
         })
     };
-    by_suffix("portable.exe")
-        .or_else(|| by_suffix(".exe"))
+    #[cfg(target_os = "android")]
+    {
+        by_suffix(".apk")
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        by_suffix("portable.exe").or_else(|| by_suffix(".exe"))
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -82,7 +88,7 @@ pub async fn check_for_update() -> Result<UpdateInfo> {
 
     let download_url = release["assets"]
         .as_array()
-        .and_then(|arr| pick_exe_asset(arr.as_slice()))
+        .and_then(|arr| pick_release_asset(arr.as_slice()))
         .and_then(|a| a["browser_download_url"].as_str().map(String::from));
 
     let current = env!("CARGO_PKG_VERSION").to_string();
@@ -172,7 +178,38 @@ pub async fn download_and_stage(download_url: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "windows"))]
+/// Android: download the new APK to a path the OS package installer can
+/// read, and return that path so the frontend can hand it off to
+/// `tauri-plugin-opener` (which triggers an ACTION_VIEW intent that
+/// brings up Android's "Install app?" dialog). Sideload-style — the
+/// user must have already enabled "Install unknown apps" for our app.
+#[cfg(target_os = "android")]
+pub async fn download_and_stage_apk(download_url: &str, cache_dir: &std::path::Path) -> Result<std::path::PathBuf> {
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("Millennium-Clipboard/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(300))
+        .build()?;
+    let bytes = client
+        .get(download_url)
+        .send()
+        .await
+        .context("download new apk")?
+        .error_for_status()?
+        .bytes()
+        .await
+        .context("read new apk body")?;
+
+    tokio::fs::create_dir_all(cache_dir)
+        .await
+        .with_context(|| format!("mkdir {}", cache_dir.display()))?;
+    let apk_path = cache_dir.join("millennium-update.apk");
+    tokio::fs::write(&apk_path, &bytes)
+        .await
+        .with_context(|| format!("write {}", apk_path.display()))?;
+    Ok(apk_path)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "android")))]
 pub async fn download_and_stage(_download_url: &str) -> Result<()> {
-    bail!("auto-update is only supported on Windows in this build");
+    bail!("auto-update is only supported on Windows and Android in this build");
 }

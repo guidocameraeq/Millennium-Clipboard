@@ -2,7 +2,27 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <script>
+    // Runs BEFORE styles.css loads + before body renders, so the class
+    // is already on <html> by the time CSS first applies. This is a
+    // belt-and-suspenders fallback in case the @media query parser in
+    // the Android WebView trips over the combined "max-width OR
+    // pointer:coarse" syntax (which we've seen happen on some Samsung
+    // builds). The class triggers the `html.is-mobile` rules at the
+    // bottom of styles.css, which use !important to guarantee override
+    // over the desktop defaults.
+    (function() {
+      try {
+        var touch = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+        var narrow = window.innerWidth && window.innerWidth <= 900;
+        var androidUA = /android/i.test(navigator.userAgent || '');
+        if (touch || narrow || androidUA) {
+          document.documentElement.classList.add('is-mobile');
+        }
+      } catch (_) {}
+    })();
+  </script>
   <title>Millennium Clipboard // GRID</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -478,7 +498,11 @@
           </div>
         </div>
         <div id="qr-pane-add" class="qr-pane" hidden>
-          <p class="qr-hint mono">Paste the QR's contents below. On the next version (Android) you'll be able to scan from the camera directly. The peer will be added as MANUAL + favourite.</p>
+          <div id="qr-scan-block" hidden style="margin-bottom:14px">
+            <button class="modal-btn accept" id="qr-scan-btn" style="width:100%;min-height:52px;font-size:13px;letter-spacing:2px">▸ SCAN WITH CAMERA</button>
+            <p class="qr-hint mono" style="margin-top:8px">Tap the button above and point the camera at the QR shown on your desktop's Millennium app.</p>
+          </div>
+          <p class="qr-hint mono">Or paste the QR's contents below. The peer will be added as MANUAL + favourite.</p>
           <textarea class="text-input qr-paste" id="qr-paste-input" placeholder='{"v":1,"type":"millennium-pair",...}'></textarea>
           <div class="modal-error mono" id="qr-add-error" hidden></div>
         </div>

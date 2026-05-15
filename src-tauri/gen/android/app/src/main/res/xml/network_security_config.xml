@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Millennium Clipboard's Rust client (reqwest with `danger_accept_
+  invalid_certs(true)`) handles peer cert verification by SHA-256
+  fingerprint, so Android's default cert validation doesn't apply to
+  our TCP traffic anyway. This config exists only to:
+
+  1. Allow HTTP cleartext to private LAN ranges, so if a peer is ever
+     reached without TLS (e.g. an old client or a future plaintext
+     fallback) the WebView itself won't block it.
+  2. Make the default base-config explicit so a future Android version
+     tightening defaults doesn't silently break us.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Private IPv4 ranges where peers live. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.0.0</domain>
+        <domain includeSubdomains="false">192.168.0.0</domain>
+        <domain includeSubdomains="false">172.16.0.0</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </domain-config>
+</network-security-config>

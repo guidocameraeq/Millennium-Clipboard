@@ -1,6 +1,6 @@
 [package]
 name = "millennium-clipboard"
-version = "0.10.1"
+version = "0.11.0"
 description = "Share text and files between devices on the same LAN"
 authors = ["guidocameraeq"]
 edition = "2021"
@@ -44,6 +44,8 @@ tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-clipboard-manager = "2"
 
 # QR code generation (Fase v0.10 — peer pairing)
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
@@ -56,15 +58,24 @@ bytes = "1"
 futures-util = "0.3"
 tokio-util = { version = "0.7", features = ["io"] }
 
-# Clipboard sync (v0.6.0)
-arboard = "3"
-
 # UDP broadcast discovery + low-level socket options (v0.8.0)
 socket2 = { version = "0.5", features = ["all"] }
 env_logger = "0.11"
 log = "0.4"
 
+# --- target-specific deps below this line ---
+
+# Clipboard sync (v0.6.0) — arboard does not compile on Android.
+# Android handles clipboard via tauri-plugin-clipboard-manager (added
+# later when the foreground service lands).
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard = "3"
+
 # Windows registry access for AUMID notification fix
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.55"
+
+# Mobile-only plugins (Android / iOS)
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-barcode-scanner = "2"
 

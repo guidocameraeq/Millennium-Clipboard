@@ -1570,12 +1570,460 @@ html, body {
    RESPONSIVE
    ========================================================================== */
 
+/* Tablet-ish: stack peers + composer but keep HUD wide */
 @media (max-width: 880px) {
   .grid { grid-template-columns: 1fr; }
-  .hud { grid-template-columns: 1fr; gap: 10px; }
-  .hud-center { justify-content: center; flex-wrap: wrap; }
-  .hud-right { justify-content: center; }
 }
+
+/* Mobile (phone portrait): full redesign so the app is actually usable
+   on a touch screen. There are TWO ways this block activates:
+     1. The viewport is ≤768 CSS px (normal media query path).
+     2. JS in <head> adds `html.is-mobile` (forced via the rule block
+        further down). We need both because some Android WebView
+        versions get confused by combined media queries that mix
+        width + interaction-media features. */
+@media (max-width: 768px) {
+  body { font-size: 13px; }
+
+  .app {
+    padding: 0;
+    min-height: 100vh;
+  }
+
+  /* ---- HUD compacted ---- */
+  .hud {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--neon-cyan-soft);
+    background: rgba(4, 8, 18, 0.85);
+    position: sticky;
+    top: 0;
+    z-index: 200;
+    backdrop-filter: blur(10px);
+  }
+  .hud-left { width: 100%; display: flex; justify-content: center; }
+  .logo { gap: 4px; }
+  .logo-mark { font-size: 13px; }
+  .logo-text { font-size: 14px; letter-spacing: 3px; }
+  .logo-sub { font-size: 8px; letter-spacing: 1.5px; }
+
+  /* Hide HOST/NODE/UPTIME on phones — the info is in Settings if needed. */
+  .hud-center { display: none; }
+
+  /* HUD action buttons: compact, icon-led, single row scrollable if needed. */
+  .hud-right {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    justify-content: stretch;
+  }
+  .hud-btn {
+    padding: 8px 4px;
+    font-size: 9px;
+    letter-spacing: 1.2px;
+    min-height: 44px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+  }
+  .hud-btn-glyph {
+    font-size: 14px;
+    margin-right: 0;
+  }
+
+  /* ---- Main grid: stack peers above composer ---- */
+  .grid {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 10px;
+  }
+  .card {
+    border-radius: 0;
+    padding: 12px;
+  }
+  .card-head { padding-bottom: 8px; }
+  .card-title { font-size: 11px; letter-spacing: 2px; }
+
+  /* ---- Peer card ---- */
+  .peers { max-height: 50vh; display: flex; flex-direction: column; }
+  .peer-list {
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    gap: 6px;
+  }
+  .peer-item {
+    padding: 12px 10px;
+    min-height: 64px;
+    gap: 10px;
+  }
+  .peer-icon { width: 46px; height: 46px; }
+  .peer-icon img.peer-item-img,
+  .peer-item-img { width: 38px; height: 38px; }
+  .peer-name { font-size: 13px; letter-spacing: 1px; }
+  .peer-meta { font-size: 10px; }
+  .peer-status { font-size: 9px; }
+  .peer-toggle {
+    width: 38px;
+    height: 38px;
+    font-size: 17px;
+  }
+  .peer-action-btn.details-btn {
+    min-width: 38px;
+    min-height: 38px;
+    font-size: 22px;
+  }
+
+  /* ---- Filter bar ---- */
+  .filter-bar {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .filter-btn {
+    min-height: 36px;
+    padding: 6px 10px;
+    font-size: 10px;
+  }
+
+  /* ---- Composer ---- */
+  .composer { flex: 1; min-height: 280px; }
+  .mode-switch { gap: 4px; }
+  .mode-btn { min-height: 40px; font-size: 10px; padding: 6px 8px; }
+  .compose-area textarea {
+    min-height: 120px;
+    font-size: 14px;
+    -webkit-text-size-adjust: 100%;
+  }
+  .compose-bar { flex-wrap: wrap; gap: 6px; }
+  .send-btn {
+    min-height: 48px;
+    font-size: 12px;
+    flex: 1 1 100%;
+    order: 99;
+  }
+
+  /* ---- Status / progress bar at the bottom of composer ---- */
+  .progress-block { font-size: 10px; }
+  .status-msg { font-size: 10px; }
+
+  /* ---- Modals: take most of the screen ---- */
+  .modal-backdrop { padding: 0; }
+  .modal,
+  .settings-modal-wide,
+  .log-modal {
+    width: 100vw;
+    height: 100vh;
+    max-width: 100vw;
+    max-height: 100vh;
+    border-radius: 0;
+    border: none;
+    border-top: 2px solid var(--neon-cyan);
+    border-bottom: 2px solid var(--neon-cyan);
+  }
+  .modal-head {
+    padding: 12px 14px;
+    font-size: 12px;
+  }
+  .modal-body { padding: 14px; }
+  .modal-actions {
+    padding: 10px 14px;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .modal-btn {
+    width: 100%;
+    min-height: 48px;
+    font-size: 12px;
+  }
+
+  /* Settings: section headers more spaced */
+  .settings-section { margin-top: 22px; font-size: 11px; }
+  .settings-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    padding: 10px 0;
+  }
+  .settings-label { font-size: 10px; letter-spacing: 1.5px; }
+
+  /* Icon picker in peer details: more spread out */
+  .icon-current { width: 76px; height: 76px; }
+  .icon-current svg,
+  .icon-current img.peer-item-img { width: 56px; height: 56px; }
+  .icon-pick { width: 52px; height: 52px; }
+  .icon-pick svg,
+  .icon-pick img.peer-item-img { width: 38px; height: 38px; }
+
+  /* Runtime log on phones: smaller mono so more fits */
+  .log-pane { font-size: 10px; padding: 8px; }
+
+  /* HUD logo subline: trim version text horizontally on tight screens. */
+  .logo-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60vw; }
+
+  /* Disable hover transforms — they read weird on tap */
+  .peer-item:hover { transform: none; }
+  .peer-toggle:hover { transform: none; }
+}
+
+/* Very narrow phones (≤380 px) — get even more aggressive */
+@media (max-width: 380px) {
+  .hud-btn { font-size: 8px; padding: 6px 2px; }
+  .hud-btn-glyph { font-size: 13px; }
+  .peer-icon { width: 40px; height: 40px; }
+  .peer-icon img.peer-item-img { width: 32px; height: 32px; }
+  .peer-toggle { width: 34px; height: 34px; font-size: 15px; }
+}
+
+/* Belt-and-suspenders: never allow horizontal scroll, ever. */
+html, body, .app {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+/* ==========================================================================
+   MOBILE OVERRIDE — fallback when @media (max-width:768px) doesn't fire.
+   The inline <script> in index.html adds `html.is-mobile` based on UA,
+   touch capability, or window.innerWidth. These rules duplicate the
+   STRUCTURAL bits of the mobile media query with !important so they
+   always win, even if the media query was discarded by a buggy parser
+   in the Android WebView.
+   We only repeat the *layout* parts here (display, grid columns, flex
+   direction, sticky/scroll behavior). The cosmetic mobile rules
+   (font-size tweaks, padding, etc.) live only in the @media block —
+   if those fail it's annoying but the app is still usable.
+   ========================================================================== */
+html.is-mobile .app { padding: 0 !important; min-height: 100vh !important; }
+
+html.is-mobile .hud {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 6px !important;
+  padding: 10px 12px !important;
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 200 !important;
+}
+html.is-mobile .hud-left { width: 100% !important; display: flex !important; justify-content: center !important; }
+html.is-mobile .hud-center { display: none !important; }
+html.is-mobile .hud-right {
+  width: 100% !important;
+  display: grid !important;
+  grid-template-columns: repeat(4, 1fr) !important;
+  gap: 6px !important;
+}
+html.is-mobile .hud-btn {
+  padding: 8px 4px !important;
+  font-size: 9px !important;
+  min-height: 44px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 2px !important;
+}
+html.is-mobile .hud-btn-glyph { font-size: 14px !important; margin-right: 0 !important; }
+
+html.is-mobile .grid {
+  display: flex !important;
+  flex-direction: column !important;
+  grid-template-columns: 1fr !important;
+  gap: 10px !important;
+  padding: 10px !important;
+}
+
+html.is-mobile .peers {
+  max-height: 50vh !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+html.is-mobile .peer-list { flex: 1 !important; overflow-y: auto !important; }
+
+html.is-mobile .peer-name-row {
+  flex-wrap: nowrap !important;
+}
+html.is-mobile .composer { flex: 1 !important; min-height: 280px !important; }
+html.is-mobile .send-btn { flex: 1 1 100% !important; order: 99 !important; }
+
+html.is-mobile .modal,
+html.is-mobile .settings-modal-wide,
+html.is-mobile .log-modal {
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: 100vw !important;
+  max-height: 100vh !important;
+  border-radius: 0 !important;
+}
+html.is-mobile .modal-actions {
+  flex-direction: column !important;
+  gap: 8px !important;
+}
+html.is-mobile .modal-btn { width: 100% !important; min-height: 48px !important; }
+
+/* CRITICAL FIX: kill all min-widths on mobile so children of flex/grid
+   containers actually shrink to fit. Without this, the desktop
+   `.hud-btn { min-width: 110px }`, `.mode-btn`, textareas etc. force
+   their parents wider than the viewport, and `overflow-x:hidden` clips
+   the right side of everything — which is exactly the symptom seen on
+   the Samsung A16 phone screenshot. */
+html.is-mobile * {
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+/* Re-allow the modal/backdrop to be full-viewport (the rule above
+   would have capped them at parent width). */
+html.is-mobile .modal-backdrop,
+html.is-mobile .modal,
+html.is-mobile .settings-modal-wide,
+html.is-mobile .log-modal {
+  max-width: 100vw !important;
+  width: 100vw !important;
+}
+/* Buttons specifically: allow text to wrap so a small column can still
+   fit the label instead of clipping it. */
+html.is-mobile .hud-btn,
+html.is-mobile .mode-btn,
+html.is-mobile .filter-btn,
+html.is-mobile .modal-btn {
+  white-space: normal !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+}
+/* Logo subtitle on phones — let it wrap or hide it instead of bleeding
+   off the right edge. */
+html.is-mobile .logo-sub {
+  display: none !important;
+}
+/* Hard clamp the html/body width to the viewport. Some Android WebView
+   versions ignore `overflow-x:hidden` on body but respect a width
+   constraint with !important. */
+html.is-mobile,
+html.is-mobile body {
+  width: 100vw !important;
+  max-width: 100vw !important;
+  overflow-x: hidden !important;
+}
+/* Textarea/inputs: never overflow horizontally. */
+html.is-mobile textarea,
+html.is-mobile input,
+html.is-mobile .compose-area,
+html.is-mobile .text-input {
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+/* ==========================================================================
+   MOBILE LAYOUT — vertical scroll fix (v0.10.1 -> v0.11.0)
+   The desktop .app uses `height: 100vh` + `display: grid` which prevents
+   the page from growing when content overflows. On mobile we switch to
+   a flow layout that lets the WHOLE PAGE scroll vertically.
+   ========================================================================== */
+html.is-mobile body {
+  height: auto !important;
+  min-height: 100vh !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  -webkit-overflow-scrolling: touch;
+}
+html.is-mobile .app {
+  display: flex !important;
+  flex-direction: column !important;
+  height: auto !important;
+  min-height: 100vh !important;
+  overflow-y: visible !important;
+  gap: 0 !important;
+  padding: 0 !important;
+}
+html.is-mobile .grid {
+  height: auto !important;
+  min-height: 0 !important;
+  flex: 1 1 auto !important;
+}
+/* Peers card: grows with content. Internal scroll only if absurdly tall
+   (>60 peers). Otherwise the whole page scrolls. */
+html.is-mobile .peers {
+  max-height: none !important;
+  height: auto !important;
+}
+html.is-mobile .peer-list {
+  overflow-y: visible !important;
+  max-height: none !important;
+}
+/* Composer: grows with file queue. */
+html.is-mobile .composer {
+  height: auto !important;
+  min-height: 0 !important;
+}
+html.is-mobile .file-queue {
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+/* ---- Settings rows: label + control inline (compact) ---- */
+html.is-mobile .settings-row {
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+  padding: 12px 0 !important;
+  flex-wrap: wrap !important;
+}
+html.is-mobile .settings-label {
+  flex: 1 1 auto !important;
+  min-width: 120px !important;
+  font-size: 10px !important;
+}
+html.is-mobile .settings-control {
+  flex: 0 0 auto !important;
+}
+/* The DATA DIR row + UPDATE row need vertical layout (long value/multi-button). */
+html.is-mobile .settings-info {
+  flex-direction: column !important;
+  align-items: flex-start !important;
+}
+html.is-mobile .settings-info .settings-value {
+  font-size: 9px !important;
+  word-break: break-all !important;
+  max-width: 100% !important;
+}
+html.is-mobile #settings-update-action {
+  flex-direction: column !important;
+  align-items: stretch !important;
+}
+
+/* ---- Status strip (bottom HUD): compact, single row, no overflow ---- */
+html.is-mobile .status-strip {
+  flex-wrap: wrap !important;
+  padding: 8px 10px !important;
+  gap: 8px 12px !important;
+  font-size: 9px !important;
+  position: sticky !important;
+  bottom: 0 !important;
+  background: rgba(4, 8, 18, 0.92) !important;
+  backdrop-filter: blur(8px) !important;
+  border-top: 1px solid var(--neon-cyan-soft) !important;
+  z-index: 150 !important;
+}
+html.is-mobile .status-strip .status-item:nth-child(4),
+html.is-mobile .status-strip .status-item:nth-child(5) {
+  display: none !important; /* hide PROTO + CLACK toggle on phones — too noisy */
+}
+html.is-mobile .status-text {
+  font-size: 9px !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  max-width: 60vw !important;
+}
+html.is-mobile .status-key { font-size: 8px !important; }
+html.is-mobile .status-val { font-size: 9px !important; }
+
 
 /* ==========================================================================
    RUNTIME LOG MODAL

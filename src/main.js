@@ -4,6 +4,32 @@
   'use strict';
 
   const { invoke } = window.__TAURI__.core;
+
+  // Startup diagnostic. Reports viewport + computed layout + ACTUAL
+  // rendered dimensions, so we can tell from the log whether elements
+  // are overflowing horizontally (which produces the "everything cut
+  // off the right side" symptom even when the CSS layout is correct).
+  setTimeout(() => {
+    try {
+      const vp = `${window.innerWidth}x${window.innerHeight}`;
+      const dpr = window.devicePixelRatio;
+      const docW = document.documentElement.clientWidth;
+      const scrollW = document.documentElement.scrollWidth;
+      const overflow = scrollW > docW ? `OVERFLOW:${scrollW}>${docW}` : 'noverflow';
+
+      const dims = (sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return `${sel}=null`;
+        return `${sel}=${Math.round(el.offsetWidth)}x${Math.round(el.offsetHeight)}`;
+      };
+
+      const isMobileClass = document.documentElement.classList.contains('is-mobile');
+      invoke('record_frontend_log', {
+        level: 'INFO',
+        msg: `[viewport] inner=${vp} doc=${docW} scroll=${scrollW} ${overflow} dpr=${dpr} class=${isMobileClass} ${dims('.hud')} ${dims('.hud-right')} ${dims('.grid')} ${dims('.composer')}`
+      }).catch(() => {});
+    } catch (_) {}
+  }, 1500);
   const { listen } = window.__TAURI__.event;
   const dialog = window.__TAURI__.dialog;
   const notification = window.__TAURI__.notification;
@@ -740,6 +766,16 @@
   }
 
   async function addPathToQueue(path) {
+    // Android Storage Access Framework returns content:// URIs from the
+    // file picker. tokio::fs in Rust can't open those — needs a JNI
+    // bridge through Android's ContentResolver, which we haven't built
+    // yet (TODO v0.12.0). Until then, surface a clear message instead
+    // of letting the user queue a file that will fail at TRANSMIT time.
+    if (typeof path === 'string' && path.startsWith('content://')) {
+      setStatus('Cannot send files from this folder yet (Android SAF). Copy them to Downloads/Millennium first.');
+      blip(440, 0.1);
+      return;
+    }
     // Derive name + size on Rust side would be ideal; for MVP we infer
     // name from path and fetch size via fs metadata when sending.
     const name = path.split(/[\\/]/).pop() || 'file';
@@ -1230,6 +1266,57 @@
       }
     });
   }
+  // QR camera scan — Android-only path via tauri-plugin-barcode-scanner.
+  // Reveal the scan button when the plugin is available; if not, the
+  // "Paste QR contents" textarea remains the only option (desktop case).
+  const qrScanBlock = document.getElementById('qr-scan-block');
+  const qrScanBtn = document.getElementById('qr-scan-btn');
+  const barcodeScanner = window.__TAURI__ && window.__TAURI__.barcodeScanner;
+  if (qrScanBlock && barcodeScanner && /android/i.test(navigator.userAgent)) {
+    qrScanBlock.hidden = false;
+  }
+  if (qrScanBtn) {
+    qrScanBtn.addEventListener('click', async () => {
+      if (!barcodeScanner) {
+        setStatus('Camera scanner not available on this device.');
+        return;
+      }
+      try {
+        // Make sure the user has granted CAMERA permission first.
+        if (barcodeScanner.checkPermissions && barcodeScanner.requestPermissions) {
+          const cur = await barcodeScanner.checkPermissions();
+          if (cur !== 'granted') {
+            const req = await barcodeScanner.requestPermissions();
+            if (req !== 'granted') {
+              qrAddError.textContent = 'Camera permission denied.';
+              qrAddError.hidden = false;
+              return;
+            }
+          }
+        }
+        qrScanBtn.disabled = true;
+        qrScanBtn.textContent = '▸ POINT AT QR…';
+        const res = await barcodeScanner.scan({ formats: ['QrCode'] });
+        const content = (res && res.content) ? res.content : '';
+        if (!content) {
+          qrAddError.textContent = 'Empty QR scan.';
+          qrAddError.hidden = false;
+          return;
+        }
+        // Feed the scanned payload into the same pairing flow as paste.
+        const msg = await invoke('pair_with_qr_payload', { payload: content });
+        setStatus(msg);
+        closeQrModal();
+      } catch (err) {
+        qrAddError.textContent = `Scan failed: ${err}`;
+        qrAddError.hidden = false;
+      } finally {
+        qrScanBtn.disabled = false;
+        qrScanBtn.textContent = '▸ SCAN WITH CAMERA';
+      }
+    });
+  }
+
   if (qrAddSubmit) {
     qrAddSubmit.addEventListener('click', async () => {
       const txt = (qrPasteInput.value || '').trim();
@@ -1490,13 +1577,29 @@
 
   settingsApplyUpdate.addEventListener('click', async () => {
     if (!updateInfoCache || !updateInfoCache.downloadUrl) return;
-    const ok = confirm(`Download v${updateInfoCache.latestVersion} and restart the app?`);
+    const isAndroid = /android/i.test(navigator.userAgent);
+    const promptMsg = isAndroid
+      ? `Download v${updateInfoCache.latestVersion} and open the installer?`
+      : `Download v${updateInfoCache.latestVersion} and restart the app?`;
+    const ok = confirm(promptMsg);
     if (!ok) return;
     settingsApplyUpdate.disabled = true;
     settingsApplyUpdate.textContent = '◷ DOWNLOADING...';
     try {
-      await invoke('apply_update', { downloadUrl: updateInfoCache.downloadUrl });
-      // The app should exit before we get here.
+      const result = await invoke('apply_update', { downloadUrl: updateInfoCache.downloadUrl });
+      // On Windows the app exits before we get here. On Android the
+      // command returns the local APK path — we hand it off to the
+      // opener plugin which triggers Android's ACTION_VIEW intent
+      // (the system package installer takes over from there).
+      if (isAndroid && result && typeof result === 'string') {
+        settingsApplyUpdate.textContent = '◷ OPENING INSTALLER...';
+        const opener = window.__TAURI__ && window.__TAURI__.opener;
+        if (opener && opener.openPath) {
+          await opener.openPath(result);
+        } else {
+          settingsApplyUpdate.textContent = `APK at ${result}`;
+        }
+      }
     } catch (err) {
       settingsApplyUpdate.textContent = `ERR · ${err}`;
     }

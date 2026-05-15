@@ -367,16 +367,19 @@ fn set_notifications_enabled(
 
 #[tauri::command]
 async fn set_start_with_windows(
-    app: tauri::AppHandle,
+    #[allow(unused_variables)] app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     value: bool,
 ) -> Result<(), String> {
-    use tauri_plugin_autostart::ManagerExt;
-    let manager = app.autolaunch();
-    if value {
-        manager.enable().map_err(|e| format!("autostart enable: {e}"))?;
-    } else {
-        manager.disable().map_err(|e| format!("autostart disable: {e}"))?;
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_autostart::ManagerExt;
+        let manager = app.autolaunch();
+        if value {
+            manager.enable().map_err(|e| format!("autostart enable: {e}"))?;
+        } else {
+            manager.disable().map_err(|e| format!("autostart disable: {e}"))?;
+        }
     }
     state
         .settings
@@ -691,11 +694,26 @@ fn install_panic_hook() {
 // Clipboard sync (v0.6.0)
 // ---------------------------------------------------------------------------
 
+#[cfg(not(target_os = "android"))]
 enum ClipSnapshot {
     Text(String),
     Image { png_base64: String, hash: String },
 }
 
+#[cfg(target_os = "android")]
+fn spawn_clipboard_poller(
+    _peers: discovery::PeerMap,
+    _store: Arc<clipboard_sync::ClipboardSyncStore>,
+    _my_alias: String,
+    _my_fingerprint: String,
+) {
+    // Android: clipboard polling in background is restricted by the
+    // OS since Android 10. We'll wire this up via tauri-plugin-clipboard-manager
+    // in a later iteration when the foreground service lands.
+    runtime_log::info("[clipboard] poller disabled on Android (handled by foreground service later)");
+}
+
+#[cfg(not(target_os = "android"))]
 fn spawn_clipboard_poller(
     peers: discovery::PeerMap,
     store: Arc<clipboard_sync::ClipboardSyncStore>,
@@ -860,15 +878,37 @@ fn set_clipboard_sync(
 }
 
 #[tauri::command]
-async fn apply_update(app: tauri::AppHandle, download_url: String) -> Result<(), String> {
-    updater::download_and_stage(&download_url)
-        .await
-        .map_err(|e| format!("{e:#}"))?;
-    // Give the batch script a chance to start, then exit so it can move
-    // the file in place.
-    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-    app.exit(0);
-    Ok(())
+async fn apply_update(app: tauri::AppHandle, download_url: String) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        updater::download_and_stage(&download_url)
+            .await
+            .map_err(|e| format!("{e:#}"))?;
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        app.exit(0);
+        Ok(String::new())
+    }
+    #[cfg(target_os = "android")]
+    {
+        // Stage the APK into the app cache and return the path so the
+        // frontend can hand it off to the system package installer
+        // (via tauri-plugin-opener). The user must have "Install
+        // unknown apps" enabled for Millennium for the install to
+        // proceed.
+        let cache_dir = app
+            .path()
+            .app_cache_dir()
+            .map_err(|e| format!("resolve cache dir: {e}"))?;
+        let apk_path = updater::download_and_stage_apk(&download_url, &cache_dir)
+            .await
+            .map_err(|e| format!("{e:#}"))?;
+        Ok(apk_path.to_string_lossy().to_string())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    {
+        let _ = (app, download_url);
+        Err("auto-update not supported on this platform".to_string())
+    }
 }
 
 #[tauri::command]
@@ -910,26 +950,42 @@ pub fn run() {
     #[cfg(target_os = "windows")]
     windows_integration::kill_other_millennium_processes();
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            // Second instance attempted to launch — focus ours instead.
-            use tauri::Manager;
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.unminimize();
-                let _ = w.show();
-                let _ = w.set_focus();
-            }
-            // Drain any leftover argv (used to be Send To file paths;
-            // feature removed in v0.10.1 but stay tolerant).
-            let _ = argv;
-        }))
+    let mut builder = tauri::Builder::default();
+
+    // Desktop-only plugins. single-instance and autostart don't have an
+    // Android backend, and the tray icon lives in build_tray() further
+    // down which is already cfg'd desktop.
+    #[cfg(desktop)]
+    {
+        builder = builder
+            .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+                use tauri::Manager;
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.unminimize();
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+                let _ = argv;
+            }))
+            .plugin(tauri_plugin_autostart::init(
+                tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+                Some(vec!["--autostart"]),
+            ));
+    }
+
+    // Mobile-only plugins. barcode-scanner requires a camera and Android
+    // permissions; not buildable for desktop targets.
+    #[cfg(mobile)]
+    {
+        builder = builder.plugin(tauri_plugin_barcode_scanner::init());
+    }
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec!["--autostart"]),
-        ))
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             // 0a. Bind the in-memory runtime log to the AppHandle so each
             //     log line is emitted live to the frontend log panel.
@@ -961,29 +1017,30 @@ pub fn run() {
 
             // 0a.2 Force the window header icon to use our embedded .ico
             //      so it doesn't fall back to the Tauri default glyph.
-            if let Some(main_win) = app.get_webview_window("main") {
-                let icon = tauri::include_image!("icons/icon.png");
-                let _ = main_win.set_icon(icon);
+            #[cfg(desktop)]
+            {
+                if let Some(main_win) = app.get_webview_window("main") {
+                    let icon = tauri::include_image!("icons/icon.png");
+                    let _ = main_win.set_icon(icon);
 
-                // Tauri's set_icon doesn't always update the Win32 title-bar
-                // small icon — go direct via WM_SETICON to make sure the
-                // header shows the Puzzle and not the default Tauri glyph.
-                #[cfg(target_os = "windows")]
-                {
-                    if let Ok(hwnd) = main_win.hwnd() {
-                        windows_integration::apply_window_icon_win32(hwnd.0 as isize);
-                    } else {
-                        runtime_log::warn("[boot] could not resolve hwnd for main window");
+                    #[cfg(target_os = "windows")]
+                    {
+                        if let Ok(hwnd) = main_win.hwnd() {
+                            windows_integration::apply_window_icon_win32(hwnd.0 as isize);
+                        } else {
+                            runtime_log::warn("[boot] could not resolve hwnd for main window");
+                        }
                     }
+                } else {
+                    runtime_log::warn("[boot] no webview window 'main' to set icon on");
                 }
-            } else {
-                runtime_log::warn("[boot] no webview window 'main' to set icon on");
             }
 
             // 0a.3 System tray. The window-close handler (see bottom of
             //      this setup) hides the window instead of quitting if
             //      `close_to_tray` is on. The tray menu is the only way
             //      to fully exit when that mode is active.
+            #[cfg(desktop)]
             build_tray(app.handle())?;
 
             // 0a.4 If launched by Windows autostart (--autostart flag),
@@ -1039,10 +1096,28 @@ pub fn run() {
             // Tauri path API here — calling desktop_dir() inside the
             // setup callback can stall on Windows because the shell
             // known-folder lookup runs before COM is fully ready.
+            // Default download dir is platform-specific:
+            //   - Windows/Linux/Mac: ~/Desktop (so received files land
+            //     where the user can see them).
+            //   - Android: the shared Download folder is locked behind
+            //     SAF since Android 10; fall back to the app-scoped
+            //     download dir which is visible from the Files app
+            //     under "Android/data/com.guidocameraeq.millennium/
+            //     files/Download". No special permissions needed.
+            #[cfg(target_os = "android")]
+            let default_download = app
+                .path()
+                .download_dir()
+                .ok()
+                .or_else(|| app.path().app_local_data_dir().ok().map(|p| p.join("Download")))
+                .unwrap_or_else(|| std::path::PathBuf::from("/storage/emulated/0/Download"));
+
+            #[cfg(not(target_os = "android"))]
             let default_download = std::env::var_os("USERPROFILE")
                 .map(|p| PathBuf::from(p).join("Desktop"))
                 .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join("Desktop")))
                 .unwrap_or_else(std::env::temp_dir);
+
             runtime_log::info(format!(
                 "[setup] default_download_dir = {}",
                 default_download.display()
@@ -1282,6 +1357,7 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
+#[cfg(desktop)]
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
     use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};

@@ -736,14 +736,29 @@ async fn handle_clipboard(
     let hash = hash_text(&payload.text);
     state.clipboard.note_synced(hash);
 
-    // Write to the local clipboard (blocking work runs off-runtime).
-    let text_for_write = payload.text.clone();
-    let written = tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-        cb.set_text(text_for_write).map_err(|e| e.to_string())?;
-        Ok(())
-    })
-    .await;
+    // Write to the local clipboard. arboard handles desktop; Android
+    // uses tauri-plugin-clipboard-manager because arboard doesn't
+    // compile for that target.
+    #[cfg(not(target_os = "android"))]
+    let written = {
+        let text_for_write = payload.text.clone();
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+            cb.set_text(text_for_write).map_err(|e| e.to_string())?;
+            Ok(())
+        })
+        .await
+    };
+    #[cfg(target_os = "android")]
+    let written: Result<Result<(), String>, tokio::task::JoinError> = {
+        use tauri_plugin_clipboard_manager::ClipboardExt;
+        let result = state
+            .app
+            .clipboard()
+            .write_text(payload.text.clone())
+            .map_err(|e| e.to_string());
+        Ok(result)
+    };
 
     if let Ok(Err(e)) = written {
         eprintln!("[clipboard] failed to write OS clipboard: {}", e);
@@ -805,7 +820,9 @@ async fn handle_clipboard_image(
 
     // Decode + rewrite to OS clipboard on a blocking thread. arboard
     // wants an ImageData with RGBA8 pixels, so we go PNG → DynamicImage
-    // → RGBA8 raw.
+    // → RGBA8 raw. On Android arboard isn't available; we only return
+    // the WxH for the UI event (the OS clipboard write comes later).
+    #[cfg(not(target_os = "android"))]
     let decoded = tokio::task::spawn_blocking(move || -> Result<(u32, u32), String> {
         let img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
         let rgba = img.to_rgba8();
@@ -818,6 +835,12 @@ async fn handle_clipboard_image(
         let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
         cb.set_image(image_data).map_err(|e| e.to_string())?;
         Ok((w, h))
+    })
+    .await;
+    #[cfg(target_os = "android")]
+    let decoded = tokio::task::spawn_blocking(move || -> Result<(u32, u32), String> {
+        let img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+        Ok((img.width(), img.height()))
     })
     .await;
 
