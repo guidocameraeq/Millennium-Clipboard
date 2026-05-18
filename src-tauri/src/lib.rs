@@ -892,19 +892,42 @@ async fn apply_update(app: tauri::AppHandle, download_url: String) -> Result<Str
     }
     #[cfg(target_os = "android")]
     {
-        // Stage the APK into the app cache and return the path so the
-        // frontend can hand it off to the system package installer
-        // (via tauri-plugin-opener). The user must have "Install
-        // unknown apps" enabled for Millennium for the install to
-        // proceed.
+        // Stage the APK directly into the user's public Downloads
+        // folder via MediaStore (tauri-plugin-android-fs). The system
+        // package installer can't be reliably launched from Tauri 2
+        // on Android — every plugin-opener variant we tried hit the
+        // OpenArgs deserialization bug — so we make the manual path
+        // a pleasant one: the APK lands in /Downloads/, the user
+        // taps it from Files / their notifications, Android shows
+        // its standard "Install app?" dialog.
+        // First download to a temp blob, then publish via MediaStore.
         let cache_dir = app
             .path()
             .app_cache_dir()
             .map_err(|e| format!("resolve cache dir: {e}"))?;
-        let apk_path = updater::download_and_stage_apk(&download_url, &cache_dir)
+        let staged = updater::download_and_stage_apk(&download_url, &cache_dir)
             .await
             .map_err(|e| format!("{e:#}"))?;
-        Ok(apk_path.to_string_lossy().to_string())
+        let bytes = tokio::fs::read(&staged)
+            .await
+            .map_err(|e| format!("read staged apk: {e}"))?;
+        // Best-effort cleanup of the cache copy (the public URI is
+        // what we care about going forward).
+        let _ = tokio::fs::remove_file(&staged).await;
+        let filename = format!(
+            "Millennium Clipboard v{}.apk",
+            updater::version_for_filename(&download_url)
+        );
+        let uri = android_fs_bridge::save_to_public_downloads(
+            &app,
+            &filename,
+            &bytes,
+            Some("application/vnd.android.package-archive"),
+        )
+        .await
+        .map_err(|e| format!("publish apk to Downloads: {e}"))?;
+        // Return the public URI so the frontend can show it.
+        Ok(uri)
     }
     #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {

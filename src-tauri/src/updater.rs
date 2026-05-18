@@ -183,6 +183,21 @@ pub async fn download_and_stage(download_url: &str) -> Result<()> {
 /// `tauri-plugin-opener` (which triggers an ACTION_VIEW intent that
 /// brings up Android's "Install app?" dialog). Sideload-style — the
 /// user must have already enabled "Install unknown apps" for our app.
+/// Best-effort version extraction from a GitHub release asset URL.
+/// Falls back to "update" so we always have a filename suffix to use.
+#[cfg(target_os = "android")]
+pub fn version_for_filename(download_url: &str) -> String {
+    // GitHub asset URLs look like:
+    //   https://github.com/.../releases/download/v0.15.0/Millennium%20Clipboard.apk
+    download_url
+        .split("/releases/download/")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .map(|tag| tag.trim_start_matches('v').to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "update".to_string())
+}
+
 #[cfg(target_os = "android")]
 pub async fn download_and_stage_apk(download_url: &str, cache_dir: &std::path::Path) -> Result<std::path::PathBuf> {
     let client = reqwest::Client::builder()

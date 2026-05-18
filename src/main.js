@@ -1093,7 +1093,9 @@
     settingsUpdateStatus.textContent = `current v${(window.__LOCAL_INFO || {}).version || '?'}`;
     settingsUpdateAction.hidden = true;
     settingsApplyUpdate.disabled = false;
-    settingsApplyUpdate.textContent = '▸ DOWNLOAD & RESTART';
+    settingsApplyUpdate.textContent = /android/i.test(navigator.userAgent)
+      ? '▸ DOWNLOAD & INSTALL'
+      : '▸ DOWNLOAD & RESTART';
     settingsModal.hidden = false;
   }
 
@@ -1627,51 +1629,21 @@
     try {
       const result = await invoke('apply_update', { downloadUrl: updateInfoCache.downloadUrl });
       // On Windows the app exits before we get here. On Android the
-      // command returns the local APK path. The "open the system
-      // installer" step is fragile in Tauri 2.x — several args shapes
-      // exist depending on plugin version, and the Android WebView
-      // sometimes doesn't expose the JS wrapper at all. We try the
-      // known-good shapes in order and log each attempt to the
-      // runtime log so failures are diagnosable, then fall back to
-      // showing the path so the user can install manually from Files.
+      // command returns the public Downloads URI where the APK was
+      // published via MediaStore. We don't try to launch the system
+      // installer programmatically anymore — every variant of
+      // plugin-opener we tried (3 shapes across 2 releases) hit the
+      // same OpenArgs deserialization bug. Instead we tell the user
+      // exactly where the APK landed and let them tap it from
+      // Files / the download-complete notification Android shows
+      // for MediaStore inserts.
       if (isAndroid && result && typeof result === 'string') {
-        settingsApplyUpdate.textContent = '◷ OPENING INSTALLER...';
-        const tryOpen = async (label, fn) => {
-          try {
-            await fn();
-            reportToBackend('INFO', `[updater] installer opened via ${label}`);
-            return true;
-          } catch (err) {
-            reportToBackend('WARN', `[updater] ${label} failed: ${err}`);
-            return false;
-          }
-        };
-
-        let opened = false;
-        // 1) invoke plugin opener directly with {path, with}
-        if (!opened) {
-          opened = await tryOpen('invoke(path+with:null)', () =>
-            invoke('plugin:opener|open_path', { path: result, with: null })
-          );
-        }
-        // 2) invoke plugin opener with just {path}
-        if (!opened) {
-          opened = await tryOpen('invoke(path-only)', () =>
-            invoke('plugin:opener|open_path', { path: result })
-          );
-        }
-        // 3) injected global wrapper if it exists
-        if (!opened && window.__TAURI__ && window.__TAURI__.opener && window.__TAURI__.opener.openPath) {
-          opened = await tryOpen('global.openPath(path)', () =>
-            window.__TAURI__.opener.openPath(result)
-          );
-        }
-
-        if (!opened) {
-          settingsApplyUpdate.textContent = '⚠ Open manually';
-          settingsUpdateBanner.textContent = `APK downloaded to: ${result}`;
-          setStatus('APK downloaded — open it from Files app to install.');
-        }
+        settingsApplyUpdate.textContent = '✓ DOWNLOADED — OPEN IT FROM FILES';
+        settingsUpdateBanner.textContent = `APK saved to your Downloads folder. Open it from the Files app (or the download notification) and tap "Install".`;
+        setStatus('APK downloaded — open it from Files / Downloads to install.');
+        // Also fire a system notification so the user has a quick
+        // tap-target even if they navigated away from Settings.
+        notify('⬆ Update ready', 'Open Downloads to install the new APK.');
       }
     } catch (err) {
       settingsApplyUpdate.textContent = `ERR · ${err}`;
@@ -1942,13 +1914,19 @@
       const { senderAlias, fileCount, totalSize, destinationDir } = event.payload;
       progressBlock.hidden = true;
       setProgress(0);
+      // On Android the backend publishes the final file to /Downloads/
+      // via MediaStore (see http_server.rs), so the user-visible
+      // location is "Downloads" regardless of the app-scoped staging
+      // path that came in the event.
+      const isAndroid = /android/i.test(navigator.userAgent);
+      const visibleLocation = isAndroid ? 'Downloads (open from Files / Gallery)' : destinationDir;
       setStatus(`RX OK · ${fileCount} file(s) from ${senderAlias} saved`);
-      showToast(`${senderAlias} → ${fileCount} FILE(S) · ${formatBytes(totalSize)} · saved to ${destinationDir}`);
+      showToast(`${senderAlias} → ${fileCount} FILE(S) · ${formatBytes(totalSize)} · saved to ${visibleLocation}`);
       blip(1760, 0.12);
       setTimeout(() => blip(2200, 0.16), 130);
       notify(
         `✓ ${fileCount} file(s) received from ${senderAlias}`,
-        `${formatBytes(totalSize)} saved to ${destinationDir}`
+        `${formatBytes(totalSize)} saved to ${visibleLocation}`
       );
     });
 

@@ -2053,26 +2053,81 @@ html.is-mobile #settings-download-dir {
   display: block !important;
 }
 
-/* Settings → UPDATES row: same fix. The status text + the banner span
-   are long English strings that previously rendered one-letter-per
-   -line because of the global `max-width: 100%` + `mono` font + flex
-   pressure. */
+/* Settings → UPDATES — redesigned layout (v0.15.0). The row is a
+   single column container with two stacked blocks; each block uses
+   its own internal flow. No nested flexbox + no inline width fights.
+   Works on desktop + mobile because everything just stacks naturally. */
+.updates-row {
+  flex-direction: column !important;
+  align-items: stretch !important;
+  gap: 12px !important;
+}
+.updates-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--neon-cyan-soft);
+  background: rgba(0, 240, 255, 0.04);
+}
+.updates-block.updates-action {
+  border-color: var(--neon-cyan);
+  background: rgba(0, 240, 255, 0.09);
+  box-shadow: 0 0 12px var(--neon-cyan-glow);
+}
+.updates-block[hidden] { display: none; }
+.updates-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.updates-label {
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: var(--text-mute);
+}
+#settings-update-status {
+  font-size: 13px;
+  color: var(--neon-cyan);
+  text-shadow: 0 0 6px var(--neon-cyan-glow);
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+.updates-banner {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--neon-cyan);
+  text-shadow: 0 0 5px var(--neon-cyan-glow);
+  word-break: normal;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.updates-btn {
+  width: 100%;
+  min-height: 40px;
+  font-size: 12px;
+  letter-spacing: 2px;
+}
+.updates-btn.accent {
+  border-color: var(--neon-cyan);
+  color: var(--neon-cyan);
+  text-shadow: 0 0 8px var(--neon-cyan-glow);
+}
+
+/* Make sure the global mobile rules don't squeeze these into the
+   1-char-column trap we keep hitting. */
+html.is-mobile .updates-block,
+html.is-mobile .updates-line,
+html.is-mobile .updates-banner,
 html.is-mobile #settings-update-status,
-html.is-mobile #settings-update-banner {
-  flex: 1 1 100% !important;
+html.is-mobile .updates-btn {
   min-width: 0 !important;
   max-width: 100% !important;
-  font-size: 11px !important;
   word-break: normal !important;
   overflow-wrap: anywhere !important;
   white-space: normal !important;
-  line-height: 1.4 !important;
-  display: block !important;
-}
-html.is-mobile #settings-update-action {
-  flex-direction: column !important;
-  align-items: stretch !important;
-  gap: 6px !important;
 }
 html.is-mobile #settings-update-action {
   flex-direction: column !important;

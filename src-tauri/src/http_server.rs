@@ -642,6 +642,51 @@ async fn handle_upload(
 
     file.completed.store(true, Ordering::Relaxed);
 
+    // ANDROID: copy the finished file to the *public* /Downloads/
+    // folder via MediaStore so it's visible from Files / Gallery and
+    // not stuck in the app-private sandbox. We keep streaming to the
+    // app-scoped path for the actual transfer (so resume / hashing /
+    // existing tokio::fs paths keep working unchanged), then publish
+    // the final file in one shot. The app-scoped copy is removed
+    // afterwards to avoid duplicates.
+    #[cfg(target_os = "android")]
+    {
+        if let Ok(bytes) = tokio::fs::read(&target_path).await {
+            let mime = file
+                .rel_path
+                .as_deref()
+                .and_then(|p| mime_guess::from_path(p).first())
+                .or_else(|| mime_guess::from_path(&file.name).first())
+                .map(|m| m.essence_str().to_string());
+            match crate::android_fs_bridge::save_to_public_downloads(
+                &state.app,
+                &file.name,
+                &bytes,
+                mime.as_deref(),
+            )
+            .await
+            {
+                Ok(public_uri) => {
+                    eprintln!(
+                        "[http] published {} to public Downloads: {}",
+                        file.name, public_uri
+                    );
+                    // Remove the private copy now that the public one
+                    // is in MediaStore.
+                    let _ = tokio::fs::remove_file(&target_path).await;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[http] could not publish {} to /Downloads: {} (file stays at {})",
+                        file.name,
+                        e,
+                        target_path.display()
+                    );
+                }
+            }
+        }
+    }
+
     // Final progress event
     let _ = state.app.emit(
         "transfer-progress-receiver",

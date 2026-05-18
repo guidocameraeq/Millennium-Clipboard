@@ -22,7 +22,7 @@ use std::path::PathBuf;
 
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_android_fs::{
-    AndroidFsExt, FileUri, PublicImageDir, PrivateDir,
+    AndroidFsExt, FileUri, PublicGeneralPurposeDir, PublicImageDir, PrivateDir,
 };
 
 /// Copy a `content://` URI into <app_cache>/uploads/<displayName>
@@ -94,5 +94,35 @@ pub async fn save_image_to_gallery<R: Runtime>(
 
     let _ = api.public_storage().scan(&uri).await;
 
+    Ok(uri.uri)
+}
+
+/// Write a full byte buffer to the public Downloads folder via
+/// MediaStore. Returns the public URI string for callers that want
+/// to surface "saved to ..." to the user. The plugin handles name
+/// collisions by appending " (1)", " (2)", etc., so it's safe to
+/// pass any user-supplied filename.
+pub async fn save_to_public_downloads<R: Runtime>(
+    app: &AppHandle<R>,
+    filename: &str,
+    bytes: &[u8],
+    mime: Option<&str>,
+) -> Result<String, String> {
+    let api = app.android_fs_async();
+    let _ = api.public_storage().request_permission().await;
+
+    let uri = api
+        .public_storage()
+        .write_new(
+            None,
+            PublicGeneralPurposeDir::Download,
+            filename,
+            mime,
+            bytes,
+        )
+        .await
+        .map_err(|e| format!("write_new downloads: {e}"))?;
+
+    let _ = api.public_storage().scan(&uri).await;
     Ok(uri.uri)
 }
