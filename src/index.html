@@ -216,7 +216,7 @@
     </footer>
   </div>
 
-  <!-- Toast / alert (futuristic) -->
+  <!-- Toast / alert (futuristic) — ephemeral ACK of an outgoing send -->
   <div class="alert" id="toast" hidden>
     <div class="alert-corners">
       <span></span><span></span><span></span><span></span>
@@ -226,6 +226,19 @@
       <span class="alert-title">TRANSMIT OK</span>
     </div>
     <div class="alert-body" id="toast-text"></div>
+  </div>
+
+  <!-- Incoming text — its OWN persistent surface so an outgoing ACK toast
+       can never wipe a received message before the user copies it. -->
+  <div class="alert" id="incoming-toast" hidden>
+    <div class="alert-corners">
+      <span></span><span></span><span></span><span></span>
+    </div>
+    <div class="alert-head">
+      <span class="alert-glyph">◂</span>
+      <span class="alert-title" id="incoming-toast-title">INCOMING</span>
+    </div>
+    <div class="alert-body" id="incoming-toast-text"></div>
   </div>
 
   <!-- Incoming files modal -->

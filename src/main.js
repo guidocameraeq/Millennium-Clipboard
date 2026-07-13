@@ -107,6 +107,8 @@
   const progressPct = document.getElementById('progress-pct');
   const toast = document.getElementById('toast');
   const toastText = document.getElementById('toast-text');
+  const incomingToast = document.getElementById('incoming-toast');
+  const incomingToastText = document.getElementById('incoming-toast-text');
   const dropzone = document.getElementById('dropzone');
   const fileQueue = document.getElementById('file-queue');
   const soundToggle = document.getElementById('sound-toggle');
@@ -247,22 +249,22 @@
   }
 
   function showIncomingText(text, alias, fingerprint, senderIp, senderPort) {
-    if (toastHideTimer) {
-      clearTimeout(toastHideTimer);
-      toastHideTimer = null;
-    }
-    setToastTitle(`◂ INCOMING FROM ${alias}`);
-    toastText.innerHTML = '';
+    // Incoming text renders into its OWN surface (#incoming-toast), never the
+    // shared ACK toast — so a later 'TRANSMIT OK' ACK can't innerHTML='' this
+    // node and destroy a received message before the user copies it.
+    const titleEl = document.getElementById('incoming-toast-title');
+    if (titleEl) titleEl.textContent = `◂ INCOMING FROM ${alias}`;
+    incomingToastText.innerHTML = '';
 
     const body = document.createElement('div');
     body.className = 'incoming-body';
     body.textContent = text;
-    toastText.appendChild(body);
+    incomingToastText.appendChild(body);
 
     const meta = document.createElement('div');
     meta.className = 'incoming-meta mono';
-    meta.textContent = `${text.length} CHARS · ${fingerprint.slice(0, 16)}... · ${senderIp || '?'}`;
-    toastText.appendChild(meta);
+    meta.textContent = `${text.length} CHARS · ${String(fingerprint || '').slice(0, 16)}... · ${senderIp || '?'}`;
+    incomingToastText.appendChild(meta);
 
     const actions = document.createElement('div');
     actions.className = 'incoming-actions';
@@ -306,12 +308,12 @@
     closeBtn.className = 'incoming-btn';
     closeBtn.textContent = '✕ CLOSE';
     closeBtn.addEventListener('click', () => {
-      toast.hidden = true;
+      incomingToast.hidden = true;
     });
     actions.appendChild(closeBtn);
 
-    toastText.appendChild(actions);
-    toast.hidden = false;
+    incomingToastText.appendChild(actions);
+    incomingToast.hidden = false;
   }
 
   function isKnownPeer(fingerprint) {

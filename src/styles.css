@@ -1173,6 +1173,13 @@ html, body {
   animation: alert-in 0.3s ease-out;
 }
 
+/* Incoming text sits top-right so it never overlaps the bottom-right ACK
+   toast — the two can be on screen at once (receive while sending). */
+#incoming-toast {
+  top: 80px;
+  bottom: auto;
+}
+
 .alert-corners {
   position: absolute;
   inset: 0;
