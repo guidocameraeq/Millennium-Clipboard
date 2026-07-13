@@ -328,7 +328,10 @@
     } else {
       phTimer = setTimeout(() => {
         textarea.placeholder = line;
-        setTimeout(() => {
+        // This inner timer must land in phTimer too — otherwise stopPh()
+        // during the 1600ms pause can't cancel the chain and repeated
+        // hide/show cycles pile up concurrent typewriters.
+        phTimer = setTimeout(() => {
           phIdx = (phIdx + 1) % placeholderLines.length;
           typePh(placeholderLines[phIdx]);
         }, 1600);

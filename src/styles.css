@@ -2598,6 +2598,13 @@ html.is-mobile .status-val { font-size: 9px !important; }
    banner-in, backdrop-in) stay on their base rules — they don't loop.
    ========================================================================== */
 
+/* The scanline is only meant to be seen mid-sweep (its keyframes rest at
+   opacity 0). Without the animation it would sit as a permanent bright
+   line, so under reduced motion it must disappear entirely. */
+@media (prefers-reduced-motion: reduce) {
+  .scanline { display: none; }
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .horizon-floor::before          { animation: grid-scroll 4s linear infinite; }
   .scanline                       { animation: scan-drop 7.5s linear infinite; }
