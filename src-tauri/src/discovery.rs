@@ -334,6 +334,7 @@ pub fn start(
         // so without this the log is pure spam.
         let mut skip_logged: Map<String, String> = Map::new();
         let mut tick = tokio::time::interval(Duration::from_secs(6));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         tick.tick().await; // skip the immediate first tick
 
         loop {

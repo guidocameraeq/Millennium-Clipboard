@@ -132,6 +132,10 @@ async fn run(
 
     let mut buf = vec![0u8; 4096];
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(BROADCAST_INTERVAL_SECS));
+    // Skip missed ticks instead of firing a catch-up burst: if a recv or
+    // send stalls past the interval, we want the next tick scheduled from
+    // "now", not a pile of accumulated ticks all at once.
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut send_count: u64 = 0;
 
     loop {
