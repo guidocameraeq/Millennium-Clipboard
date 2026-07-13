@@ -193,6 +193,7 @@
     pendingIncoming: null, // { sessionId, files, totalSize, deadlineAt }
     incomingTimerHandle: null,
     activeTransfer: null, // { sessionId, files: [{ fileId, name, size, bytes }], totalBytes }
+    targetLost: false, // the selected peer vanished from the snapshot (2.2.b)
   };
 
   // ---------- Progress bar segments ----------------------------------------
@@ -628,6 +629,7 @@
     const peer = state.peers.find((p) => p.id === id);
     if (!peer) return;
     state.selectedPeerId = id;
+    state.targetLost = false; // conscious re-selection clears the lost state
     setText(targetName, peer.name);
     setText(targetHex, peer.hexId);
     const isOffline = peer.status === 'offline';
@@ -864,7 +866,10 @@
   // ---------- Transmit / send ----------------------------------------------
   async function transmit() {
     if (!state.selectedPeerId) {
-      setStatus('ERR · no peer selected.');
+      setStatus(
+        state.targetLost ? 'ERR · TARGET LOST — select a peer.' : 'ERR · no peer selected.',
+        { priority: 'err' }
+      );
       blip(220, 0.12);
       return;
     }
@@ -2086,19 +2091,24 @@
       return { ...p, status };
     });
 
-    // Drop selection if the selected peer vanished.
+    // The selected peer vanished from the snapshot: DO NOT silently re-point
+    // to another peer (you could end up transmitting a secret to the wrong
+    // one). Surface TARGET LOST and make the user re-select consciously.
     if (state.selectedPeerId && !state.peers.find((p) => p.id === state.selectedPeerId)) {
       state.selectedPeerId = null;
-      setText(targetName, '—');
+      state.targetLost = true;
+      setText(targetName, 'TARGET LOST');
       setText(targetHex, '—');
       if (sendBtn) sendBtn.disabled = true;
+      setStatus('TARGET LOST · peer went offline. Pick another.', { priority: 'warn', ttl: 6000 });
     }
 
     // Render the list ALWAYS so it stays in sync with state.peers.
     renderPeers();
 
-    // If nothing selected and peers exist, pick the first.
-    if (!state.selectedPeerId && state.peers.length > 0) {
+    // Auto-select the first peer ONLY on the initial load — never on later
+    // snapshots, and never right after losing the target.
+    if (initial && !state.selectedPeerId && !state.targetLost && state.peers.length > 0) {
       state.selectedPeerId = state.peers[0].id;
       selectPeer(state.selectedPeerId);
     }
