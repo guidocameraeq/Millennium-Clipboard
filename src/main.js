@@ -105,6 +105,10 @@
   const progressSegments = document.getElementById('progress-segments');
   const progressText = document.getElementById('progress-text');
   const progressPct = document.getElementById('progress-pct');
+  const rxProgressBlock = document.getElementById('rx-progress-block');
+  const rxProgressSegments = document.getElementById('rx-progress-segments');
+  const rxProgressText = document.getElementById('rx-progress-text');
+  const rxProgressPct = document.getElementById('rx-progress-pct');
   const toast = document.getElementById('toast');
   const toastText = document.getElementById('toast-text');
   const incomingToast = document.getElementById('incoming-toast');
@@ -195,6 +199,7 @@
     pendingIncoming: null, // { sessionId, files, totalSize, deadlineAt }
     incomingTimerHandle: null,
     activeTransfer: null, // { sessionId, files: [{ fileId, name, size, bytes }], totalBytes }
+    activeReceive: null, // { sessionId } — RX bar keying, independent of TX (2.2.e)
     targetLost: false, // the selected peer vanished from the snapshot (2.2.b)
   };
 
@@ -211,6 +216,20 @@
     const filled = Math.round((pct / 100) * SEGMENTS);
     segs.forEach((s, i) => s.classList.toggle('on', i < filled));
     progressPct.textContent = `${pct}%`;
+  }
+
+  // Receiver bar — independent segments/fill from the TX bar above.
+  for (let i = 0; i < SEGMENTS; i++) {
+    const s = document.createElement('div');
+    s.className = 'seg';
+    rxProgressSegments.appendChild(s);
+  }
+  const rxSegs = [...rxProgressSegments.children];
+
+  function setRxProgress(pct) {
+    const filled = Math.round((pct / 100) * SEGMENTS);
+    rxSegs.forEach((s, i) => s.classList.toggle('on', i < filled));
+    rxProgressPct.textContent = `${pct}%`;
   }
 
   // ---------- Status helpers -----------------------------------------------
@@ -2001,14 +2020,20 @@
     });
 
     await listen('transfer-progress-receiver', (event) => {
-      const { bytesReceived, total } = event.payload;
-      if (total > 0) {
-        const pct = Math.min(99, Math.round((bytesReceived / total) * 100));
-        setProgress(pct);
-        progressBlock.hidden = false;
-        progressText.textContent = `RECEIVING // ${formatBytes(bytesReceived)} / ${formatBytes(total)}`;
-        setStatus(`RX · ${formatBytes(bytesReceived)} received`);
+      const { bytesReceived, total, sessionId } = event.payload;
+      if (!total || total <= 0) return;
+      // Key RX by session so a concurrent send (which drives the TX bar) can't
+      // make the two flows fight over one bar.
+      if (!state.activeReceive || state.activeReceive.sessionId !== sessionId) {
+        state.activeReceive = { sessionId };
       }
+      const pct = Math.min(99, Math.round((bytesReceived / total) * 100));
+      setRxProgress(pct);
+      rxProgressBlock.hidden = false;
+      rxProgressText.textContent = `RECEIVING // ${formatBytes(bytesReceived)} / ${formatBytes(total)}`;
+      // Info + no TTL barrier: routine RX progress, must keep updating and
+      // must not block errors from showing.
+      setStatus(`RX · ${formatBytes(bytesReceived)} received`, { priority: 'info', ttl: 0 });
     });
 
     await listen('file-completed', (event) => {
@@ -2020,8 +2045,10 @@
 
     await listen('session-completed', (event) => {
       const { senderAlias, fileCount, totalSize, destinationDir } = event.payload;
-      progressBlock.hidden = true;
-      setProgress(0);
+      // This is a RECEIVER event — clear the RX bar, never the TX bar.
+      rxProgressBlock.hidden = true;
+      setRxProgress(0);
+      state.activeReceive = null;
       // On Android the backend publishes the final file to /Downloads/
       // via MediaStore (see http_server.rs), so the user-visible
       // location is "Downloads" regardless of the app-scoped staging
@@ -2039,8 +2066,10 @@
     });
 
     await listen('session-cancelled', () => {
-      progressBlock.hidden = true;
-      setProgress(0);
+      // Receiver-side cancel — clear the RX bar, leave the TX bar alone.
+      rxProgressBlock.hidden = true;
+      setRxProgress(0);
+      state.activeReceive = null;
       setStatus('Transfer cancelled.');
     });
 

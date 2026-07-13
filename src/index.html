@@ -171,12 +171,23 @@
         </div>
 
         <div class="send-section">
+          <!-- Sender (TX) progress. Driven by transmit* + transfer-progress-sender. -->
           <div class="progress-block" id="progress-block" hidden>
             <div class="progress-label mono">
               <span id="progress-text">TRANSMITTING //</span>
               <span class="progress-pct mono" id="progress-pct">0%</span>
             </div>
             <div class="progress-segments" id="progress-segments"></div>
+          </div>
+
+          <!-- Receiver (RX) progress. Separate surface so a concurrent
+               incoming transfer never corrupts the TX bar (LAN is full-duplex). -->
+          <div class="progress-block rx-progress-block" id="rx-progress-block" hidden>
+            <div class="progress-label mono">
+              <span id="rx-progress-text">RECEIVING //</span>
+              <span class="progress-pct mono" id="rx-progress-pct">0%</span>
+            </div>
+            <div class="progress-segments" id="rx-progress-segments"></div>
           </div>
 
           <button class="transmit-btn" id="send-btn" disabled>
