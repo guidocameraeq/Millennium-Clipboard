@@ -95,10 +95,37 @@ pub fn cleanup_legacy_send_to_shortcut() {
 /// "another instance running" banner). Single-instance plugin handles
 /// the normal case; this covers the crash-recovery case.
 pub fn kill_other_millennium_processes() {
+    // Dev double-launch coordinates ports via MILLENNIUM_INSTANCE and runs
+    // two live instances on purpose — never let one kill its twin.
+    if std::env::var("MILLENNIUM_INSTANCE")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .is_some()
+    {
+        crate::runtime_log::info(
+            "[win] MILLENNIUM_INSTANCE set — skipping zombie cleanup (dev double-launch)",
+        );
+        return;
+    }
+
     let our_pid = std::process::id();
+    let port = crate::discovery::DEFAULT_PORT;
+    // Target the zombie two ways, always excluding our own PID:
+    //  1) whoever actually LISTENS on the app port (the real root cause of
+    //     "another instance running" — a dead process still owning 53319);
+    //  2) by BOTH exe names (release 'Millennium Clipboard', dev
+    //     'millennium-clipboard'), as a fallback if the port was already
+    //     released but the process lingers.
+    // No wildcard match, so we never sweep unrelated user processes.
     let ps_cmd = format!(
-        "$ErrorActionPreference='SilentlyContinue'; Get-Process millennium-clipboard | Where-Object {{ $_.Id -ne {} }} | ForEach-Object {{ Stop-Process -Id $_.Id -Force; Write-Output $_.Id }}",
-        our_pid
+        r#"$ErrorActionPreference='SilentlyContinue';
+$our={pid};
+$targets=@();
+Get-NetTCPConnection -LocalPort {port} -State Listen | ForEach-Object {{ $targets += $_.OwningProcess }};
+Get-Process -Name 'Millennium Clipboard','millennium-clipboard' | ForEach-Object {{ $targets += $_.Id }};
+$targets | Sort-Object -Unique | Where-Object {{ $_ -and $_ -ne $our }} | ForEach-Object {{ Stop-Process -Id $_ -Force; Write-Output $_ }}"#,
+        pid = our_pid,
+        port = port
     );
     match std::process::Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &ps_cmd])
@@ -113,10 +140,11 @@ pub fn kill_other_millennium_processes() {
                 .collect();
             if !killed_pids.is_empty() {
                 crate::runtime_log::info(format!(
-                    "[win] killed {} stale millennium-clipboard process(es): [{}] (our PID={})",
+                    "[win] killed {} stale Millennium process(es): [{}] (our PID={}, port={})",
                     killed_pids.len(),
                     killed_pids.join(", "),
-                    our_pid
+                    our_pid,
+                    port
                 ));
                 // Give Windows a beat to release the TCP port held by
                 // the dead processes.
