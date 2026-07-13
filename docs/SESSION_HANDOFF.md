@@ -19,16 +19,13 @@
 - **NO se hizo `git push`** (esperando OK del usuario).
 
 ## En curso
-- Nada. Fase 1 implementada y con review aplicado.
+- Nada. Fase 1 implementada, con review aplicado y **verificada físicamente (core)**.
+
+## Fase 1 — verificación física (2026-07-13, 2 dispositivos, build release desplegado)
+**OK en lo core:** las 2 PCs se ven, el peer queda fijo (NO parpadea), CPU ~0 en reposo, el reaper marca offline en ~15 s al cerrar un peer, y las transferencias andan en ambos sentidos. El build desplegado corre en las 2 PCs (escritorio + copia enviada por zip). **NO probado físicamente (opcional, verificado por máquina, bajo riesgo):** roaming (re-anuncio al cambiar de red) y el QR mostrando la IP nueva tras un roam.
 
 ## Próximo paso CONCRETO
-1. **Verificación física de la Fase 1 con 2 dispositivos en la misma Wi-Fi** (esto es lo único que falta para declararla VERIFICADA — hoy está solo verificada por máquina). Mirar el panel de LOG y la lista de peers:
-   - **Parpadeo**: una PC con WSL/Hyper-V/VPN. Antes: `[udp] IP DISAGREEMENT` + `probe failed`/`DROPPED` en loop. Ahora: `[udp] correcting IP for … (datagram src wins)` **una vez** y el peer fijo online.
-   - **CPU en reposo** (Task Manager): bajo/nulo; en el log NO deben repetirse líneas `[probe] …` si ambos se ven por UDP.
-   - **Reaper**: cerrar de golpe un peer → el otro lo marca offline en ~15 s.
-   - **Rescan**: un peer manual caído que se prende → el botón rescan lo trae al toque.
-   - **QR**: cambiar de red y abrir el QR → muestra la IP nueva.
-2. Si la verificación física da OK → arrancar **Fase 2 de Windows (correctness)** (`docs/remediation/windows/phase-2-correctness.md`) en chat nuevo con `/inicio`.
+**Arrancar la Fase 2 de Windows (correctness)** (`docs/remediation/windows/phase-2-correctness.md`) en un chat nuevo con `/inicio`. La Fase 1 ya está cerrada (implementada + review + verificada físicamente en lo core). Lo único que queda de la Fase 1 es la prueba física opcional de roaming/QR, que no bloquea la Fase 2 (probarla cuando toque cambiar de red).
 
 ## Bloqueos
 - **Android**: decisión estratégica previa pendiente (núcleo headless vs foreground-only, `docs/remediation/android/SPEC.md`). No arrancar Android sin decidirla.

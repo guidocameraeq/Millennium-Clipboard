@@ -2,9 +2,9 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
-## 2026-07-13 — Fase 1 Windows: consolidar discovery / fin del parpadeo (IMPLEMENTADA, falta verificación física)
+## 2026-07-13 — Fase 1 Windows: consolidar discovery / fin del parpadeo (COMPLETADA Y VERIFICADA — core)
 
-Spec archivado en `docs/archive/phase-1-discovery.md`. Un commit por Tarea (ver `git log`). **Verificación por máquina: OK** (`cargo check`/`clippy` sin warnings nuevos / `test` 7/7 / `build` linkea / `node --check`). **Verificación física con 2 dispositivos: PENDIENTE del usuario** (parpadeo de peers, CPU en reposo, reaper ~15 s, rescan, QR tras roam).
+Spec archivado en `docs/archive/phase-1-discovery.md`. Un commit por Tarea (ver `git log`). **Verificación por máquina: OK** (`cargo check`/`clippy` sin warnings nuevos / `test` 7/7 / `build` linkea / `node --check`). **Verificación física con 2 dispositivos (2026-07-13): OK en lo core** — las 2 PCs se ven, el peer no parpadea, CPU ~0 en reposo, el reaper marca offline en ~15 s, y las transferencias andan en ambos sentidos (build release desplegado en las 2 PCs). Queda sin probar físicamente lo opcional (roaming / QR tras cambio de red): verificado por máquina, no físico.
 
 ### Changed
 - **Política única de reconciliación del `PeerMap`** (Tarea 1.1): `PeerRecord` gana `confirmed: bool`. La ruta (ip/port) de un peer se considera confirmada cuando la probó una fuente real (src IP de un datagrama UDP, o un probe TCP a `/info`). mDNS ya **no pisa** una ruta confirmada — solo refresca metadata (alias/hex/icono) o inserta peers nuevos (fn pura `reconcile_mdns`). El datagrama UDP es autoritativo: corrige ip/port y ahora **emite `peers-changed`** en la corrección (antes solo logueaba `IP DISAGREEMENT`). Es el root cause del flap asimétrico mDNS-vs-UDP.
