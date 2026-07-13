@@ -699,7 +699,7 @@ fn install_panic_hook() {
 #[cfg(not(target_os = "android"))]
 enum ClipSnapshot {
     Text(String),
-    Image { png_base64: String, hash: String },
+    Image { png_base64: String },
 }
 
 #[cfg(target_os = "android")]
@@ -715,6 +715,20 @@ fn spawn_clipboard_poller(
     runtime_log::info("[clipboard] poller disabled on Android (handled by foreground service later)");
 }
 
+// Windows increments this global u32 on every clipboard change, so
+// reading it is the cheapest possible "did anything change?" gate.
+// Declared by hand instead of pulling the whole `windows` crate in.
+#[cfg(target_os = "windows")]
+#[link(name = "user32")]
+extern "system" {
+    fn GetClipboardSequenceNumber() -> u32;
+}
+
+#[cfg(not(target_os = "android"))]
+fn is_syncable_text(t: &str) -> bool {
+    !t.is_empty() && t.len() <= 1_000_000
+}
+
 #[cfg(not(target_os = "android"))]
 fn spawn_clipboard_poller(
     peers: discovery::PeerMap,
@@ -722,36 +736,96 @@ fn spawn_clipboard_poller(
     my_alias: String,
     my_fingerprint: String,
 ) {
-    tauri::async_runtime::spawn(async move {
-        let mut last_text: Option<String> = None;
-        let mut last_image_hash: Option<String> = None;
-        let mut tick = tokio::time::interval(std::time::Duration::from_millis(500));
-        tick.tick().await;
-        loop {
-            tick.tick().await;
+    // The blocking thread hands over snapshots that already passed every
+    // gate (peers enabled, changed, not an echo); the async side only
+    // fans them out to peers.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<ClipSnapshot>(4);
 
-            // Pull whatever the OS clipboard currently holds on a blocking
-            // worker (arboard reads are blocking).
-            let snap: Option<ClipSnapshot> = tokio::task::spawn_blocking(|| {
-                let mut cb = match arboard::Clipboard::new() {
-                    Ok(c) => c,
-                    Err(_) => return None,
-                };
+    // ---- Dedicated thread: owns ONE arboard::Clipboard for its whole
+    //      life. arboard handles must not cross an .await, so this stays
+    //      a std::thread, never a tokio task.
+    std::thread::spawn({
+        let store = store.clone();
+        move || {
+            let mut cb = match arboard::Clipboard::new() {
+                Ok(c) => c,
+                Err(e) => {
+                    runtime_log::err(format!("[clipboard] arboard init failed: {e}"));
+                    return;
+                }
+            };
+            let mut last_text: Option<String> = None;
+            let mut last_image_hash: Option<String> = None;
+            #[cfg(target_os = "windows")]
+            let mut last_seq: u32 = 0;
+
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(1200));
+
+                // GATE 1: nobody opted into sync → don't even touch the
+                // clipboard. enabled_snapshot() is a cheap clone under mutex.
+                if store.enabled_snapshot().is_empty() {
+                    continue;
+                }
+
+                // GATE 2 (Windows): clipboard unchanged since last tick →
+                // zero reads, zero encodes.
+                #[cfg(target_os = "windows")]
+                {
+                    let seq = unsafe { GetClipboardSequenceNumber() };
+                    if seq == last_seq {
+                        continue;
+                    }
+                    last_seq = seq;
+                }
+
                 if let Ok(text) = cb.get_text() {
-                    if !text.is_empty() && text.len() <= 1_000_000 {
-                        return Some(ClipSnapshot::Text(text));
+                    if !text.is_empty() {
+                        if last_text.as_deref() == Some(text.as_str()) {
+                            continue;
+                        }
+                        last_text = Some(text.clone());
+                        if !is_syncable_text(&text) {
+                            // BUG FIX: oversize text is dropped explicitly
+                            // instead of falling through to the image branch.
+                            runtime_log::warn(format!(
+                                "[clipboard] text too large ({} bytes) — skipped",
+                                text.len()
+                            ));
+                            continue;
+                        }
+                        last_image_hash = None;
+                        let hash = clipboard_sync::hash_text(&text);
+                        if store.is_recent(&hash) {
+                            continue;
+                        }
+                        store.note_synced(hash);
+                        if tx.blocking_send(ClipSnapshot::Text(text)).is_err() {
+                            return; // runtime gone — app is shutting down
+                        }
+                        continue;
                     }
                 }
+
                 if let Ok(img) = cb.get_image() {
                     let w = img.width as u32;
                     let h = img.height as u32;
                     if w == 0 || h == 0 || w > 8192 || h > 8192 {
-                        return None;
+                        continue;
                     }
+                    // GATE 3: hash the raw RGBA — same image as last tick
+                    // means no PNG encode at all.
+                    let raw_hash = clipboard_sync::hash_bytes(&img.bytes);
+                    if last_image_hash.as_deref() == Some(raw_hash.as_str()) {
+                        continue;
+                    }
+                    last_image_hash = Some(raw_hash);
+                    last_text = None;
+
                     let raw: Vec<u8> = img.bytes.into_owned();
                     let buf = match image::RgbaImage::from_raw(w, h, raw) {
                         Some(b) => b,
-                        None => return None,
+                        None => continue,
                     };
                     let mut png_bytes: Vec<u8> = Vec::with_capacity(256 * 1024);
                     {
@@ -760,57 +834,34 @@ fn spawn_clipboard_poller(
                             .write_to(&mut cursor, image::ImageFormat::Png)
                             .is_err()
                         {
-                            return None;
+                            continue;
                         }
                     }
                     if png_bytes.len() > 32 * 1024 * 1024 {
-                        return None;
+                        continue;
                     }
-                    let hash = crate::clipboard_sync::hash_bytes(&png_bytes);
+                    // The anti-echo store keys off the PNG hash: it must
+                    // match what the /clipboard/image receive path notes
+                    // (hash of the PNG bytes). The RGBA hash above is only
+                    // the local "don't re-encode" gate.
+                    let png_hash = crate::clipboard_sync::hash_bytes(&png_bytes);
+                    if store.is_recent(&png_hash) {
+                        continue;
+                    }
+                    store.note_synced(png_hash);
                     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
                     let png_base64 = B64.encode(&png_bytes);
-                    return Some(ClipSnapshot::Image { png_base64, hash });
-                }
-                None
-            })
-            .await
-            .ok()
-            .flatten();
-
-            let snap = match snap {
-                Some(s) => s,
-                None => continue,
-            };
-
-            // Diff-and-debounce: only sync when something actually changed
-            // from the last poll, AND it's not the same payload we just
-            // received from a peer (loop prevention).
-            match &snap {
-                ClipSnapshot::Text(t) => {
-                    if last_text.as_deref() == Some(t.as_str()) {
-                        continue;
+                    if tx.blocking_send(ClipSnapshot::Image { png_base64 }).is_err() {
+                        return;
                     }
-                    last_text = Some(t.clone());
-                    last_image_hash = None;
-                    let hash = clipboard_sync::hash_text(t);
-                    if store.is_recent(&hash) {
-                        continue;
-                    }
-                    store.note_synced(hash);
-                }
-                ClipSnapshot::Image { hash, .. } => {
-                    if last_image_hash.as_deref() == Some(hash.as_str()) {
-                        continue;
-                    }
-                    last_image_hash = Some(hash.clone());
-                    last_text = None;
-                    if store.is_recent(hash) {
-                        continue;
-                    }
-                    store.note_synced(hash.clone());
                 }
             }
+        }
+    });
 
+    // ---- Async side: fan each snapshot out to the opted-in peers.
+    tauri::async_runtime::spawn(async move {
+        while let Some(snap) = rx.recv().await {
             let targets: Vec<(String, u16)> = {
                 let enabled = store.enabled_snapshot();
                 if enabled.is_empty() {
@@ -838,11 +889,14 @@ fn spawn_clipboard_poller(
                             if let Err(e) =
                                 http_client::post_clipboard(&ip, port, &text, &alias, &fp).await
                             {
-                                eprintln!("[clipboard] text sync to {}:{} failed: {}", ip, port, e);
+                                runtime_log::warn(format!(
+                                    "[clipboard] text sync to {}:{} failed: {}",
+                                    ip, port, e
+                                ));
                             }
                         });
                     }
-                    ClipSnapshot::Image { png_base64, .. } => {
+                    ClipSnapshot::Image { png_base64 } => {
                         let b64 = png_base64.clone();
                         tauri::async_runtime::spawn(async move {
                             if let Err(e) = http_client::post_clipboard_image(
@@ -850,10 +904,10 @@ fn spawn_clipboard_poller(
                             )
                             .await
                             {
-                                eprintln!(
+                                runtime_log::warn(format!(
                                     "[clipboard] image sync to {}:{} failed: {}",
                                     ip, port, e
-                                );
+                                ));
                             }
                         });
                     }
@@ -1385,8 +1439,9 @@ pub fn run() {
                 icon_store.clone(),
             );
 
-            // 5. Clipboard-sync poller. Reads the OS clipboard every
-            //    500 ms and broadcasts changes to opted-in peers.
+            // 5. Clipboard-sync poller. Watches the OS clipboard on a
+            //    dedicated thread (gated: only when peers opted in and
+            //    the clipboard actually changed) and broadcasts to them.
             spawn_clipboard_poller(
                 discovery_state.peers.clone(),
                 clipboard_store.clone(),
@@ -1531,4 +1586,16 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         .build(app)?;
 
     Ok(())
+}
+
+#[cfg(all(test, not(target_os = "android")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_oversize_text() {
+        assert!(!is_syncable_text(&"x".repeat(1_000_001)));
+        assert!(is_syncable_text("hola"));
+        assert!(!is_syncable_text(""));
+    }
 }
