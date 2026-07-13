@@ -579,6 +579,50 @@ pub fn start(
         });
     }
 
+    // (C) Network-change watcher (Tarea 1.7). Every 30 s recompute the
+    //     preferred local IP; if it moved (Wi-Fi roam, dock/undock, VPN
+    //     up/down), re-enable that interface on the mDNS daemon and
+    //     re-announce with the fresh A-record. The UDP broadcaster needs no
+    //     restart — it binds 0.0.0.0 and sends to the limited broadcast, so
+    //     its source IP follows the OS automatically, and peers already
+    //     learn our new IP from that datagram's source (Tarea 1.1). This
+    //     watcher just keeps the mDNS announcement honest. A future TODO is
+    //     to replace the poll with an if-watch event source.
+    {
+        let daemon = daemon.clone();
+        let mut identity = identity.clone();
+        let bind_port = port;
+        tauri::async_runtime::spawn(async move {
+            use std::time::Duration;
+            let mut watch = tokio::time::interval(Duration::from_secs(30));
+            watch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            watch.tick().await; // skip the immediate first tick
+            loop {
+                watch.tick().await;
+                let fresh = crate::identity::compute_local_ip();
+                if fresh.is_empty() || fresh == identity.local_ip {
+                    continue;
+                }
+                crate::runtime_log::info(format!(
+                    "[net] local IP changed {} -> {}; re-announcing mDNS",
+                    identity.local_ip, fresh
+                ));
+                identity.local_ip = fresh;
+                if let Ok(ip) = identity.local_ip.parse::<std::net::IpAddr>() {
+                    if let Err(e) = daemon.enable_interface(IfKind::Addr(ip)) {
+                        crate::runtime_log::warn(format!(
+                            "[net] enable_interface({}) failed: {}",
+                            ip, e
+                        ));
+                    }
+                }
+                if let Err(e) = register_self(&daemon, &identity, bind_port) {
+                    crate::runtime_log::warn(format!("[net] mDNS re-register failed: {}", e));
+                }
+            }
+        });
+    }
+
     Ok(DiscoveryState { peers, fullnames, prefs, manual, aliases, clipboard, icons, daemon })
 }
 
