@@ -1,6 +1,8 @@
 # Millennium Clipboard — Windows · Fase 0: Parar la hemorragia
 
-> **ESTADO: IMPLEMENTADA en código 2026-07-13 (build verde: cargo check/clippy/test, .exe release 9.8 MB). VERIFICACIÓN FÍSICA PENDIENTE del usuario (Task Manager / regedit / sync E2E). NO archivar hasta esa validación.** Commits: 88fd306 → b6479c3. Review adversarial multi-agente aplicado (9 fixes).
+> **ESTADO: COMPLETADA Y VERIFICADA 2026-07-13.** Código verde (cargo check/clippy/test, .exe release 9.8 MB) + verificación física por el usuario: CPU casi nulo en reposo, sync E2E OK, FX/logs OK. Autostart verificado end-to-end (heal reescribe la entrada al exe actual; Windows la resuelve pese a no llevar comillas — ver nota abajo). Commits: 88fd306 → b6479c3 + review adversarial (9 fixes). Archivada.
+>
+> **Pendiente derivado (no bloqueante, va a Fase 3 seguridad):** la entrada `HKCU\...\Run` que escribe `tauri-plugin-autostart` NO lleva comillas; con rutas que tienen espacios (ej. `OneDrive\Desktop eQ\Millennium Clipboard.exe`) Windows la resuelve por su heurística de búsqueda, pero es un *unquoted path* (CWE-428) frágil/inseguro. Fix futuro: reescribir la entrada con comillas.
 
 > Parte del plan de remediación de Millennium Clipboard. Leé primero `../00-SHARED-CONTEXT.md`.
 > **Plataforma:** Windows (0.1, 0.5 tocan código `not(target_os = "android")` / `desktop`; 0.2–0.3 tocan frontend compartido; 0.4 es build) · **Prerrequisitos:** ninguno (esta es la primera fase) · **Esfuerzo:** ~1 día · **Riesgo:** med

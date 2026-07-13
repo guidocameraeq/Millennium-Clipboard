@@ -2,9 +2,9 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
-## 2026-07-13 — Fase 0 Windows implementada: parar la hemorragia de CPU/RAM
+## 2026-07-13 — Fase 0 Windows: parar la hemorragia de CPU/RAM (COMPLETADA Y VERIFICADA)
 
-Spec: `docs/remediation/windows/phase-0-stop-the-bleed.md`. Un commit por Tarea (ver `git log`). Verificación física (Task Manager / regedit / sync E2E) **pendiente del humano** — hasta entonces, NO VERIFICADO en runtime.
+Spec archivado en `docs/archive/phase-0-stop-the-bleed.md`. Un commit por Tarea (ver `git log`). **Verificación física por el usuario: OK** — CPU casi nulo en reposo con imagen en el portapapeles, sync de clipboard E2E entre 2 máquinas, FX/logs. Autostart verificado end-to-end (copia al escritorio → cierre → arranque desde ahí → el heal reescribe la entrada `Run` al exe actual → arranque limpio sin crash; Windows resuelve la ruta pese a no llevar comillas). Descubierto de paso: la entrada `Run` del plugin va sin comillas (*unquoted path*, CWE-428) — anotado para la Fase 3.
 
 ### Fixed
 - **Clipboard poller** (Tarea 0.1): thread dedicado con UN solo handle de arboard; no toca el portapapeles sin peers con sync habilitado; en Windows gatea por `GetClipboardSequenceNumber` (FFI directo a user32, sin dep nueva — divergencia menor con el spec que pedía la crate `windows`); hashea el RGBA crudo antes de pagar el encode PNG+base64; intervalo 500 ms → 1200 ms. **Bug fix**: texto >1 MB se descarta con log en vez de caer al branch de imagen. El anti-eco sigue clavado al hash del PNG (compatible con el receptor).
