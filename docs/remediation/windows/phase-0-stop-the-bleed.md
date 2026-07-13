@@ -1,5 +1,7 @@
 # Millennium Clipboard — Windows · Fase 0: Parar la hemorragia
 
+> **ESTADO: IMPLEMENTADA en código 2026-07-13 (build verde: cargo check/clippy/test, .exe release 9.8 MB). VERIFICACIÓN FÍSICA PENDIENTE del usuario (Task Manager / regedit / sync E2E). NO archivar hasta esa validación.** Commits: 88fd306 → b6479c3. Review adversarial multi-agente aplicado (9 fixes).
+
 > Parte del plan de remediación de Millennium Clipboard. Leé primero `../00-SHARED-CONTEXT.md`.
 > **Plataforma:** Windows (0.1, 0.5 tocan código `not(target_os = "android")` / `desktop`; 0.2–0.3 tocan frontend compartido; 0.4 es build) · **Prerrequisitos:** ninguno (esta es la primera fase) · **Esfuerzo:** ~1 día · **Riesgo:** med
 

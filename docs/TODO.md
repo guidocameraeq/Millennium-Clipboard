@@ -5,7 +5,7 @@
 2026-07-13 — ver SESSION_HANDOFF.md
 
 ## 🔴 Crítico
-- [ ] **Fase 0 Windows — parar el consumo de CPU/RAM** (`docs/remediation/windows/phase-0-stop-the-bleed.md`). Mayor impacto, menor riesgo. **EMPEZAR ACÁ.**
+- [ ] **Verificar la Fase 0 en físico** (implementada 2026-07-13, código verde pero NO VERIFICADO en runtime): CPU ~0% en reposo con imagen en el portapapeles (Task Manager), entrada de autostart en regedit apuntando al exe actual, sync de clipboard E2E entre 2 máquinas, toggle VISUAL FX. Pasos concretos en SESSION_HANDOFF.
 
 ## 🟠 Importante
 - [ ] Fase 1 Windows — consolidar descubrimiento / fin del parpadeo de peers (`windows/phase-1-discovery.md`)
