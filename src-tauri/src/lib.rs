@@ -49,6 +49,9 @@ pub struct LocalInfo {
 pub struct UserSettings {
     pub download_dir: String,
     pub auto_accept_favorites: bool,
+    pub notifications_enabled: bool,
+    pub start_with_windows: bool,
+    pub close_to_tray: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -334,6 +337,9 @@ fn get_settings(state: tauri::State<AppState>) -> UserSettings {
     UserSettings {
         download_dir: s.download_dir.to_string_lossy().to_string(),
         auto_accept_favorites: s.auto_accept_favorites,
+        notifications_enabled: s.notifications_enabled,
+        start_with_windows: s.start_with_windows,
+        close_to_tray: s.close_to_tray,
     }
 }
 
