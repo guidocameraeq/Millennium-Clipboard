@@ -1260,6 +1260,30 @@ pub fn run() {
             );
             runtime_log::info("[setup] settings loaded");
 
+            // 0a.5 Heal stale autostart: the HKCU\...\Run entry keeps the
+            //      exe path from whenever enable() last ran, so after an
+            //      update it can point at a binary that no longer exists.
+            //      With the pref on, disable()+enable() rewrites it to
+            //      current_exe(); with the pref off, drop any ghost entry
+            //      a previous version left behind.
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_autostart::ManagerExt;
+                let want_autostart = settings_store.snapshot().start_with_windows;
+                let manager = app.autolaunch();
+                if want_autostart {
+                    let _ = manager.disable(); // best-effort: may not exist yet
+                    if let Err(e) = manager.enable() {
+                        runtime_log::err(format!("[autostart] re-register failed: {e}"));
+                    } else {
+                        runtime_log::info("[autostart] re-registered to current exe path");
+                    }
+                } else if let Ok(true) = manager.is_enabled() {
+                    let _ = manager.disable();
+                    runtime_log::info("[autostart] removed stale entry (pref is off)");
+                }
+            }
+
             // Android migration: if the persisted download_dir (from
             // v0.13.0 or earlier) points at a path that's no longer
             // writable (e.g. /storage/emulated/0/Download/Millennium
