@@ -154,11 +154,35 @@ pub async fn download_and_stage(download_url: &str) -> Result<()> {
         .await
         .with_context(|| format!("write {}", staged.display()))?;
 
-    // Tiny self-deleting batch: wait → swap → launch new → delete script.
+    // Self-deleting batch: wait → RETRY the swap in a loop (the old .exe can
+    // stay locked for a beat by AV/handle release) → on success launch the new
+    // exe and clear any stale failure marker; on persistent failure write a
+    // marker the app surfaces at next boot so the update never fails silently.
+    let marker = temp_dir.join("millennium-update-failed.txt");
     let bat = format!(
-        "@echo off\r\nping 127.0.0.1 -n 3 >nul\r\nmove /Y \"{src}\" \"{dst}\" >nul\r\nstart \"\" \"{dst}\"\r\ndel \"%~f0\"\r\n",
+        "@echo off\r\n\
+         ping 127.0.0.1 -n 3 >nul\r\n\
+         set TRIES=0\r\n\
+         :retry\r\n\
+         move /Y \"{src}\" \"{dst}\" >nul 2>nul\r\n\
+         if not errorlevel 1 goto ok\r\n\
+         set /a TRIES+=1\r\n\
+         if %TRIES% GEQ 10 goto fail\r\n\
+         ping 127.0.0.1 -n 2 >nul\r\n\
+         goto retry\r\n\
+         :fail\r\n\
+         echo update swap failed after %TRIES% tries > \"{marker}\"\r\n\
+         start \"\" \"{dst}\"\r\n\
+         del \"%~f0\"\r\n\
+         goto end\r\n\
+         :ok\r\n\
+         if exist \"{marker}\" del \"{marker}\"\r\n\
+         start \"\" \"{dst}\"\r\n\
+         del \"%~f0\"\r\n\
+         :end\r\n",
         src = staged.display(),
         dst = current_exe.display(),
+        marker = marker.display(),
     );
     tokio::fs::write(&script, bat)
         .await

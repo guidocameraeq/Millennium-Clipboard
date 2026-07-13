@@ -1196,6 +1196,32 @@ pub fn run() {
                 windows_integration::cleanup_legacy_send_to_shortcut();
             }
 
+            // 0a.3 If a previous auto-update's swap batch failed after all
+            //      retries it left a marker (see updater.rs). Surface it so a
+            //      silently-failed update becomes visible, then clear it. The
+            //      emit is delayed so the webview has registered its
+            //      'backend-error' listener (setup runs before boot()).
+            #[cfg(target_os = "windows")]
+            {
+                let marker = std::env::temp_dir().join("millennium-update-failed.txt");
+                if marker.exists() {
+                    let detail = std::fs::read_to_string(&marker).unwrap_or_default();
+                    let _ = std::fs::remove_file(&marker);
+                    runtime_log::err(format!(
+                        "[updater] previous update swap failed: {}",
+                        detail.trim()
+                    ));
+                    let emit_handle = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+                        let _ = emit_handle.emit(
+                            "backend-error",
+                            "Update failed: the new version could not replace the running app (the file was locked). Please retry the update.".to_string(),
+                        );
+                    });
+                }
+            }
+
             // 0a.2 Force the window header icon to use our embedded .ico
             //      so it doesn't fall back to the Tauri default glyph.
             #[cfg(desktop)]
