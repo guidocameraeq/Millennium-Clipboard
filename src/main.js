@@ -211,7 +211,24 @@
   }
 
   // ---------- Status helpers -----------------------------------------------
-  function setStatus(msg) { setText(statusMsg, msg); }
+  // Priority/TTL so a routine info line (e.g. the ~5s "GRID · N online")
+  // can't clobber an error/warning the user still needs to read. Info
+  // messages are suppressed while a higher-priority message is within its
+  // TTL; warn/err messages always show and arm the TTL window.
+  let statusPriorityUntil = 0;
+  const STATUS_LEVEL = { info: 0, warn: 1, err: 2 };
+  function setStatus(msg, opts) {
+    const level = STATUS_LEVEL[(opts && opts.priority) || 'info'];
+    const now = Date.now();
+    if (level === 0 && now < statusPriorityUntil) return;
+    setText(statusMsg, msg);
+    if (level > 0) {
+      const ttl = (opts && opts.ttl) != null ? opts.ttl : 5000;
+      statusPriorityUntil = ttl > 0 ? now + ttl : 0;
+    } else {
+      statusPriorityUntil = 0;
+    }
+  }
   function showToast(text) {
     toastText.innerHTML = '';
     toastText.textContent = text;
@@ -648,7 +665,7 @@
         await invoke('toggle_favorite', { peerId: id, value: newVal });
         blip(newVal ? 1320 : 660, 0.06);
       } catch (err) {
-        setStatus(`ERR favorite · ${err}`);
+        setStatus(`ERR favorite · ${err}`, { priority: 'err' });
       }
       return;
     }
@@ -664,7 +681,7 @@
         await invoke('set_clipboard_sync', { peerId: id, enabled: newVal });
         blip(newVal ? 1760 : 880, 0.06);
       } catch (err) {
-        setStatus(`ERR clipboard sync · ${err}`);
+        setStatus(`ERR clipboard sync · ${err}`, { priority: 'err' });
       }
       return;
     }
@@ -708,7 +725,7 @@
           blip(1100, 0.06);
         } catch (err) {
           nameEl.textContent = original;
-          setStatus(`ERR rename · ${err}`);
+          setStatus(`ERR rename · ${err}`, { priority: 'err' });
         }
       }
     };
@@ -906,7 +923,7 @@
       clearInterval(tick);
       progressBlock.hidden = true;
       sendBtn.disabled = false;
-      setStatus(`ERR transmit · ${err}`);
+      setStatus(`ERR transmit · ${err}`, { priority: 'err' });
       blip(220, 0.2);
     }
   }
@@ -957,7 +974,7 @@
     } catch (err) {
       progressBlock.hidden = true;
       sendBtn.disabled = false;
-      setStatus(`ERR transmit · ${err}`);
+      setStatus(`ERR transmit · ${err}`, { priority: 'err' });
       state.activeTransfer = null;
       blip(220, 0.2);
     }
