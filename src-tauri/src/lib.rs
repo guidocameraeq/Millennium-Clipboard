@@ -1336,18 +1336,27 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 use tauri_plugin_autostart::ManagerExt;
-                let want_autostart = settings_store.snapshot().start_with_windows;
-                let manager = app.autolaunch();
-                if want_autostart {
-                    let _ = manager.disable(); // best-effort: may not exist yet
-                    if let Err(e) = manager.enable() {
-                        runtime_log::err(format!("[autostart] re-register failed: {e}"));
-                    } else {
-                        runtime_log::info("[autostart] re-registered to current exe path");
+                if settings_store.loaded_from_corrupt() {
+                    // settings.json didn't parse → start_with_windows is a
+                    // fallback default, not the user's choice. Touching the
+                    // Run entry now could wipe a working autostart, so skip.
+                    runtime_log::warn(
+                        "[autostart] settings unreadable — skipping heal to avoid clobbering the Run entry",
+                    );
+                } else {
+                    let want_autostart = settings_store.snapshot().start_with_windows;
+                    let manager = app.autolaunch();
+                    if want_autostart {
+                        let _ = manager.disable(); // best-effort: may not exist yet
+                        if let Err(e) = manager.enable() {
+                            runtime_log::err(format!("[autostart] re-register failed: {e}"));
+                        } else {
+                            runtime_log::info("[autostart] re-registered to current exe path");
+                        }
+                    } else if let Ok(true) = manager.is_enabled() {
+                        let _ = manager.disable();
+                        runtime_log::info("[autostart] removed stale entry (pref is off)");
                     }
-                } else if let Ok(true) = manager.is_enabled() {
-                    let _ = manager.disable();
-                    runtime_log::info("[autostart] removed stale entry (pref is off)");
                 }
             }
 

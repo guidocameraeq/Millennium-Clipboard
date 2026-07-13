@@ -31,6 +31,11 @@ fn default_close_to_tray() -> bool { true }
 pub struct SettingsStore {
     path: PathBuf,
     inner: Mutex<Settings>,
+    /// True when settings.json existed but failed to parse, so the
+    /// in-memory state is the fallback default, NOT the user's real
+    /// prefs. Callers that take destructive action based on a pref
+    /// (e.g. removing the autostart registry entry) must skip it here.
+    loaded_corrupt: bool,
 }
 
 impl SettingsStore {
@@ -46,21 +51,26 @@ impl SettingsStore {
         let exists = path.exists();
         eprintln!("[settings::load] exists = {}", exists);
 
+        let mut loaded_corrupt = false;
         let inner = if exists {
             eprintln!("[settings::load] reading file...");
             let raw = fs::read_to_string(&path)
                 .with_context(|| format!("read {}", path.display()))?;
             eprintln!("[settings::load] read {} bytes, parsing...", raw.len());
-            serde_json::from_str::<Settings>(&raw).unwrap_or_else(|e| {
-                eprintln!("[settings::load] parse failed ({}), using defaults", e);
-                Settings {
-                    download_dir: default_download_dir.clone(),
-                    auto_accept_favorites: false,
-                    notifications_enabled: true,
-                    start_with_windows: false,
-                    close_to_tray: true,
+            match serde_json::from_str::<Settings>(&raw) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("[settings::load] parse failed ({}), using defaults", e);
+                    loaded_corrupt = true;
+                    Settings {
+                        download_dir: default_download_dir.clone(),
+                        auto_accept_favorites: false,
+                        notifications_enabled: true,
+                        start_with_windows: false,
+                        close_to_tray: true,
+                    }
                 }
-            })
+            }
         } else {
             eprintln!("[settings::load] file missing, using defaults");
             Settings {
@@ -73,7 +83,7 @@ impl SettingsStore {
         };
 
         eprintln!("[settings::load] building store...");
-        let store = Self { path, inner: Mutex::new(inner) };
+        let store = Self { path, inner: Mutex::new(inner), loaded_corrupt };
         let s = store.inner.lock().unwrap();
         eprintln!(
             "[settings] download_dir={} auto_accept_favorites={}",
@@ -86,6 +96,12 @@ impl SettingsStore {
 
     pub fn snapshot(&self) -> Settings {
         self.inner.lock().unwrap().clone()
+    }
+
+    /// True if settings.json existed but couldn't be parsed, so the live
+    /// state is the fallback default rather than the user's real prefs.
+    pub fn loaded_from_corrupt(&self) -> bool {
+        self.loaded_corrupt
     }
 
     pub fn set_download_dir(&self, dir: PathBuf) -> Result<()> {

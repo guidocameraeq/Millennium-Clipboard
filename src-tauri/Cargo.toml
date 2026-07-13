@@ -88,7 +88,11 @@ tauri-plugin-android-fs = "28"
 
 # Release binary: size-optimized (~25 MB → ~8-12 MB). panic="abort"
 # still runs our panic hook (crash.log) — it only skips the unwinding
-# that would happen AFTER the hook. Dev profile stays untouched.
+# that would happen AFTER the hook. Trade-off (spec'd in phase 0): with
+# abort, a panic in ANY task/thread takes down the whole process, where
+# unwind would have killed just that tokio task. Acceptable here — a
+# panicked poller leaving a frozen peer list is worse than a clean crash
+# with a crash.log. Dev profile stays untouched (unwind, fast builds).
 [profile.release]
 lto = true
 codegen-units = 1
