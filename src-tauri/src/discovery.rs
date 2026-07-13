@@ -304,228 +304,280 @@ pub fn start(
     });
 
     // ---------------------------------------------------------------------
-    // Unified presence poller (v0.7.0)
+    // Presence (Fase 1): a cheap last_seen reaper + an on-demand TCP probe
+    // scheduler. Replaces the old "TCP-probe every known peer every 6 s"
+    // sweep, which was the main idle CPU/network cost and, combined with the
+    // mDNS-vs-UDP IP disagreement, the source of the peer flapping.
     //
-    // mDNS multicast is unreliable on Wi-Fi with AP isolation, IGMP
-    // snooping, firewall quirks, or just packet loss. So we treat mDNS
-    // as a "first sight" mechanism and use a TCP probe of /info as the
-    // source of truth for online/offline.
-    //
-    // Every ~6 s we probe in parallel every peer we know about (from
-    // mDNS cache, manual entries, or stored favorites). If they reply
-    // with the expected fingerprint, they're online and we refresh the
-    // cache. Two consecutive failures → drop from live cache. Manual
-    // and favorite peers still show as offline in `build_wire_list`.
+    // Liveness model:
+    //   * A peer heard over UDP (every BROADCAST_INTERVAL_SECS) refreshes its
+    //     last_seen for free — no TCP probe needed.
+    //   * The reaper marks a peer offline once last_seen exceeds PEER_TTL
+    //     (3x the UDP interval, so a lost hello or two doesn't flap it).
+    //   * The probe scheduler only spends TCP on peers UDP is NOT keeping
+    //     fresh: manual/favorite peers never heard live (with exponential
+    //     backoff), and live peers going stale (legacy mDNS-only peers, or
+    //     manual peers on a segment UDP broadcast can't cross).
     // ---------------------------------------------------------------------
-    let peers_for_poll = peers.clone();
-    let fullnames_for_poll = fullnames.clone();
-    let prefs_for_poll = prefs.clone();
-    let manual_for_poll = manual.clone();
-    let aliases_for_poll = aliases.clone();
-    let clipboard_for_poll = clipboard.clone();
-    let icons_for_poll = icons.clone();
-    let app_for_poll = app.clone();
-    let daemon_for_poll = daemon.clone();
-    let my_fp_poll = identity.fingerprint.clone();
-    let my_ip_poll = identity.local_ip.clone();
 
-    tauri::async_runtime::spawn(async move {
-        use futures_util::future::join_all;
-        use std::collections::HashMap as Map;
-        use std::time::Duration;
-
-        let mut failures: Map<String, u8> = Map::new();
-        // Last (fp → ip) already logged as "different /24" — that check
-        // re-fires every 6s tick forever for an out-of-subnet favorite,
-        // so without this the log is pure spam.
-        let mut skip_logged: Map<String, String> = Map::new();
-        let mut tick = tokio::time::interval(Duration::from_secs(6));
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        tick.tick().await; // skip the immediate first tick
-
-        loop {
-            tick.tick().await;
-
-            // Still poke mDNS so any newcomer that's announcing is heard.
-            let _ = daemon_for_poll.browse(SERVICE_TYPE);
-
-            // Build the candidate set, preferring mDNS metadata over
-            // manual/favorite stored data (mDNS has the freshest alias).
-            let mut by_fp: Map<String, (String, u16, String, String)> = Map::new();
-            for r in peers_for_poll.lock().unwrap().values() {
-                by_fp.insert(
-                    r.id.clone(),
-                    (r.ip.clone(), r.port, r.hex_id.clone(), r.icon_type.clone()),
-                );
-            }
-            for m in manual_for_poll.snapshot() {
-                by_fp
-                    .entry(m.fingerprint.clone())
-                    .or_insert((m.ip, m.port, m.hex_id, m.icon_type));
-            }
-            for f in prefs_for_poll.favorites_snapshot() {
-                by_fp
-                    .entry(f.fingerprint.clone())
-                    .or_insert((f.last_ip, f.last_port, f.hex_id, f.icon_type));
-            }
-            by_fp.remove(&my_fp_poll);
-
-            // Drop candidates whose IP is in a different /24 than ours.
-            // They're unreachable so probing them just wastes 5s timeouts
-            // forever (e.g. a favorite from another network we used to
-            // be on). They still show up in the wire list as "offline".
-            let my_prefix = subnet_prefix_24(&my_ip_poll);
-            by_fp.retain(|fp, (ip, _, _, _)| {
-                if let (Some(mine), Some(theirs)) = (my_prefix.as_ref(), subnet_prefix_24(ip)) {
-                    if mine != &theirs {
-                        if skip_logged.get(fp).map(String::as_str) != Some(ip.as_str()) {
-                            crate::runtime_log::info(format!(
-                                "[poll] skipping {} @ {} — different /24 from {} (unreachable)",
-                                &fp[..16.min(fp.len())],
-                                ip,
-                                my_ip_poll
-                            ));
-                            skip_logged.insert(fp.clone(), ip.clone());
+    // (A) Reaper — no network, runs every 2 s. Drops peers whose last_seen
+    //     expired and emits the updated wire list.
+    {
+        let peers = peers.clone();
+        let fullnames = fullnames.clone();
+        let prefs = prefs.clone();
+        let manual = manual.clone();
+        let aliases = aliases.clone();
+        let clipboard = clipboard.clone();
+        let icons = icons.clone();
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            use std::time::Duration;
+            // Strictly greater than the UDP interval so a peer is never reaped
+            // between two hellos; 3x leaves room for a lost hello.
+            let peer_ttl = Duration::from_secs(
+                crate::udp_discovery::BROADCAST_INTERVAL_SECS.saturating_mul(3),
+            );
+            let mut reap = tokio::time::interval(Duration::from_secs(2));
+            reap.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            reap.tick().await; // skip the immediate first tick
+            loop {
+                reap.tick().await;
+                let mut removed: Vec<String> = Vec::new();
+                {
+                    let mut p = peers.lock().unwrap();
+                    p.retain(|_fp, rec| {
+                        let alive = rec.last_seen.elapsed() < peer_ttl;
+                        if !alive {
+                            removed.push(rec.id.clone());
                         }
-                        // Also drop from live cache so it doesn't keep
-                        // appearing online forever.
-                        peers_for_poll.lock().unwrap().remove(fp);
-                        return false;
-                    }
+                        alive
+                    });
                 }
-                skip_logged.remove(fp);
-                true
-            });
-
-            if by_fp.is_empty() {
-                continue;
-            }
-
-            // Probe everyone in parallel with a tight per-peer timeout.
-            let probes: Vec<_> = by_fp
-                .into_iter()
-                .map(|(fp, (ip, port, hex_id, icon_type))| async move {
-                    let res = tokio::time::timeout(
-                        Duration::from_secs(5),
-                        crate::http_client::fetch_info(&ip, port),
-                    )
-                    .await;
-                    (fp, ip, port, hex_id, icon_type, res)
-                })
-                .collect();
-            let results = join_all(probes).await;
-
-            let mut changed = false;
-            for (fp, ip, port, hex_id, icon_type, res) in results {
-                let fp_short = &fp[..16.min(fp.len())];
-                match res {
-                    Ok(Ok(info)) if info.fingerprint == fp => {
-                        let prev_failures = failures.remove(&fp).unwrap_or(0);
-                        if prev_failures > 0 {
-                            crate::runtime_log::info(format!(
-                                "[poll] OK {} @ {}:{} (recovered after {} fail(s))",
-                                fp_short, ip, port, prev_failures
-                            ));
-                        }
-                        let record = PeerRecord {
-                            id: fp.clone(),
-                            name: info.alias,
-                            hex_id,
-                            ip: ip.clone(),
-                            port,
-                            icon_type,
-                            last_seen: std::time::Instant::now(),
-                            confirmed: true,
-                        };
-                        let was_new = peers_for_poll
-                            .lock()
-                            .unwrap()
-                            .insert(fp.clone(), record)
-                            .is_none();
-                        if was_new {
-                            crate::runtime_log::info(format!(
-                                "[poll] first sight {} @ {}:{} (via probe)",
-                                fp_short, ip, port
-                            ));
-                            changed = true;
-                        }
-                    }
-                    Ok(Ok(info)) => {
-                        // Fingerprint drift — someone else now answers at that IP:port.
-                        crate::runtime_log::warn(format!(
-                            "[poll] DRIFT {}:{} expected={} got={} — dropping",
-                            ip,
-                            port,
-                            fp_short,
-                            &info.fingerprint[..16.min(info.fingerprint.len())]
-                        ));
-                        if peers_for_poll.lock().unwrap().remove(&fp).is_some() {
-                            changed = true;
-                        }
-                    }
-                    Ok(Err(e)) => {
-                        let count = failures.entry(fp.clone()).or_insert(0);
-                        *count = count.saturating_add(1);
-                        // A dead favorite keeps failing every 6s forever:
-                        // log the 3 probes that matter, then only every 10th.
-                        if *count <= 3 || count.is_multiple_of(10) {
-                            crate::runtime_log::warn(format!(
-                                "[poll] probe failed {} @ {}:{} ({}/3): {}",
-                                fp_short, ip, port, count, e
-                            ));
-                        }
-                        if *count >= 3
-                            && peers_for_poll.lock().unwrap().remove(&fp).is_some()
-                        {
-                            changed = true;
-                            crate::runtime_log::err(format!(
-                                "[poll] DROPPED {} @ {}:{} after 3 failed probes",
-                                fp_short, ip, port
-                            ));
-                        }
-                    }
-                    Err(_) => {
-                        let count = failures.entry(fp.clone()).or_insert(0);
-                        *count = count.saturating_add(1);
-                        if *count <= 3 || count.is_multiple_of(10) {
-                            crate::runtime_log::warn(format!(
-                                "[poll] probe TIMEOUT {} @ {}:{} ({}/3)",
-                                fp_short, ip, port, count
-                            ));
-                        }
-                        if *count >= 3
-                            && peers_for_poll.lock().unwrap().remove(&fp).is_some()
-                        {
-                            changed = true;
-                            crate::runtime_log::err(format!(
-                                "[poll] DROPPED {} @ {}:{} after 3 timeouts",
-                                fp_short, ip, port
-                            ));
-                        }
-                    }
+                if removed.is_empty() {
+                    continue;
                 }
+                for fp in &removed {
+                    crate::runtime_log::info(format!(
+                        "[reaper] {} offline — no hello/probe for >{}s",
+                        &fp[..16.min(fp.len())],
+                        peer_ttl.as_secs()
+                    ));
+                }
+                // Forget fullname → id mappings for the reaped peers so a
+                // later ServiceResolved reattaches cleanly.
+                {
+                    let live: std::collections::HashSet<String> =
+                        peers.lock().unwrap().keys().cloned().collect();
+                    fullnames.lock().unwrap().retain(|_, id| live.contains(id));
+                }
+                let snapshot =
+                    build_wire_list(&peers, &prefs, &manual, &aliases, &clipboard, &icons);
+                let _ = app.emit("peers-changed", &snapshot);
             }
+        });
+    }
 
-            if changed {
-                let live_ids: std::collections::HashSet<String> =
-                    peers_for_poll.lock().unwrap().keys().cloned().collect();
-                fullnames_for_poll
+    // (B) Probe scheduler — runs every 2 s, but only probes peers UDP isn't
+    //     keeping fresh, each on its own exponential backoff.
+    {
+        let peers = peers.clone();
+        let prefs = prefs.clone();
+        let manual = manual.clone();
+        let aliases = aliases.clone();
+        let clipboard = clipboard.clone();
+        let icons = icons.clone();
+        let app = app.clone();
+        let my_fp = identity.fingerprint.clone();
+        tauri::async_runtime::spawn(async move {
+            use futures_util::future::join_all;
+            use std::collections::HashMap as Map;
+            use std::collections::HashSet;
+            use std::time::{Duration, Instant};
+
+            let udp_interval = crate::udp_discovery::BROADCAST_INTERVAL_SECS;
+            // Re-probe a live peer only once it's older than one UDP interval
+            // + a margin: above the UDP cadence so healthy UDP peers are never
+            // probed, below PEER_TTL so probe-only peers get refreshed before
+            // the reaper drops them.
+            let reprobe_after = Duration::from_secs(udp_interval + 1);
+            let min_backoff = Duration::from_secs(6);
+            let max_backoff = Duration::from_secs(300);
+
+            // Per-absent-peer next-probe time + current backoff. Both are
+            // purged each tick of any fp that stopped being a candidate, so
+            // neither map can grow without bound.
+            let mut probe_at: Map<String, Instant> = Map::new();
+            let mut backoff: Map<String, Duration> = Map::new();
+
+            let mut sched = tokio::time::interval(Duration::from_secs(2));
+            sched.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            sched.tick().await; // skip the immediate first tick
+
+            loop {
+                sched.tick().await;
+                let now = Instant::now();
+
+                // Snapshot live peers with their route + staleness.
+                let live: Map<String, (String, u16, String, String, Duration)> = peers
                     .lock()
                     .unwrap()
-                    .retain(|_, id| live_ids.contains(id));
+                    .values()
+                    .map(|r| {
+                        (
+                            r.id.clone(),
+                            (
+                                r.ip.clone(),
+                                r.port,
+                                r.hex_id.clone(),
+                                r.icon_type.clone(),
+                                r.last_seen.elapsed(),
+                            ),
+                        )
+                    })
+                    .collect();
 
-                let snapshot = build_wire_list(
-                    &peers_for_poll,
-                    &prefs_for_poll,
-                    &manual_for_poll,
-                    &aliases_for_poll,
-                    &clipboard_for_poll,
-                    &icons_for_poll,
-                );
-                let _ = app_for_poll.emit("peers-changed", &snapshot);
+                // Candidate set: fp -> the route we'd probe.
+                let mut candidates: Map<String, (String, u16, String, String)> = Map::new();
+                // 1. Live peers going stale (UDP isn't refreshing them).
+                for (fp, (ip, port, hex, icon, elapsed)) in &live {
+                    if *fp == my_fp {
+                        continue;
+                    }
+                    if *elapsed > reprobe_after {
+                        candidates
+                            .insert(fp.clone(), (ip.clone(), *port, hex.clone(), icon.clone()));
+                    }
+                }
+                // 2. Manual/favorite peers never heard live. `or_insert` keeps
+                //    a live-stale peer's confirmed route over the stored one.
+                for m in manual.snapshot() {
+                    if m.fingerprint == my_fp || live.contains_key(&m.fingerprint) {
+                        continue;
+                    }
+                    candidates
+                        .entry(m.fingerprint)
+                        .or_insert((m.ip, m.port, m.hex_id, m.icon_type));
+                }
+                for f in prefs.favorites_snapshot() {
+                    if f.fingerprint == my_fp || live.contains_key(&f.fingerprint) {
+                        continue;
+                    }
+                    candidates
+                        .entry(f.fingerprint)
+                        .or_insert((f.last_ip, f.last_port, f.hex_id, f.icon_type));
+                }
+
+                // Purge schedule/backoff for fps that are no longer candidates.
+                let candidate_fps: HashSet<&String> = candidates.keys().collect();
+                probe_at.retain(|fp, _| candidate_fps.contains(fp));
+                backoff.retain(|fp, _| candidate_fps.contains(fp));
+
+                // Of the candidates, which are due now?
+                let mut due: Vec<(String, String, u16, String, String)> = Vec::new();
+                for (fp, (ip, port, hex, icon)) in &candidates {
+                    let at = probe_at.entry(fp.clone()).or_insert(now);
+                    if *at <= now {
+                        due.push((fp.clone(), ip.clone(), *port, hex.clone(), icon.clone()));
+                    }
+                }
+                if due.is_empty() {
+                    continue;
+                }
+
+                let probes: Vec<_> = due
+                    .into_iter()
+                    .map(|(fp, ip, port, hex, icon)| async move {
+                        let res = tokio::time::timeout(
+                            Duration::from_secs(5),
+                            crate::http_client::fetch_info(&ip, port),
+                        )
+                        .await;
+                        (fp, ip, port, hex, icon, res)
+                    })
+                    .collect();
+                let results = join_all(probes).await;
+
+                let mut changed = false;
+                for (fp, probed_ip, probed_port, hex, icon, res) in results {
+                    let fp_short = &fp[..16.min(fp.len())];
+                    match res {
+                        Ok(Ok(info)) if info.fingerprint == fp => {
+                            // Reachable + right identity: clear the backoff.
+                            backoff.remove(&fp);
+                            probe_at.remove(&fp);
+                            let mut p = peers.lock().unwrap();
+                            match p.get_mut(&fp) {
+                                Some(existing) => {
+                                    // Liveness refresh only — never clobber the
+                                    // stored route (UDP's datagram-src IP wins).
+                                    existing.last_seen = Instant::now();
+                                    existing.confirmed = true;
+                                    if existing.name != info.alias {
+                                        existing.name = info.alias;
+                                        changed = true;
+                                    }
+                                }
+                                None => {
+                                    p.insert(
+                                        fp.clone(),
+                                        PeerRecord {
+                                            id: fp.clone(),
+                                            name: info.alias,
+                                            hex_id: hex,
+                                            ip: probed_ip.clone(),
+                                            port: probed_port,
+                                            icon_type: icon,
+                                            last_seen: Instant::now(),
+                                            confirmed: true,
+                                        },
+                                    );
+                                    drop(p);
+                                    crate::runtime_log::info(format!(
+                                        "[probe] first sight {} @ {}:{} (via probe)",
+                                        fp_short, probed_ip, probed_port
+                                    ));
+                                    changed = true;
+                                }
+                            }
+                        }
+                        Ok(Ok(info)) => {
+                            // Someone else answers at that IP:port now.
+                            crate::runtime_log::warn(format!(
+                                "[probe] DRIFT {}:{} expected={} got={} — dropping",
+                                probed_ip,
+                                probed_port,
+                                fp_short,
+                                &info.fingerprint[..16.min(info.fingerprint.len())]
+                            ));
+                            if peers.lock().unwrap().remove(&fp).is_some() {
+                                changed = true;
+                            }
+                            let entry = backoff.entry(fp.clone()).or_insert(min_backoff);
+                            let this = *entry;
+                            probe_at.insert(fp.clone(), now + this);
+                            *entry = (this * 2).min(max_backoff);
+                        }
+                        _ => {
+                            // Unreachable / timed out. The reaper owns removal
+                            // by last_seen; here we only widen the backoff so an
+                            // absent peer isn't hammered every couple seconds.
+                            let entry = backoff.entry(fp.clone()).or_insert(min_backoff);
+                            let this = *entry;
+                            probe_at.insert(fp.clone(), now + this);
+                            *entry = (this * 2).min(max_backoff);
+                        }
+                    }
+                }
+
+                if changed {
+                    let snapshot =
+                        build_wire_list(&peers, &prefs, &manual, &aliases, &clipboard, &icons);
+                    let _ = app.emit("peers-changed", &snapshot);
+                }
             }
-        }
-    });
+        });
+    }
 
     Ok(DiscoveryState { peers, fullnames, prefs, manual, aliases, clipboard, icons, daemon })
 }
@@ -581,21 +633,6 @@ fn reconcile_mdns(
         existing.icon_type = icon_type.to_string();
     }
     meta_changed || route_changed
-}
-
-/// Return the first three octets of an IPv4 string ("a.b.c.d" → "a.b.c").
-/// IPv6 or malformed inputs return None. Used to compare /24 subnets.
-fn subnet_prefix_24(ip: &str) -> Option<String> {
-    let parts: Vec<&str> = ip.split('.').collect();
-    if parts.len() != 4 {
-        return None;
-    }
-    for p in &parts {
-        if p.parse::<u8>().is_err() {
-            return None;
-        }
-    }
-    Some(format!("{}.{}.{}", parts[0], parts[1], parts[2]))
 }
 
 /// Strip the alias down to characters that are legal in a DNS label

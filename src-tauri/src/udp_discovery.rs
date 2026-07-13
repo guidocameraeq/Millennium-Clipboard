@@ -28,7 +28,9 @@ use crate::preferences::PreferencesStore;
 pub const UDP_DISCOVERY_PORT: u16 = 53318;
 const MAGIC: &str = "millennium-discovery";
 const PROTOCOL_VERSION: u32 = 1;
-const BROADCAST_INTERVAL_SECS: u64 = 5;
+// pub so discovery.rs can size the presence reaper's TTL off the same
+// cadence and the two never drift apart.
+pub const BROADCAST_INTERVAL_SECS: u64 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
