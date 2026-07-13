@@ -486,14 +486,21 @@
       const seen = new Set();
       filtered.forEach((p, idx) => {
         seen.add(p.id);
-        let li = existing.get(p.id);
-        if (li) {
-          updatePeerItem(li, p);
-        } else {
-          li = buildPeerItem(p);
-        }
-        if (peerList.children[idx] !== li) {
-          peerList.insertBefore(li, peerList.children[idx] || null);
+        // Guard each row so one malformed peer can't tumble the whole list
+        // (the forEach would otherwise abort and freeze the grid). Next
+        // snapshot retries the skipped row.
+        try {
+          let li = existing.get(p.id);
+          if (li) {
+            updatePeerItem(li, p);
+          } else {
+            li = buildPeerItem(p);
+          }
+          if (peerList.children[idx] !== li) {
+            peerList.insertBefore(li, peerList.children[idx] || null);
+          }
+        } catch (err) {
+          console.error('renderPeers: peer render failed', p && p.id, err);
         }
       });
 
@@ -537,11 +544,13 @@
 
     const statusEl = li.querySelector('.peer-status');
     if (statusEl) {
-      statusEl.classList.remove('online', 'offline', 'reaching');
+      // 'reaching' is never emitted by the backend; 'away' has stale CSS we
+      // clear defensively. Only 'online'/'offline' are real.
+      statusEl.classList.remove('online', 'offline', 'away');
       statusEl.classList.add(p.status);
     }
     const statusLabel = li.querySelector('.status-label');
-    if (statusLabel) statusLabel.textContent = p.status.toUpperCase();
+    if (statusLabel) statusLabel.textContent = String(p.status || 'offline').toUpperCase();
   }
 
   function buildPeerItem(p) {
@@ -593,7 +602,7 @@
     const statusEl = li.querySelector('.peer-status');
     if (statusEl) statusEl.classList.add(p.status);
     const statusLabel = li.querySelector('.status-label');
-    if (statusLabel) statusLabel.textContent = p.status.toUpperCase();
+    if (statusLabel) statusLabel.textContent = String(p.status || 'offline').toUpperCase();
 
     return li;
   }
@@ -2051,7 +2060,14 @@
 
   // Backend is the source of truth for `favorite` (Fase 6 persistence).
   function applyPeers(wirePeers, initial) {
-    state.peers = wirePeers.map((p) => ({ ...p }));
+    // Normalize status at ingestion so no downstream consumer has to defend
+    // against a missing/unknown status. The backend only ever emits
+    // "online"/"offline"; anything else maps to "offline" (never dropped).
+    const VALID_STATUS = new Set(['online', 'offline']);
+    state.peers = wirePeers.map((p) => {
+      const status = VALID_STATUS.has(p.status) ? p.status : 'offline';
+      return { ...p, status };
+    });
 
     // Drop selection if the selected peer vanished.
     if (state.selectedPeerId && !state.peers.find((p) => p.id === state.selectedPeerId)) {
