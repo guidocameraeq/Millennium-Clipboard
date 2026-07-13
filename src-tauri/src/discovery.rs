@@ -460,7 +460,7 @@ pub fn start(
                         *count = count.saturating_add(1);
                         // A dead favorite keeps failing every 6s forever:
                         // log the 3 probes that matter, then only every 10th.
-                        if *count <= 3 || *count % 10 == 0 {
+                        if *count <= 3 || count.is_multiple_of(10) {
                             crate::runtime_log::warn(format!(
                                 "[poll] probe failed {} @ {}:{} ({}/3): {}",
                                 fp_short, ip, port, count, e
@@ -479,7 +479,7 @@ pub fn start(
                     Err(_) => {
                         let count = failures.entry(fp.clone()).or_insert(0);
                         *count = count.saturating_add(1);
-                        if *count <= 3 || *count % 10 == 0 {
+                        if *count <= 3 || count.is_multiple_of(10) {
                             crate::runtime_log::warn(format!(
                                 "[poll] probe TIMEOUT {} @ {}:{} ({}/3)",
                                 fp_short, ip, port, count
