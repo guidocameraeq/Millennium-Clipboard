@@ -86,3 +86,13 @@ tauri-plugin-barcode-scanner = "2"
 [target.'cfg(target_os = "android")'.dependencies]
 tauri-plugin-android-fs = "28"
 
+# Release binary: size-optimized (~25 MB → ~8-12 MB). panic="abort"
+# still runs our panic hook (crash.log) — it only skips the unwinding
+# that would happen AFTER the hook. Dev profile stays untouched.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+opt-level = "s"
+
