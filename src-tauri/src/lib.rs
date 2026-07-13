@@ -80,7 +80,8 @@ fn get_local_info(state: tauri::State<AppState>) -> LocalInfo {
     LocalInfo {
         alias: id.alias.clone(),
         host_id_hex: id.hex_id.clone(),
-        ip: id.local_ip.clone(),
+        // Live IP (updated on a network roam), not the boot-time one.
+        ip: state.discovery.current_local_ip(),
         port: state.server_port,
         fingerprint: id.fingerprint.clone(),
         version: env!("CARGO_PKG_VERSION").into(),
@@ -95,6 +96,9 @@ fn list_peers(state: tauri::State<AppState>) -> Vec<discovery::WirePeer> {
 #[tauri::command]
 fn rescan_peers(state: tauri::State<AppState>) -> Result<Vec<discovery::WirePeer>, String> {
     discovery::rebrowse(&state.discovery).map_err(|e| e.to_string())?;
+    // Also kick the probe scheduler so absent manual/favorite peers get
+    // re-probed now instead of waiting out their backoff (up to 5 min).
+    state.discovery.wake_probes();
     Ok(state.discovery.peers_for_wire())
 }
 
@@ -418,7 +422,9 @@ fn build_pair_payload(state: &AppState) -> String {
         "fp": id.fingerprint,
         "alias": id.alias,
         "hex": id.hex_id,
-        "ip": id.local_ip,
+        // Live IP (updated on a network roam), not the boot-time one, so a
+        // freshly scanned QR points the phone at the address we're on now.
+        "ip": state.discovery.current_local_ip(),
         "port": state.server_port,
     })
     .to_string()

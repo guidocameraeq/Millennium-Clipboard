@@ -57,7 +57,10 @@ pub struct PeerRecord {
     pub ip: String,
     pub port: u16,
     pub icon_type: String,
-    #[allow(dead_code)]
+    /// When we last had positive proof this peer is alive (UDP hello, mDNS
+    /// resolve, or a successful TCP probe). The reaper drops peers whose
+    /// last_seen exceeds PEER_TTL; the probe scheduler re-probes live peers
+    /// UDP has let go stale.
     pub last_seen: Instant,
     /// The ip/port were confirmed by a real socket source: a TCP probe to
     /// /info, or the source IP of a UDP datagram. Once `true`, mDNS
@@ -97,6 +100,14 @@ pub struct DiscoveryState {
     pub icons: Arc<crate::icon_overrides::IconOverrideStore>,
     #[allow(dead_code)]
     pub daemon: ServiceDaemon,
+    /// The current preferred local IPv4, kept up to date by the
+    /// network-change watcher. Read by `get_local_info` / QR pairing so they
+    /// reflect a Wi-Fi roam or DHCP renewal instead of the boot-time IP
+    /// frozen in `Identity`.
+    current_ip: Arc<Mutex<String>>,
+    /// Notified by `wake_probes()` (a user "rescan") to force an immediate
+    /// probe pass with every backoff cleared.
+    probe_wake: Arc<tokio::sync::Notify>,
 }
 
 /// Build the merged wire-list. Sources in priority order:
@@ -218,6 +229,19 @@ impl DiscoveryState {
         let snapshot = self.peers_for_wire();
         let _ = app.emit("peers-changed", &snapshot);
     }
+
+    /// The IP we currently believe is ours, after any network-change the
+    /// watcher has observed. Falls back to the boot IP until the first roam.
+    pub fn current_local_ip(&self) -> String {
+        self.current_ip.lock().unwrap().clone()
+    }
+
+    /// Force the probe scheduler to run a pass now with backoffs cleared, so
+    /// a manual "rescan" re-probes absent manual/favorite peers immediately
+    /// instead of waiting out their (up to 5 min) backoff.
+    pub fn wake_probes(&self) {
+        self.probe_wake.notify_one();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +287,8 @@ pub fn start(
 
     let peers: PeerMap = Arc::new(Mutex::new(HashMap::new()));
     let fullnames: FullnameMap = Arc::new(Mutex::new(HashMap::new()));
+    let current_ip: Arc<Mutex<String>> = Arc::new(Mutex::new(identity.local_ip.clone()));
+    let probe_wake = Arc::new(tokio::sync::Notify::new());
 
     register_self(&daemon, identity, port)?;
 
@@ -382,6 +408,7 @@ pub fn start(
     //     keeping fresh, each on its own exponential backoff.
     {
         let peers = peers.clone();
+        let fullnames = fullnames.clone();
         let prefs = prefs.clone();
         let manual = manual.clone();
         let aliases = aliases.clone();
@@ -389,8 +416,9 @@ pub fn start(
         let icons = icons.clone();
         let app = app.clone();
         let my_fp = identity.fingerprint.clone();
+        let probe_wake = probe_wake.clone();
         tauri::async_runtime::spawn(async move {
-            use futures_util::future::join_all;
+            use futures_util::stream::{FuturesUnordered, StreamExt};
             use std::collections::HashMap as Map;
             use std::collections::HashSet;
             use std::time::{Duration, Instant};
@@ -415,7 +443,15 @@ pub fn start(
             sched.tick().await; // skip the immediate first tick
 
             loop {
-                sched.tick().await;
+                tokio::select! {
+                    _ = sched.tick() => {}
+                    _ = probe_wake.notified() => {
+                        // User asked to rescan: forget all backoff so every
+                        // absent candidate becomes due on this pass.
+                        probe_at.clear();
+                        backoff.clear();
+                    }
+                }
                 let now = Instant::now();
 
                 // Snapshot live peers with their route + staleness.
@@ -485,7 +521,7 @@ pub fn start(
                     continue;
                 }
 
-                let probes: Vec<_> = due
+                let mut probes: FuturesUnordered<_> = due
                     .into_iter()
                     .map(|(fp, ip, port, hex, icon)| async move {
                         let res = tokio::time::timeout(
@@ -496,10 +532,23 @@ pub fn start(
                         (fp, ip, port, hex, icon, res)
                     })
                     .collect();
-                let results = join_all(probes).await;
+
+                // Widen a peer's backoff after a failed probe.
+                let bump = |backoff: &mut Map<String, Duration>,
+                            probe_at: &mut Map<String, Instant>,
+                            fp: &str| {
+                    let entry = backoff.entry(fp.to_string()).or_insert(min_backoff);
+                    let this = *entry;
+                    probe_at.insert(fp.to_string(), now + this);
+                    *entry = (this * 2).min(max_backoff);
+                };
 
                 let mut changed = false;
-                for (fp, probed_ip, probed_port, hex, icon, res) in results {
+                // Process each probe the moment IT completes (FuturesUnordered),
+                // never after the slowest one: a dead co-scheduled peer's 5 s
+                // timeout must not hold back a healthy peer's last_seen refresh
+                // long enough for the reaper to drop it.
+                while let Some((fp, probed_ip, probed_port, hex, icon, res)) = probes.next().await {
                     let fp_short = &fp[..16.min(fp.len())];
                     match res {
                         Ok(Ok(info)) if info.fingerprint == fp => {
@@ -553,24 +602,41 @@ pub fn start(
                             if peers.lock().unwrap().remove(&fp).is_some() {
                                 changed = true;
                             }
-                            let entry = backoff.entry(fp.clone()).or_insert(min_backoff);
-                            let this = *entry;
-                            probe_at.insert(fp.clone(), now + this);
-                            *entry = (this * 2).min(max_backoff);
+                            bump(&mut backoff, &mut probe_at, &fp);
                         }
-                        _ => {
-                            // Unreachable / timed out. The reaper owns removal
-                            // by last_seen; here we only widen the backoff so an
-                            // absent peer isn't hammered every couple seconds.
-                            let entry = backoff.entry(fp.clone()).or_insert(min_backoff);
-                            let this = *entry;
-                            probe_at.insert(fp.clone(), now + this);
-                            *entry = (this * 2).min(max_backoff);
+                        Ok(Err(e)) => {
+                            // Log only the FIRST failure of a run (backoff entry
+                            // absent) so a permanently-unreachable manual/favorite
+                            // leaves a diagnostic trace without per-tick spam.
+                            if !backoff.contains_key(&fp) {
+                                crate::runtime_log::info(format!(
+                                    "[probe] {} @ {}:{} unreachable ({}); backing off",
+                                    fp_short, probed_ip, probed_port, e
+                                ));
+                            }
+                            bump(&mut backoff, &mut probe_at, &fp);
+                        }
+                        Err(_) => {
+                            if !backoff.contains_key(&fp) {
+                                crate::runtime_log::info(format!(
+                                    "[probe] {} @ {}:{} timed out; backing off",
+                                    fp_short, probed_ip, probed_port
+                                ));
+                            }
+                            bump(&mut backoff, &mut probe_at, &fp);
                         }
                     }
                 }
 
                 if changed {
+                    // A DRIFT drop here can orphan a fullname → id mapping the
+                    // reaper won't see (it only cleans on its own removals), so
+                    // reconcile fullnames against the live set on every change.
+                    {
+                        let live_ids: HashSet<String> =
+                            peers.lock().unwrap().keys().cloned().collect();
+                        fullnames.lock().unwrap().retain(|_, id| live_ids.contains(id));
+                    }
                     let snapshot =
                         build_wire_list(&peers, &prefs, &manual, &aliases, &clipboard, &icons);
                     let _ = app.emit("peers-changed", &snapshot);
@@ -592,6 +658,7 @@ pub fn start(
         let daemon = daemon.clone();
         let mut identity = identity.clone();
         let bind_port = port;
+        let current_ip = current_ip.clone();
         tauri::async_runtime::spawn(async move {
             use std::time::Duration;
             let mut watch = tokio::time::interval(Duration::from_secs(30));
@@ -599,7 +666,11 @@ pub fn start(
             watch.tick().await; // skip the immediate first tick
             loop {
                 watch.tick().await;
-                let fresh = crate::identity::compute_local_ip();
+                // NIC enumeration is a blocking syscall (GetAdaptersAddresses
+                // on Windows) — keep it off the reactor.
+                let fresh = tokio::task::spawn_blocking(crate::identity::compute_local_ip)
+                    .await
+                    .unwrap_or_default();
                 if fresh.is_empty() || fresh == identity.local_ip {
                     continue;
                 }
@@ -607,7 +678,10 @@ pub fn start(
                     "[net] local IP changed {} -> {}; re-announcing mDNS",
                     identity.local_ip, fresh
                 ));
-                identity.local_ip = fresh;
+                identity.local_ip = fresh.clone();
+                // Publish the new IP so get_local_info / QR pairing reflect the
+                // roam instead of the boot-time IP frozen in AppState.identity.
+                *current_ip.lock().unwrap() = fresh;
                 if let Ok(ip) = identity.local_ip.parse::<std::net::IpAddr>() {
                     if let Err(e) = daemon.enable_interface(IfKind::Addr(ip)) {
                         crate::runtime_log::warn(format!(
@@ -623,7 +697,18 @@ pub fn start(
         });
     }
 
-    Ok(DiscoveryState { peers, fullnames, prefs, manual, aliases, clipboard, icons, daemon })
+    Ok(DiscoveryState {
+        peers,
+        fullnames,
+        prefs,
+        manual,
+        aliases,
+        clipboard,
+        icons,
+        daemon,
+        current_ip,
+        probe_wake,
+    })
 }
 
 pub fn rebrowse(state: &DiscoveryState) -> Result<(), mdns_sd::Error> {
