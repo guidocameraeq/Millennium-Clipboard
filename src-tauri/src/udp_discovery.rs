@@ -246,26 +246,37 @@ fn handle_packet(
     let fp_short = &pkt.fingerprint[..16.min(pkt.fingerprint.len())];
     let src_ip = peer_addr.ip().to_string();
 
-    let was_new = {
+    // `is_new`: a peer we'd never seen (first UDP sighting).
+    // `should_emit`: the wire list changed — a new peer OR a corrected
+    // route/alias on an existing one — so the frontend must be told.
+    let (should_emit, is_new) = {
         let mut p = peers.lock().unwrap();
         match p.get_mut(&pkt.fingerprint) {
             Some(existing) => {
                 existing.last_seen = Instant::now();
-                if existing.name != pkt.alias {
-                    existing.name = pkt.alias.clone();
-                }
-                // CRITICAL DIAGNOSTIC: if the IP this UDP datagram came from
-                // disagrees with the IP currently stored for this peer, log
-                // it. This is the smoking gun for the "mDNS advertised the
-                // wrong IP, UDP knows the right one but we ignore it"
-                // pattern that causes the asymmetric flap.
+                // The datagram's source IP is authoritative: the kernel saw
+                // it arrive, it can't be spoofed to a virtual NIC the way an
+                // mDNS A-record can. So UDP always wins the route, confirmed
+                // or not — this is what kills the asymmetric flap.
+                existing.confirmed = true;
+                let mut route_changed = false;
                 if existing.ip != src_ip {
-                    crate::runtime_log::warn(format!(
-                        "[udp] IP DISAGREEMENT for {}: stored={} datagram_src={} (UDP currently ignores the correction — TCP probe will fail against stored IP)",
+                    crate::runtime_log::info(format!(
+                        "[udp] correcting IP for {}: {} -> {} (datagram src wins)",
                         fp_short, existing.ip, src_ip
                     ));
+                    existing.ip = src_ip.clone();
+                    route_changed = true;
                 }
-                false
+                if existing.port != pkt.tcp_port {
+                    existing.port = pkt.tcp_port;
+                    route_changed = true;
+                }
+                if existing.name != pkt.alias {
+                    existing.name = pkt.alias.clone();
+                    route_changed = true;
+                }
+                (route_changed, false)
             }
             None => {
                 p.insert(
@@ -278,18 +289,22 @@ fn handle_packet(
                         port: pkt.tcp_port,
                         icon_type: pkt.icon_type.clone(),
                         last_seen: Instant::now(),
+                        // Source IP of the datagram is the real route.
+                        confirmed: true,
                     },
                 );
-                true
+                (true, true)
             }
         }
     };
 
-    if was_new {
+    if is_new {
         crate::runtime_log::info(format!(
             "[udp] NEW peer {} '{}' via broadcast from {} (payload tcp_port={})",
             fp_short, pkt.alias, peer_addr, pkt.tcp_port
         ));
+    }
+    if should_emit {
         let snapshot = build_wire_list(peers, prefs, manual, aliases, clipboard, icons);
         let _ = app.emit("peers-changed", &snapshot);
     }

@@ -59,6 +59,12 @@ pub struct PeerRecord {
     pub icon_type: String,
     #[allow(dead_code)]
     pub last_seen: Instant,
+    /// The ip/port were confirmed by a real socket source: a TCP probe to
+    /// /info, or the source IP of a UDP datagram. Once `true`, mDNS
+    /// A-records (which can advertise a peer's virtual NICs) no longer
+    /// overwrite the route. Reset implicitly when the record is reaped and
+    /// re-learned from mDNS.
+    pub confirmed: bool,
 }
 
 impl PeerRecord {
@@ -429,6 +435,7 @@ pub fn start(
                             port,
                             icon_type,
                             last_seen: std::time::Instant::now(),
+                            confirmed: true,
                         };
                         let was_new = peers_for_poll
                             .lock()
@@ -537,6 +544,43 @@ fn detect_icon_type() -> &'static str {
     } else {
         "desktop"
     }
+}
+
+/// Reconcile an incoming mDNS resolve against an existing `PeerRecord`.
+///
+/// The single reconciliation policy for mDNS: metadata (name/hex/icon)
+/// always refreshes because it's harmless labelling, but the ROUTE
+/// (ip/port) only updates while the record is NOT `confirmed`. A confirmed
+/// record was proven by a UDP datagram source IP or a TCP probe, and mDNS
+/// A-records (which advertise every NIC of the peer, WSL/Hyper-V included)
+/// must never clobber it. Returns whether anything that reaches the wire
+/// list changed. Pure (no logging / no lock) so it can be unit-tested.
+fn reconcile_mdns(
+    existing: &mut PeerRecord,
+    alias: &str,
+    hex_id: &str,
+    icon_type: &str,
+    ip: &str,
+    port: u16,
+) -> bool {
+    existing.last_seen = Instant::now();
+    let meta_changed = existing.name != alias
+        || existing.hex_id != hex_id
+        || existing.icon_type != icon_type;
+    let route_changed =
+        if !existing.confirmed && (existing.ip != ip || existing.port != port) {
+            existing.ip = ip.to_string();
+            existing.port = port;
+            true
+        } else {
+            false
+        };
+    if meta_changed {
+        existing.name = alias.to_string();
+        existing.hex_id = hex_id.to_string();
+        existing.icon_type = icon_type.to_string();
+    }
+    meta_changed || route_changed
 }
 
 /// Return the first three octets of an IPv4 string ("a.b.c.d" → "a.b.c").
@@ -656,24 +700,28 @@ fn handle_event(
                 let mut p = peers.lock().unwrap();
                 match p.get_mut(&id) {
                     Some(existing) => {
-                        let same = existing.name == alias
-                            && existing.hex_id == hex_id
-                            && existing.ip == ip
-                            && existing.port == port
-                            && existing.icon_type == icon_type;
-                        existing.last_seen = Instant::now();
-                        if !same {
-                            crate::runtime_log::info(format!(
-                                "[mdns] resolve {} '{}' changed: ip {}->{} port {}->{} (announced addrs: {:?})",
-                                fp_short, alias, existing.ip, ip, existing.port, port, all_addrs
-                            ));
-                            existing.name = alias;
-                            existing.hex_id = hex_id;
-                            existing.ip = ip;
-                            existing.port = port;
-                            existing.icon_type = icon_type;
+                        let old_ip = existing.ip.clone();
+                        let old_port = existing.port;
+                        let was_confirmed = existing.confirmed;
+                        let route_differs = old_ip != ip || old_port != port;
+                        let changed =
+                            reconcile_mdns(existing, &alias, &hex_id, &icon_type, &ip, port);
+                        if route_differs {
+                            if was_confirmed {
+                                // mDNS wants to move a confirmed peer (probably to
+                                // one of its virtual NICs). We keep the real route.
+                                crate::runtime_log::info(format!(
+                                    "[mdns] ignoring A-record {}:{} for confirmed peer {} (keeping {}:{})",
+                                    ip, port, fp_short, old_ip, old_port
+                                ));
+                            } else {
+                                crate::runtime_log::info(format!(
+                                    "[mdns] resolve {} '{}' route (unconfirmed) {}:{} -> {}:{} (announced addrs: {:?})",
+                                    fp_short, alias, old_ip, old_port, ip, port, all_addrs
+                                ));
+                            }
                         }
-                        !same
+                        changed
                     }
                     None => {
                         crate::runtime_log::info(format!(
@@ -690,6 +738,10 @@ fn handle_event(
                                 port,
                                 icon_type,
                                 last_seen: Instant::now(),
+                                // mDNS is a "first sight" hint only: the A-record
+                                // may point at a virtual NIC. Not confirmed until
+                                // a UDP datagram or a TCP probe proves the route.
+                                confirmed: false,
                             },
                         );
                         true
@@ -733,4 +785,57 @@ fn emit_peers_changed(
 ) {
     let snapshot = build_wire_list(peers, prefs, manual, aliases, clipboard, icons);
     let _ = app.emit("peers-changed", &snapshot);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rec(ip: &str, port: u16, confirmed: bool) -> PeerRecord {
+        PeerRecord {
+            id: "fp".into(),
+            name: "ALPHA".into(),
+            hex_id: "0xAB:CD:EF".into(),
+            ip: ip.into(),
+            port,
+            icon_type: "desktop".into(),
+            last_seen: Instant::now(),
+            confirmed,
+        }
+    }
+
+    #[test]
+    fn mdns_never_overwrites_a_confirmed_route() {
+        // Peer proven at 192.168.1.42 (e.g. by a UDP datagram). mDNS then
+        // resolves the same peer to its WSL NIC (172.20.0.1). The route
+        // must NOT move.
+        let mut r = rec("192.168.1.42", 53319, true);
+        let changed = reconcile_mdns(&mut r, "ALPHA", "0xAB:CD:EF", "desktop", "172.20.0.1", 53319);
+        assert_eq!(r.ip, "192.168.1.42", "confirmed route preserved");
+        assert_eq!(r.port, 53319);
+        assert!(!changed, "no wire-visible change");
+    }
+
+    #[test]
+    fn mdns_updates_route_of_unconfirmed_peer() {
+        // A peer only ever seen by mDNS (unconfirmed) may still have its
+        // route corrected by a later, better mDNS resolve.
+        let mut r = rec("192.168.1.42", 53319, false);
+        let changed = reconcile_mdns(&mut r, "ALPHA", "0xAB:CD:EF", "desktop", "192.168.1.99", 53320);
+        assert_eq!(r.ip, "192.168.1.99");
+        assert_eq!(r.port, 53320);
+        assert!(changed);
+    }
+
+    #[test]
+    fn mdns_refreshes_metadata_even_on_confirmed_peer() {
+        // Alias/icon are labelling, not routing: they refresh regardless of
+        // `confirmed`, but the ip/port stay put.
+        let mut r = rec("192.168.1.42", 53319, true);
+        let changed = reconcile_mdns(&mut r, "BRAVO", "0x11:22:33", "phone", "172.20.0.1", 53319);
+        assert_eq!(r.name, "BRAVO");
+        assert_eq!(r.icon_type, "phone");
+        assert_eq!(r.ip, "192.168.1.42", "route still preserved");
+        assert!(changed, "metadata change is wire-visible");
+    }
 }
