@@ -124,10 +124,13 @@ async fn run(
         IpAddr::V4(Ipv4Addr::new(255, 255, 255, 255)),
         UDP_DISCOVERY_PORT,
     );
-    let subnet_broadcast = derive_subnet_broadcast(&info.local_ip);
+    // Limited broadcast (255.255.255.255) reaches every host on the local
+    // segment regardless of the netmask and is never routed off-link. We no
+    // longer derive a /24 directed broadcast: that hard-coded guess was
+    // wrong on /16, /23, ... LANs. One global broadcast covers them all.
     crate::runtime_log::info(format!(
-        "[udp] broadcasting to 255.255.255.255:{} and subnet {:?} every {}s",
-        UDP_DISCOVERY_PORT, subnet_broadcast, BROADCAST_INTERVAL_SECS
+        "[udp] broadcasting to 255.255.255.255:{} every {}s (local_ip={})",
+        UDP_DISCOVERY_PORT, BROADCAST_INTERVAL_SECS, info.local_ip
     ));
 
     let mut buf = vec![0u8; 4096];
@@ -154,11 +157,6 @@ async fn run(
                     }
                     Err(e) => {
                         crate::runtime_log::err(format!("[udp] broadcast send failed: {}", e));
-                    }
-                }
-                if let Some(sb) = subnet_broadcast {
-                    if let Err(e) = socket.send_to(&bytes, sb).await {
-                        crate::runtime_log::warn(format!("[udp] subnet send to {} failed: {}", sb, e));
                     }
                 }
             }
@@ -201,24 +199,6 @@ fn build_socket() -> Result<UdpSocket> {
     // UdpSocket::from_std requires a Tokio runtime to be live on this
     // thread. spawn() callers must invoke us inside an async task.
     UdpSocket::from_std(std_socket).context("convert to tokio UdpSocket")
-}
-
-/// Given "192.168.1.42" → SocketAddr("192.168.1.255:53318").
-fn derive_subnet_broadcast(local_ip: &str) -> Option<SocketAddr> {
-    let parts: Vec<&str> = local_ip.split('.').collect();
-    if parts.len() != 4 {
-        return None;
-    }
-    // Assume /24 — by far the most common consumer LAN.
-    Some(SocketAddr::new(
-        IpAddr::V4(Ipv4Addr::new(
-            parts[0].parse().ok()?,
-            parts[1].parse().ok()?,
-            parts[2].parse().ok()?,
-            255,
-        )),
-        UDP_DISCOVERY_PORT,
-    ))
 }
 
 #[allow(clippy::too_many_arguments)]
