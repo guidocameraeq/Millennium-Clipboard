@@ -322,6 +322,10 @@
   let phIdx = 0;
 
   function typePh(line, i = 0) {
+    // Starting a fresh line (i===0) cancels any chain still running, so
+    // two callers can never leave two concurrent typewriters alive
+    // (phTimer only ever tracks one timer).
+    if (i === 0 && phTimer) { clearTimeout(phTimer); phTimer = null; }
     textarea.placeholder = line.slice(0, i) + (i < line.length ? '▌' : '');
     if (i <= line.length) {
       phTimer = setTimeout(() => typePh(line, i + 1), 35 + Math.random() * 45);
@@ -342,7 +346,8 @@
     if (phTimer) { clearTimeout(phTimer); phTimer = null; }
     textarea.placeholder = '';
   }
-  if (!fxDisabled()) typePh(placeholderLines[0]);
+  // syncFxPaused() below is the single boot entry point for the
+  // typewriter — starting it here too would spawn a second chain.
   textarea.addEventListener('focus', () => { if (!textarea.value) stopPh(); });
   textarea.addEventListener('blur', () => {
     if (!textarea.value && !fxDisabled()) { phIdx = 0; typePh(placeholderLines[0]); }
@@ -1212,10 +1217,21 @@
 
   if (logCloseBtn) logCloseBtn.addEventListener('click', closeLogModal);
 
+  // COPY/EXPORT pull the full backend buffer (up to 5000 lines) rather
+  // than the 2000-line display ring, so the diagnostic the user pastes
+  // back matches the "N lines" counter and isn't silently truncated.
+  async function fullLogText() {
+    try {
+      return (await invoke('get_runtime_log')) || logRing.join('\n');
+    } catch (_) {
+      return logRing.join('\n');
+    }
+  }
+
   if (logCopyBtn) {
     logCopyBtn.addEventListener('click', async () => {
       try {
-        await navigator.clipboard.writeText(logRing.join('\n'));
+        await navigator.clipboard.writeText(await fullLogText());
         const orig = logCopyBtn.textContent;
         logCopyBtn.textContent = '✓ COPIED';
         setTimeout(() => { logCopyBtn.textContent = orig; }, 1400);
@@ -1226,8 +1242,8 @@
   }
 
   if (logExportBtn) {
-    logExportBtn.addEventListener('click', () => {
-      const blob = new Blob([logRing.join('\n')], { type: 'text/plain' });
+    logExportBtn.addEventListener('click', async () => {
+      const blob = new Blob([await fullLogText()], { type: 'text/plain' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -1829,6 +1845,11 @@
 
   // ---------- Boot ----------------------------------------------------------
   async function boot() {
+    // PANEL_OPEN lives in the backend process, which survives a webview
+    // reload (F5 / tauri dev hot-reload). The log modal starts hidden, so
+    // reset the flag to match — otherwise the backend keeps emitting a
+    // log-line IPC event per line into a closed panel.
+    invoke('set_log_panel_open', { open: false }).catch(() => {});
     try {
       const info = await invoke('get_local_info');
       window.__LOCAL_INFO = info;
