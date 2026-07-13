@@ -82,22 +82,38 @@ html, body {
 .horizon-floor {
   position: absolute;
   inset: 0;
-  background-image:
-    linear-gradient(to bottom,
-      transparent 0%,
-      rgba(255, 43, 214, 0.06) 60%,
-      rgba(0, 240, 255, 0.18) 100%),
-    linear-gradient(var(--grid-line-hot) 1px, transparent 1px),
-    linear-gradient(90deg, var(--grid-line-hot) 1px, transparent 1px);
-  background-size: 100% 100%, 64px 64px, 64px 64px;
   transform: rotateX(62deg);
   transform-origin: 50% 0%;
-  animation: grid-flow 4s linear infinite;
 }
 
-@keyframes grid-flow {
-  from { background-position: 0 0, 0 0, 0 0; }
-  to   { background-position: 0 0, 0 64px, 0 0; }
+/* Grid lines live on ::before and scroll via transform (compositor-only,
+   no repaint). The extra 64px cell above hides the seam of the loop —
+   translateY distance and background-size must both stay at 64px. */
+.horizon-floor::before {
+  content: '';
+  position: absolute;
+  inset: -64px 0 0 0;
+  background-image:
+    linear-gradient(var(--grid-line-hot) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line-hot) 1px, transparent 1px);
+  background-size: 64px 64px, 64px 64px;
+  will-change: transform;
+}
+
+/* Horizon glow stays static above the moving lines (paints after ::before). */
+.horizon-floor::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom,
+    transparent 0%,
+    rgba(255, 43, 214, 0.06) 60%,
+    rgba(0, 240, 255, 0.18) 100%);
+}
+
+@keyframes grid-scroll {
+  from { transform: translateY(0); }
+  to   { transform: translateY(64px); }
 }
 
 .bg-vignette {
@@ -126,7 +142,6 @@ html, body {
     var(--neon-cyan) 65%,
     transparent 100%);
   box-shadow: 0 0 18px var(--neon-cyan-glow);
-  animation: scan-drop 7.5s linear infinite;
   opacity: 0.55;
 }
 
@@ -144,7 +159,6 @@ html, body {
   z-index: 999;
   pointer-events: none;
   opacity: 0.04;
-  mix-blend-mode: overlay;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.7'/></svg>");
 }
 
@@ -208,7 +222,6 @@ html, body {
   color: var(--neon-cyan);
   text-shadow: 0 0 10px var(--neon-cyan-glow);
   letter-spacing: -2px;
-  animation: pulse-soft 2.4s ease-in-out infinite;
 }
 
 .logo-text {
@@ -321,7 +334,6 @@ html, body {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  backdrop-filter: blur(2px);
   box-shadow:
     0 0 32px rgba(0, 240, 255, 0.05),
     inset 0 0 60px rgba(0, 240, 255, 0.02);
@@ -373,7 +385,6 @@ html, body {
   border-radius: 50%;
   background: var(--neon-cyan);
   box-shadow: 0 0 10px var(--neon-cyan), 0 0 18px var(--neon-cyan-glow);
-  animation: dot-pulse 1.4s ease-in-out infinite;
 }
 
 @keyframes dot-pulse {
@@ -483,11 +494,9 @@ html, body {
   letter-spacing: 3px;
   color: var(--text-mute);
   border: 1px dashed var(--neon-cyan-soft);
-  animation: pulse-soft 1.6s ease-in-out infinite;
 }
 
 .peer-empty {
-  animation: none;
   color: var(--text-dim);
 }
 
@@ -722,7 +731,6 @@ html, body {
 .peer-status.online .status-dot {
   background: var(--neon-green);
   box-shadow: 0 0 8px rgba(57, 255, 20, 0.65);
-  animation: dot-pulse 1.8s ease-in-out infinite;
 }
 .peer-status.away         { color: var(--neon-amber); }
 .peer-status.away .status-dot {
@@ -899,7 +907,6 @@ html, body {
   font-size: 48px;
   color: var(--neon-cyan);
   text-shadow: 0 0 24px var(--neon-cyan-glow);
-  animation: float 3s ease-in-out infinite;
 }
 
 @keyframes float {
@@ -1099,7 +1106,6 @@ html, body {
   border-radius: 50%;
   background: var(--neon-green);
   box-shadow: 0 0 8px rgba(57, 255, 20, 0.6);
-  animation: dot-pulse 1.6s ease-in-out infinite;
 }
 
 .status-text { color: var(--text-bright); }
@@ -2584,4 +2590,43 @@ html.is-mobile .status-val { font-size: 9px !important; }
   font-size: 11px;
   padding: 8px 10px;
 }
+
+/* ==========================================================================
+   FX GOVERNANCE (fase 0)
+   Every decorative looping animation is assigned ONLY here, gated behind
+   prefers-reduced-motion. One-shot transitions (modal-in, alert-in,
+   banner-in, backdrop-in) stay on their base rules — they don't loop.
+   ========================================================================== */
+
+@media (prefers-reduced-motion: no-preference) {
+  .horizon-floor::before          { animation: grid-scroll 4s linear infinite; }
+  .scanline                       { animation: scan-drop 7.5s linear infinite; }
+  .logo-mark                      { animation: pulse-soft 2.4s ease-in-out infinite; }
+  .card-pulse                     { animation: dot-pulse 1.4s ease-in-out infinite; }
+  .peer-loading                   { animation: pulse-soft 1.6s ease-in-out infinite; }
+  .peer-status.online .status-dot { animation: dot-pulse 1.8s ease-in-out infinite; }
+  .dropzone-icon                  { animation: float 3s ease-in-out infinite; }
+  .status-item .status-dot        { animation: dot-pulse 1.6s ease-in-out infinite; }
+}
+
+/* Window hidden/minimized → freeze every animation (class set from JS
+   on visibilitychange). All animations in this app are decorative, so
+   the blanket pause is safe. */
+html.fx-paused *,
+html.fx-paused *::before,
+html.fx-paused *::after {
+  animation-play-state: paused !important;
+}
+
+/* User toggle in Settings (persisted in localStorage as fx=off). */
+html.fx-off .bg-horizon,
+html.fx-off .scanline,
+html.fx-off .noise { display: none; }
+html.fx-off .horizon-floor::before,
+html.fx-off .logo-mark,
+html.fx-off .card-pulse,
+html.fx-off .peer-loading,
+html.fx-off .peer-status.online .status-dot,
+html.fx-off .dropzone-icon,
+html.fx-off .status-item .status-dot { animation: none !important; }
 

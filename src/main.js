@@ -134,6 +134,8 @@
   const settingsAutostartLabel = document.getElementById('settings-autostart-label');
   const settingsCloseTray = document.getElementById('settings-close-tray');
   const settingsCloseTrayLabel = document.getElementById('settings-close-tray-label');
+  const settingsFx = document.getElementById('settings-fx');
+  const settingsFxLabel = document.getElementById('settings-fx-label');
 
   const addPeerBtn = document.getElementById('add-peer-btn');
   const addPeerModal = document.getElementById('add-peer-modal');
@@ -337,11 +339,30 @@
     if (phTimer) { clearTimeout(phTimer); phTimer = null; }
     textarea.placeholder = '';
   }
-  typePh(placeholderLines[0]);
+  if (!fxDisabled()) typePh(placeholderLines[0]);
   textarea.addEventListener('focus', () => { if (!textarea.value) stopPh(); });
   textarea.addEventListener('blur', () => {
-    if (!textarea.value) { phIdx = 0; typePh(placeholderLines[0]); }
+    if (!textarea.value && !fxDisabled()) { phIdx = 0; typePh(placeholderLines[0]); }
   });
+
+  // ---------- FX governance (fase 0) ----------------------------------------
+  // Decorative CSS animations freeze while the window is hidden
+  // (html.fx-paused, see styles.css) and the typewriter's setTimeout
+  // chain stops too — otherwise the WebView keeps painting in the tray.
+  function fxDisabled() {
+    return document.documentElement.classList.contains('fx-off');
+  }
+  function syncFxPaused() {
+    document.documentElement.classList.toggle('fx-paused', document.hidden);
+    if (document.hidden) {
+      stopPh();
+    } else if (!textarea.value && document.activeElement !== textarea && !fxDisabled()) {
+      phIdx = 0;
+      typePh(placeholderLines[0]);
+    }
+  }
+  document.addEventListener('visibilitychange', syncFxPaused);
+  syncFxPaused();
 
   // ---------- Character counter --------------------------------------------
   function updateCharCount() {
@@ -1089,6 +1110,11 @@
       settingsCloseTray.checked = v;
       settingsCloseTrayLabel.textContent = v ? 'ON' : 'OFF';
     }
+    if (settingsFx) {
+      const fxOn = !fxDisabled();
+      settingsFx.checked = fxOn;
+      settingsFxLabel.textContent = fxOn ? 'ON' : 'OFF';
+    }
     // Reset update UI to a known state each time the modal opens
     settingsUpdateStatus.textContent = `current v${(window.__LOCAL_INFO || {}).version || '?'}`;
     settingsUpdateAction.hidden = true;
@@ -1691,6 +1717,22 @@
         settingsAutostart.checked = !value;
         setStatus(`ERR autostart · ${err}`);
       }
+    });
+  }
+
+  if (settingsFx) {
+    settingsFx.addEventListener('change', () => {
+      const fxOn = settingsFx.checked;
+      document.documentElement.classList.toggle('fx-off', !fxOn);
+      try { localStorage.setItem('fx', fxOn ? 'on' : 'off'); } catch (_) {}
+      settingsFxLabel.textContent = fxOn ? 'ON' : 'OFF';
+      if (!fxOn) {
+        stopPh();
+      } else if (!textarea.value && document.activeElement !== textarea) {
+        phIdx = 0;
+        typePh(placeholderLines[0]);
+      }
+      blip(fxOn ? 1320 : 440, 0.06);
     });
   }
 

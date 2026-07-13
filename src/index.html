@@ -21,6 +21,13 @@
           document.documentElement.classList.add('is-mobile');
         }
       } catch (_) {}
+      // FX preference must land on <html> before styles.css applies,
+      // otherwise the grid/scanline flash for one frame on every boot.
+      try {
+        if (localStorage.getItem('fx') === 'off') {
+          document.documentElement.classList.add('fx-off');
+        }
+      } catch (_) {}
     })();
   </script>
   <title>Millennium Clipboard // GRID</title>
@@ -365,6 +372,20 @@
           <div class="settings-control">
             <span class="settings-value mono" id="settings-download-dir">—</span>
             <button class="modal-btn small" id="settings-pick-dir">▸ CHANGE</button>
+          </div>
+        </div>
+
+        <!-- ▸ INTERFACE — available on every platform; disabling the
+             decorative FX is the cheap-GPU / battery-saver mode. -->
+        <h3 class="settings-section">▸ INTERFACE</h3>
+        <div class="settings-row">
+          <span class="settings-label">VISUAL FX (GRID / SCANLINE)</span>
+          <div class="settings-control">
+            <label class="sound-toggle">
+              <input type="checkbox" id="settings-fx" />
+              <span class="sound-track"><span class="sound-thumb"></span></span>
+              <span class="settings-value mono" id="settings-fx-label">ON</span>
+            </label>
           </div>
         </div>
 
