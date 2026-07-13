@@ -17,6 +17,7 @@ mod http_client;
 mod http_server;
 mod icon_overrides;
 mod identity;
+mod json_store;
 mod manual_peers;
 mod preferences;
 mod runtime_log;

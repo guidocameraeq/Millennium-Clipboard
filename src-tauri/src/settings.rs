@@ -3,12 +3,16 @@
 // Persistent user preferences distinct from peer favorites:
 //   - download_dir: where incoming files land
 //   - auto_accept_favorites: skip the accept prompt for trusted peers
+//
+// `Settings` has no sensible `Default` (download_dir is caller-computed),
+// so this store uses `JsonStore::load_with_default` with an explicit
+// fallback. I/O (atomic write + backup-on-corrupt) lives in JsonStore.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+
+use crate::json_store::JsonStore;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,137 +28,68 @@ pub struct Settings {
     pub close_to_tray: bool,
 }
 
-fn default_auto_accept() -> bool { false }
-fn default_notifications_enabled() -> bool { true }
-fn default_close_to_tray() -> bool { true }
+fn default_auto_accept() -> bool {
+    false
+}
+fn default_notifications_enabled() -> bool {
+    true
+}
+fn default_close_to_tray() -> bool {
+    true
+}
 
 pub struct SettingsStore {
-    path: PathBuf,
-    inner: Mutex<Settings>,
-    /// True when settings.json existed but failed to parse, so the
-    /// in-memory state is the fallback default, NOT the user's real
-    /// prefs. Callers that take destructive action based on a pref
-    /// (e.g. removing the autostart registry entry) must skip it here.
-    loaded_corrupt: bool,
+    store: JsonStore<Settings>,
 }
 
 impl SettingsStore {
     pub fn load_or_default(data_dir: &Path, default_download_dir: PathBuf) -> Result<Self> {
-        eprintln!("[settings::load] enter, data_dir={}", data_dir.display());
-        let filename = match std::env::var("MILLENNIUM_INSTANCE").ok() {
-            Some(s) if !s.is_empty() => format!("settings-{}.json", s),
-            _ => "settings.json".to_string(),
+        let default = Settings {
+            download_dir: default_download_dir,
+            auto_accept_favorites: default_auto_accept(),
+            notifications_enabled: default_notifications_enabled(),
+            start_with_windows: false,
+            close_to_tray: default_close_to_tray(),
         };
-        let path = data_dir.join(&filename);
-        eprintln!("[settings::load] target file = {}", path.display());
-
-        let exists = path.exists();
-        eprintln!("[settings::load] exists = {}", exists);
-
-        let mut loaded_corrupt = false;
-        let inner = if exists {
-            eprintln!("[settings::load] reading file...");
-            let raw = fs::read_to_string(&path)
-                .with_context(|| format!("read {}", path.display()))?;
-            eprintln!("[settings::load] read {} bytes, parsing...", raw.len());
-            match serde_json::from_str::<Settings>(&raw) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("[settings::load] parse failed ({}), using defaults", e);
-                    loaded_corrupt = true;
-                    Settings {
-                        download_dir: default_download_dir.clone(),
-                        auto_accept_favorites: false,
-                        notifications_enabled: true,
-                        start_with_windows: false,
-                        close_to_tray: true,
-                    }
-                }
-            }
-        } else {
-            eprintln!("[settings::load] file missing, using defaults");
-            Settings {
-                download_dir: default_download_dir,
-                auto_accept_favorites: false,
-                notifications_enabled: true,
-                start_with_windows: false,
-                close_to_tray: true,
-            }
-        };
-
-        eprintln!("[settings::load] building store...");
-        let store = Self { path, inner: Mutex::new(inner), loaded_corrupt };
-        let s = store.inner.lock().unwrap();
+        let store = JsonStore::load_with_default(data_dir, "settings", "json", default)?;
+        // Keep the final diagnostic line the wild-bug reports rely on.
+        let (dir, auto) = store.read(|s| (s.download_dir.clone(), s.auto_accept_favorites));
         eprintln!(
             "[settings] download_dir={} auto_accept_favorites={}",
-            s.download_dir.display(),
-            s.auto_accept_favorites,
+            dir.display(),
+            auto
         );
-        drop(s);
-        Ok(store)
+        Ok(Self { store })
     }
 
     pub fn snapshot(&self) -> Settings {
-        self.inner.lock().unwrap().clone()
+        self.store.read(|s| s.clone())
     }
 
     /// True if settings.json existed but couldn't be parsed, so the live
     /// state is the fallback default rather than the user's real prefs.
+    /// The autostart heal skips the Run-key rewrite when this is true.
     pub fn loaded_from_corrupt(&self) -> bool {
-        self.loaded_corrupt
+        self.store.loaded_from_corrupt()
     }
 
     pub fn set_download_dir(&self, dir: PathBuf) -> Result<()> {
-        let payload = {
-            let mut s = self.inner.lock().unwrap();
-            s.download_dir = dir;
-            serde_json::to_string_pretty(&*s).context("serialize settings")?
-        };
-        self.persist(payload)
+        self.store.update(|s| s.download_dir = dir)
     }
 
     pub fn set_auto_accept_favorites(&self, value: bool) -> Result<()> {
-        let payload = {
-            let mut s = self.inner.lock().unwrap();
-            s.auto_accept_favorites = value;
-            serde_json::to_string_pretty(&*s).context("serialize settings")?
-        };
-        self.persist(payload)
+        self.store.update(|s| s.auto_accept_favorites = value)
     }
 
     pub fn set_notifications_enabled(&self, value: bool) -> Result<()> {
-        let payload = {
-            let mut s = self.inner.lock().unwrap();
-            s.notifications_enabled = value;
-            serde_json::to_string_pretty(&*s).context("serialize settings")?
-        };
-        self.persist(payload)
+        self.store.update(|s| s.notifications_enabled = value)
     }
 
     pub fn set_start_with_windows(&self, value: bool) -> Result<()> {
-        let payload = {
-            let mut s = self.inner.lock().unwrap();
-            s.start_with_windows = value;
-            serde_json::to_string_pretty(&*s).context("serialize settings")?
-        };
-        self.persist(payload)
+        self.store.update(|s| s.start_with_windows = value)
     }
 
     pub fn set_close_to_tray(&self, value: bool) -> Result<()> {
-        let payload = {
-            let mut s = self.inner.lock().unwrap();
-            s.close_to_tray = value;
-            serde_json::to_string_pretty(&*s).context("serialize settings")?
-        };
-        self.persist(payload)
-    }
-
-    fn persist(&self, payload: String) -> Result<()> {
-        if let Some(parent) = self.path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        fs::write(&self.path, payload)
-            .with_context(|| format!("write {}", self.path.display()))?;
-        Ok(())
+        self.store.update(|s| s.close_to_tray = value)
     }
 }
