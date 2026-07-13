@@ -1000,6 +1000,11 @@ fn clear_runtime_log() {
     runtime_log::clear();
 }
 
+#[tauri::command]
+fn set_log_panel_open(open: bool) {
+    runtime_log::set_panel_open(open);
+}
+
 /// Resolve a (possibly Android `content://`) path string to something
 /// `tokio::fs::File::open` can read. On non-Android targets and on
 /// Android paths that already look like filesystem paths, this is a
@@ -1483,6 +1488,7 @@ pub fn run() {
             set_clipboard_sync,
             get_runtime_log,
             clear_runtime_log,
+            set_log_panel_open,
             record_frontend_log,
             set_peer_icon,
             forget_peer,

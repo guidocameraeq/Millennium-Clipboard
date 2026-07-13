@@ -14,10 +14,20 @@ use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::{AppHandle, Emitter};
+
+/// The `log-line` IPC event is only worth serializing + crossing the
+/// webview boundary while the log panel is actually visible. The
+/// in-memory buffer and the file appender run regardless.
+static PANEL_OPEN: AtomicBool = AtomicBool::new(false);
+
+pub fn set_panel_open(open: bool) {
+    PANEL_OPEN.store(open, Ordering::Relaxed);
+}
 
 const CAPACITY: usize = 5000;
 const MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
@@ -103,8 +113,10 @@ pub fn push(level: &str, msg: String) {
         }
         lines.push_back(line.clone());
     }
-    if let Some(app) = s.app.lock().unwrap().as_ref() {
-        let _ = app.emit("log-line", &line);
+    if PANEL_OPEN.load(Ordering::Relaxed) {
+        if let Some(app) = s.app.lock().unwrap().as_ref() {
+            let _ = app.emit("log-line", &line);
+        }
     }
     if let Some(f) = s.file.lock().unwrap().as_mut() {
         let _ = writeln!(f, "{}", line);

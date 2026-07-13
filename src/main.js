@@ -1141,8 +1141,11 @@
   const logClearBtn = document.getElementById('log-clear');
   const logCloseBtn = document.getElementById('log-close');
 
-  let logBuffer = '';
-  let logLines = 0;
+  // Ring of at most LOG_CAP lines — a flat string that grows forever is
+  // a slow RAM leak and makes every repaint O(total history).
+  const LOG_CAP = 2000;
+  let logRing = [];
+  let logLines = 0; // total real (para el "N lines"), NO el tamaño del ring
 
   function classifyLogLine(line) {
     if (line.includes('[ERR ]') || line.includes('[ERR]')) return 'lvl-err';
@@ -1151,7 +1154,8 @@
   }
 
   function appendLogLine(line) {
-    logBuffer += (logBuffer ? '\n' : '') + line;
+    logRing.push(line);
+    if (logRing.length > LOG_CAP) logRing.shift();
     logLines += 1;
     if (logModal && !logModal.hidden) {
       const span = document.createElement('span');
@@ -1168,11 +1172,10 @@
   function repaintLog() {
     if (!logPane) return;
     logPane.innerHTML = '';
-    const lines = logBuffer.split('\n');
-    for (let i = 0; i < lines.length; i++) {
+    for (let i = 0; i < logRing.length; i++) {
       const span = document.createElement('span');
-      span.className = classifyLogLine(lines[i]);
-      span.textContent = (i ? '\n' : '') + lines[i];
+      span.className = classifyLogLine(logRing[i]);
+      span.textContent = (i ? '\n' : '') + logRing[i];
       logPane.appendChild(span);
     }
     if (logLineCount) logLineCount.textContent = `${logLines} lines`;
@@ -1182,12 +1185,17 @@
   }
 
   async function openLogModal() {
+    // Tell the backend to start emitting live log-line events; while the
+    // panel was closed nothing was lost — get_runtime_log below brings
+    // the buffered history.
+    invoke('set_log_panel_open', { open: true }).catch(() => {});
     try {
       const full = await invoke('get_runtime_log');
-      logBuffer = full || '';
-      logLines = logBuffer ? logBuffer.split('\n').length : 0;
+      const lines = full ? full.split('\n') : [];
+      logRing = lines.slice(-LOG_CAP);
+      logLines = lines.length;
     } catch (err) {
-      logBuffer = `[ui] failed to fetch log: ${err}`;
+      logRing = [`[ui] failed to fetch log: ${err}`];
       logLines = 1;
     }
     logModal.hidden = false;
@@ -1196,6 +1204,7 @@
 
   function closeLogModal() {
     logModal.hidden = true;
+    invoke('set_log_panel_open', { open: false }).catch(() => {});
   }
 
   if (logCloseBtn) logCloseBtn.addEventListener('click', closeLogModal);
@@ -1203,7 +1212,7 @@
   if (logCopyBtn) {
     logCopyBtn.addEventListener('click', async () => {
       try {
-        await navigator.clipboard.writeText(logBuffer);
+        await navigator.clipboard.writeText(logRing.join('\n'));
         const orig = logCopyBtn.textContent;
         logCopyBtn.textContent = '✓ COPIED';
         setTimeout(() => { logCopyBtn.textContent = orig; }, 1400);
@@ -1215,7 +1224,7 @@
 
   if (logExportBtn) {
     logExportBtn.addEventListener('click', () => {
-      const blob = new Blob([logBuffer], { type: 'text/plain' });
+      const blob = new Blob([logRing.join('\n')], { type: 'text/plain' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -1232,7 +1241,7 @@
     logClearBtn.addEventListener('click', async () => {
       try {
         await invoke('clear_runtime_log');
-        logBuffer = '';
+        logRing = [];
         logLines = 0;
         repaintLog();
       } catch (err) {

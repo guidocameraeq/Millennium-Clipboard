@@ -329,6 +329,10 @@ pub fn start(
         use std::time::Duration;
 
         let mut failures: Map<String, u8> = Map::new();
+        // Last (fp → ip) already logged as "different /24" — that check
+        // re-fires every 6s tick forever for an out-of-subnet favorite,
+        // so without this the log is pure spam.
+        let mut skip_logged: Map<String, String> = Map::new();
         let mut tick = tokio::time::interval(Duration::from_secs(6));
         tick.tick().await; // skip the immediate first tick
 
@@ -367,18 +371,22 @@ pub fn start(
             by_fp.retain(|fp, (ip, _, _, _)| {
                 if let (Some(mine), Some(theirs)) = (my_prefix.as_ref(), subnet_prefix_24(ip)) {
                     if mine != &theirs {
-                        crate::runtime_log::info(format!(
-                            "[poll] skipping {} @ {} — different /24 from {} (unreachable)",
-                            &fp[..16.min(fp.len())],
-                            ip,
-                            my_ip_poll
-                        ));
+                        if skip_logged.get(fp).map(String::as_str) != Some(ip.as_str()) {
+                            crate::runtime_log::info(format!(
+                                "[poll] skipping {} @ {} — different /24 from {} (unreachable)",
+                                &fp[..16.min(fp.len())],
+                                ip,
+                                my_ip_poll
+                            ));
+                            skip_logged.insert(fp.clone(), ip.clone());
+                        }
                         // Also drop from live cache so it doesn't keep
                         // appearing online forever.
                         peers_for_poll.lock().unwrap().remove(fp);
                         return false;
                     }
                 }
+                skip_logged.remove(fp);
                 true
             });
 
@@ -449,11 +457,15 @@ pub fn start(
                     }
                     Ok(Err(e)) => {
                         let count = failures.entry(fp.clone()).or_insert(0);
-                        *count += 1;
-                        crate::runtime_log::warn(format!(
-                            "[poll] probe failed {} @ {}:{} ({}/3): {}",
-                            fp_short, ip, port, count, e
-                        ));
+                        *count = count.saturating_add(1);
+                        // A dead favorite keeps failing every 6s forever:
+                        // log the 3 probes that matter, then only every 10th.
+                        if *count <= 3 || *count % 10 == 0 {
+                            crate::runtime_log::warn(format!(
+                                "[poll] probe failed {} @ {}:{} ({}/3): {}",
+                                fp_short, ip, port, count, e
+                            ));
+                        }
                         if *count >= 3
                             && peers_for_poll.lock().unwrap().remove(&fp).is_some()
                         {
@@ -466,11 +478,13 @@ pub fn start(
                     }
                     Err(_) => {
                         let count = failures.entry(fp.clone()).or_insert(0);
-                        *count += 1;
-                        crate::runtime_log::warn(format!(
-                            "[poll] probe TIMEOUT {} @ {}:{} ({}/3)",
-                            fp_short, ip, port, count
-                        ));
+                        *count = count.saturating_add(1);
+                        if *count <= 3 || *count % 10 == 0 {
+                            crate::runtime_log::warn(format!(
+                                "[poll] probe TIMEOUT {} @ {}:{} ({}/3)",
+                                fp_short, ip, port, count
+                            ));
+                        }
                         if *count >= 3
                             && peers_for_poll.lock().unwrap().remove(&fp).is_some()
                         {
