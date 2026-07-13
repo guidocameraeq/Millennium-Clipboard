@@ -560,7 +560,11 @@
     li.dataset.status = p.status;
     li.dataset.manual = p.manual ? 'true' : 'false';
 
-    setText(li.querySelector('.peer-name'), p.name);
+    // Don't clobber an in-progress inline rename (only the name is held;
+    // status/ip/hex/icons/toggles below still refresh).
+    if (li.dataset.renaming !== 'true') {
+      setText(li.querySelector('.peer-name'), p.name);
+    }
     setText(li.querySelector('.peer-hex'), p.hexId);
     setText(li.querySelector('.peer-ip'), p.ip);
 
@@ -724,6 +728,9 @@
   function startInlineRename(item) {
     const nameEl = item.querySelector('.peer-name');
     if (!nameEl || nameEl.querySelector('input')) return;
+    // Mark the row so a peers-changed re-render skips updating the name
+    // (only the name) and doesn't destroy the <input> mid-type.
+    item.dataset.renaming = 'true';
     const id = item.dataset.id;
     const original = nameEl.textContent;
     nameEl.innerHTML = '';
@@ -740,6 +747,7 @@
     const finish = async (commit) => {
       if (done) return;
       done = true;
+      delete item.dataset.renaming; // clear on EVERY exit (Enter/Escape/blur/catch)
       const newName = input.value.trim();
       nameEl.textContent = commit && newName ? newName : original;
       if (commit && newName && newName !== original) {
