@@ -1,3 +1,5 @@
+> ✅ **IMPLEMENTADA 2026-07-13** — todas las Tareas (1.1–1.7) aplicadas + review adversarial. Verificación física con 2 dispositivos: PENDIENTE del usuario. Ver `docs/CHANGELOG.md` y `docs/SESSION_HANDOFF.md`. Archivado.
+
 # Consolidar el descubrimiento (fin del parpadeo) — Fase 1: Discovery
 
 > Parte del plan de remediación de Millennium Clipboard. Leé primero `../00-SHARED-CONTEXT.md`.

@@ -2,6 +2,30 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
+## 2026-07-13 — Fase 1 Windows: consolidar discovery / fin del parpadeo (IMPLEMENTADA, falta verificación física)
+
+Spec archivado en `docs/archive/phase-1-discovery.md`. Un commit por Tarea (ver `git log`). **Verificación por máquina: OK** (`cargo check`/`clippy` sin warnings nuevos / `test` 7/7 / `build` linkea / `node --check`). **Verificación física con 2 dispositivos: PENDIENTE del usuario** (parpadeo de peers, CPU en reposo, reaper ~15 s, rescan, QR tras roam).
+
+### Changed
+- **Política única de reconciliación del `PeerMap`** (Tarea 1.1): `PeerRecord` gana `confirmed: bool`. La ruta (ip/port) de un peer se considera confirmada cuando la probó una fuente real (src IP de un datagrama UDP, o un probe TCP a `/info`). mDNS ya **no pisa** una ruta confirmada — solo refresca metadata (alias/hex/icono) o inserta peers nuevos (fn pura `reconcile_mdns`). El datagrama UDP es autoritativo: corrige ip/port y ahora **emite `peers-changed`** en la corrección (antes solo logueaba `IP DISAGREEMENT`). Es el root cause del flap asimétrico mDNS-vs-UDP.
+- **Poller reescrito en dos tasks** (Tareas 1.2/1.3/1.4/1.5): se elimina el barrido de probe TCP a *todos* los peers cada 6 s (el gasto principal en reposo). (A) **reaper** cada 2 s marca offline al peer cuyo `last_seen` supera `PEER_TTL` = 3× `BROADCAST_INTERVAL_SECS` (15 s). (B) **probe scheduler** cada 2 s solo sondea a quien UDP no mantiene fresco: manual/favoritos nunca oídos (backoff exponencial 6 s→5 min por peer) y peers vivos que se ponen stale. El contador `u8` de fallos se reemplaza por maps `backoff`/`probe_at` purgados por tick (imposible desbordar / sin fuga). Ambos intervalos con `MissedTickBehavior::Skip`.
+- **Selección de `local_ip`** (Tarea 1.7): en vez de la IP de la routing table (a menudo una NIC virtual WSL/Hyper-V/VPN), se enumeran las interfaces con `list_afinet_netifas()` y se elige la primera IPv4 privada, no-loopback, no-virtual (fn pura `pick_local_ipv4`). Watcher cada 30 s que, ante un cambio de red, re-habilita la interfaz mDNS y re-anuncia. Divergencia con el spec: se reusó el crate `local-ip-address` ya presente en vez de sumar `if-addrs` — mismo fix, cero dep nueva.
+
+### Removed
+- **Gate `/24` cableado** (Tarea 1.3): el `retain` que borraba del cache a los peers de otro `/24` (falsos "unreachable" en LANs `/16`, `/23`, …) y la fn `subnet_prefix_24`. La alcanzabilidad la decide el probe, no una heurística de octetos.
+- **Broadcast dirigido** `derive_subnet_broadcast` (Tarea 1.3): asumía `/24` y armaba `x.y.z.255`. Queda solo el *limited broadcast* `255.255.255.255`, que llega a todo el segmento sin conocer la máscara.
+- **`browse()` por tick** (Tarea 1.2): el poller rebrowseaba mDNS en cada iteración (arriesgaba matar el listener). Queda el browse inicial de `start()` + `rebrowse()` bajo demanda (comando `rescan_peers`).
+
+### Added
+- 6 tests unitarios Rust nuevos: `reconcile_mdns` (mDNS no pisa ruta confirmada; sí actualiza no-confirmada; metadata siempre refresca) y `pick_local_ipv4` (física sobre virtual/loopback; salta APIPA/pública; None si solo hay virtual/loopback).
+
+### Fixed (review adversarial multi-agente — 5 dimensiones × 2 escépticos; 9 hallazgos, 0 refutados, 5 confirmados + 3 nits, todos aplicados)
+- **Reap de peer vivo (medio)**: `join_all` retenía el refresh de `last_seen` de un peer sano hasta que terminaba el probe más lento (timeout 5 s); un peer muerto co-agendado podía empujarlo por encima del `PEER_TTL` y el reaper lo mataba vivo → volvía el parpadeo para peers probe-only. Ahora `FuturesUnordered`: cada probe se procesa apenas responde.
+- **Rescan sin fuerza (medio)**: `rescan_peers` solo hacía mDNS rebrowse; un favorito solo-TCP en backoff (hasta 5 min) no se re-sondeaba. Ahora `DiscoveryState.wake_probes()` (tokio `Notify`) fuerza un probe inmediato con backoff limpio.
+- **IP vieja en el QR (bajo/medio ×2)**: el watcher mutaba una **copia** de `Identity`; tras un roam, el QR de emparejamiento y `get_local_info` seguían mostrando la IP de arranque. Ahora la IP vive en `DiscoveryState.current_ip` (compartida) que el watcher actualiza y que QR/`get_local_info` leen.
+- **Log de fallos de probe (bajo)**: se restauró — se loguea el primer fallo/timeout de cada racha con ip/port/motivo, sin spam por tick.
+- **Nits**: fullnames huérfano al dropear por DRIFT (ahora se reconcilia contra el live set); `compute_local_ip()` (syscall bloqueante) del watcher movido a `spawn_blocking`; quitado el `#[allow(dead_code)]` de `last_seen` (ya lo leen reaper y scheduler).
+
 ## 2026-07-13 — Fase 0 Windows: parar la hemorragia de CPU/RAM (COMPLETADA Y VERIFICADA)
 
 Spec archivado en `docs/archive/phase-0-stop-the-bleed.md`. Un commit por Tarea (ver `git log`). **Verificación física por el usuario: OK** — CPU casi nulo en reposo con imagen en el portapapeles, sync de clipboard E2E entre 2 máquinas, FX/logs. Autostart verificado end-to-end (copia al escritorio → cierre → arranque desde ahí → el heal reescribe la entrada `Run` al exe actual → arranque limpio sin crash; Windows resuelve la ruta pese a no llevar comillas). Descubierto de paso: la entrada `Run` del plugin va sin comillas (*unquoted path*, CWE-428) — anotado para la Fase 3.
