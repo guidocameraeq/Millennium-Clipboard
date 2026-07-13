@@ -1,0 +1,44 @@
+{
+  "_LEEME": "Se versiona con el repo. Hooks: SessionStart inyecta el handoff; check-code valida sintaxis JS/shell al editar. Allowlist MODERADA: git local (SIN push — se pide permiso), cargo/npm de este stack, y lecturas frecuentes. Todo lo destructivo (reset, force-push, borrar) y el push quedan en 'preguntar'. Overrides personales van en settings.local.json (gitignored).",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-code.cjs\""
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(git status)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git pull:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo test:*)",
+      "Bash(npm run tauri:*)",
+      "Bash(node --check:*)",
+      "Bash(bash -n:*)"
+    ]
+  }
+}

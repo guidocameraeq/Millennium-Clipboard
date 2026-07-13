@@ -68,6 +68,10 @@ tmp/
 # Release artifacts (built binaries staged for upload to GitHub releases)
 release-artifacts/
 
+# Claude Code — se versiona el sistema (.claude/skills, hooks, settings.json);
+# los overrides personales de cada máquina no.
+.claude/settings.local.json
+
 # Tauri Android generated project — regenerable with `tauri android init`.
 # We DO commit a handful of files inside (MainActivity, MillenniumService,
 # manifest, network config, build.gradle) by re-adding them explicitly.
