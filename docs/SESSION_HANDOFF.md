@@ -2,41 +2,49 @@
 
 > Save game del proyecto. `/cierre` lo SOBREESCRIBE ENTERO en cada sesión — acá nunca se apila historia (eso vive en CHANGELOG). El hook SessionStart lo inyecta en cada chat nuevo.
 
-**Cierre**: 2026-07-13 · **Último commit de código**: `c6a9adc`. Los docs de cierre + el archivado van en commits aparte.
+**Cierre**: 2026-07-13 · **Último commit de código**: `bffef4c`. Los docs de cierre + el archivado van en commits aparte.
 
 ## Qué se hizo
-- **Fase 1 de Windows (discovery / fin del parpadeo) IMPLEMENTADA** (spec archivado en `docs/archive/phase-1-discovery.md`), un commit por Tarea:
-  - **1.6** `MissedTickBehavior::Skip` en los 2 intervalos tokio (udp + poller). (`4533045`)
-  - **1.1** Campo `confirmed` en `PeerRecord` + **política única de reconciliación**: mDNS ya no pisa una ruta confirmada; la src IP del datagrama UDP manda siempre y ahora emite `peers-changed` al corregir. Fn pura `reconcile_mdns` + 3 tests. (`e4f4459`)
-  - **1.3 (udp)** Borrado `derive_subnet_broadcast` (broadcast dirigido /24) — queda solo el limited broadcast global. (`b8d53ba`)
-  - **1.2/1.3/1.4/1.5** El poller único (probe TCP a TODOS cada 6 s) → **dos tasks**: reaper por `last_seen` (TTL 15 s = 3× UDP) + probe scheduler con backoff exponencial que solo sondea a quien UDP no mantiene fresco. Sin browse por tick, sin gate /24, sin contador u8 (backoff/probe_at purgados por tick). (`58d0b64`)
-  - **1.7** `compute_local_ip` elige la placa privada no-virtual (`list_afinet_netifas`, **sin dep nueva**) + fn pura `pick_local_ipv4` + 3 tests + watcher de red cada 30 s que re-anuncia mDNS al cambiar de IP. (`9a6625a`)
-- **Review adversarial multi-agente** (5 dimensiones × 2 escépticos): 9 hallazgos, 0 refutados, **5 confirmados + 3 nits aplicados** (`c6a9adc`). Lo más jugoso: el `join_all` serializaba el scheduler al timeout de 5 s y podía reapear un peer vivo (volvía el parpadeo) → ahora `FuturesUnordered`; rescan ahora fuerza probe (Notify); el QR reflejaba la IP vieja tras un roam → IP compartida y viva.
+- **Fase 2 de Windows (correctness y seguridad de datos) IMPLEMENTADA** (spec archivado en `docs/archive/phase-2-correctness.md`), un commit por Tarea (2.2 dividida en sub-bugs):
+  - **2.1** Módulo nuevo `json_store.rs` — `JsonStore<T>` genérico con **escritura atómica** (`.tmp` + `fs::rename`) y **backup-on-corrupt** (`<file>.corrupt` + log `ERR`, nunca más `unwrap_or_default()` silencioso). Los 6 stores delegan el I/O ahí conservando firmas públicas, nombres de archivo y formato. (`af7d56c`)
+  - **2.2.a–f** Los 6 bugs de UI en `main.js`: normalizar `status` + try/catch por peer (`5c38836`); `setStatus` con prioridad/TTL (`9dbe0d5`); `TARGET LOST` sin re-apuntar solo (`5b7043a`); texto entrante en superficie propia `#incoming-toast` (`d2692a8`); barra RX separada de TX keyeada por `sessionId` (`b391c56`); rename inline sobrevive `peers-changed` (`f16de12`).
+  - **2.3** Zombie-killer: mata por dueño del puerto 53319 (solo si es nuestro) + ambos nombres de deploy, skip en dev (`MILLENNIUM_INSTANCE`). (`55ce45e`)
+  - **2.4** Update swap con reintentos (10×) + marcador `millennium-update-failed.txt` que la app avisa al arranque. (`54b4ee4`)
+- **Review adversarial multi-agente** (5 dimensiones × 2 escépticos): 6 hallazgos → **3 confirmados + 1 endurecimiento aplicados** (`bffef4c`), 3 refutados. Confirmados: TTL de `setStatus` suprimía la confirmación tras una acción del usuario (→ `{force}`); zombie-killer sin chequeo de propiedad del puerto (→ solo mata si el owner es nuestro); aviso de update fallido podía perderse (→ modelo pull, comando `take_update_failure`). Endurecimiento: `JsonStore::update` mantiene el `Mutex` a través del persist.
 
 ## Estado
-- Branch `main`. **Build verde por máquina**: `cargo check` OK, `cargo clippy` sin warnings nuevos (13, los mismos pre-existentes), `cargo test` 7/7 (3 reconcile + 3 pick_ip + 1 de Fase 0), `cargo build` linkea, `node --check src/main.js` OK.
-- Diff de la fase: 4 archivos, +646 / −275. Toca `discovery.rs`, `udp_discovery.rs`, `identity.rs`, `lib.rs`.
-- **NO se hizo `git push`** (esperando OK del usuario).
+- Branch `main`. **Build verde por máquina**: `cargo check` OK, `cargo clippy` 13 warnings (= baseline, 0 nuevos, 0 en archivos de la fase), `cargo test --lib` 7/7, `node --check src/main.js` OK.
+- **Round-trip sobre los 6 JSON reales del usuario: OK** — harness aislado sin Tauri (`scratchpad/jsonstore_verify`, `include!` del `json_store.rs` vivo): los 6 cargan→guardan→cargan idéntico. `settings` 204→178 B: cae **solo** `registerSendTo` (vestigio de la feature Send To v0.10.1; el código actual ya lo descartaba — no es cambio mío).
+- **`.bat` de update probado a mano**: camino de fallo escribe el marcador tras 10 tries; camino feliz mueve el exe y borra el marcador rancio; CRLF + `errorlevel` correctos.
+- Diff de la fase: 13 archivos, +633 / −390. **NO se hizo `git push`** (esperando OK del usuario).
 
 ## En curso
-- Nada. Fase 1 implementada, con review aplicado y **verificada físicamente (core)**.
+- Nada. Fase 2 implementada, con review aplicado y verificada por máquina.
 
-## Fase 1 — verificación física (2026-07-13, 2 dispositivos, build release desplegado)
-**OK en lo core:** las 2 PCs se ven, el peer queda fijo (NO parpadea), CPU ~0 en reposo, el reaper marca offline en ~15 s al cerrar un peer, y las transferencias andan en ambos sentidos. El build desplegado corre en las 2 PCs (escritorio + copia enviada por zip). **NO probado físicamente (opcional, verificado por máquina, bajo riesgo):** roaming (re-anuncio al cambiar de red) y el QR mostrando la IP nueva tras un roam.
+## Fase 2 — verificación FÍSICA: PENDIENTE del usuario (NO VERIFICADO)
+La parte de datos reales y la visual **no se probaron en vivo** (necesitan datos reales / 2 instancias con `MILLENNIUM_INSTANCE` o las 2 PCs). A probar:
+- **Datos:** agregar un favorito → matar el proceso a mitad → reabrir (debe seguir); corromper un JSON a mano (`{` suelto) → reabrir (favoritos a default PERO aparece `<archivo>.json.corrupt` + línea `ERR [jsonstore] parse failed...`).
+- **UI:** `TARGET LOST` (cerrar el peer seleccionado, no debe re-apuntar); un `ERR transmit` que no se pisa a los 5 s; recibir texto y mandar otro (ACK) sin perder el entrante; barras TX/RX independientes; rename que sobrevive un `peers-changed`.
 
 ## Próximo paso CONCRETO
-**Arrancar la Fase 2 de Windows (correctness)** (`docs/remediation/windows/phase-2-correctness.md`) en un chat nuevo con `/inicio`. La Fase 1 ya está cerrada (implementada + review + verificada físicamente en lo core). Lo único que queda de la Fase 1 es la prueba física opcional de roaming/QR, que no bloquea la Fase 2 (probarla cuando toque cambiar de red).
+**Arrancar la Fase 3 de Windows (seguridad)** (`docs/remediation/windows/phase-3-security.md`) en un chat nuevo con `/inicio`: pinning real de certificado TLS + CSP + escaping de strings de peers + gate de `/text` + verificación del updater. Sumar el *unquoted path* del autostart (CWE-428, ya en TODO). La verificación física de la Fase 2 (arriba) puede hacerla el usuario cuando quiera; no bloquea la Fase 3 (independiente).
 
 ## Bloqueos
 - **Android**: decisión estratégica previa pendiente (núcleo headless vs foreground-only, `docs/remediation/android/SPEC.md`). No arrancar Android sin decidirla.
 
-## Pendiente derivado (no urgente)
-- **Autostart sin comillas** (va a la Fase 3 seguridad): la entrada `HKCU\...\Run` que escribe `tauri-plugin-autostart` no lleva comillas (*unquoted path*, CWE-428). Ya anotado en TODO.
+## Pendiente derivado (no urgente, en TODO)
+- **Zombie-killer mata una instancia SANA en doble-launch** (pre-existente, NO regresión de Fase 2 — confirmado por el review). Fix correcto: chequear liveness (probe `/info`) antes de matar. Más grande, no urgente.
+- **Fragilidad del harness de test en Windows** (ver Contexto).
+- **Autostart sin comillas** (va a Fase 3 seguridad).
+
+## Archivos tocados esta sesión
+- Backend: `json_store.rs` (nuevo), `preferences.rs`, `settings.rs`, `aliases.rs`, `icon_overrides.rs`, `manual_peers.rs`, `clipboard_sync.rs`, `windows_integration.rs`, `updater.rs`, `lib.rs`.
+- Frontend: `main.js`, `index.html`, `styles.css`.
 
 ## Contexto que no está en otro doc
-- **Divergencias con el spec de Fase 1** (la Fase 0 había movido código):
-  - El poller de clipboard ya NO es un `tokio::interval` (Fase 0 lo pasó a `std::thread` + `sleep`), así que la Tarea 1.6 aplicó a 2 intervalos, no 3. El `saturating_add` de la Tarea 1.5 ya estaba puesto por Fase 0.
-  - Tarea 1.7: se reusó `local_ip_address::list_afinet_netifas()` (crate ya presente) en vez de sumar `if-addrs` → mismo fix, cero dep nueva (mismo criterio que la Fase 0 con `user32`).
-  - El watcher de IP re-anuncia mDNS pero NO reinicia el broadcaster UDP: bindea `0.0.0.0` y su src IP sigue al SO; los peers aprenden la IP nueva por el src del datagrama (Tarea 1.1).
-- **Nit del review aceptado, NO arreglado**: el probe scheduler clona manual+favoritos+live cada 2 s aunque no haya nada que sondear — costo despreciable (unas Vec chicas), no es bug. Micro-opt futura si alguna vez molesta.
-- **Entorno**: PowerShell 5.1 rompe los `git commit -m` con comillas dobles; usar `git commit -F -` con heredoc desde el Bash tool. La app que corre a diario es la copia del escritorio (`OneDrive\Desktop eQ\Millennium Clipboard.exe`, con espacio en la ruta).
+- **Divergencias / hallazgos con el spec de Fase 2:**
+  - `settings.rs` no deriva `Default` → usa `JsonStore::load_with_default` (opción A del spec). `loaded_from_corrupt()` preservado (lo consume el heal de autostart).
+  - `2.2.e` se pudo hacer COMPLETO (keyeo por `sessionId`) **sin tocar el backend**: los structs de evento ya tienen `#[serde(rename_all="camelCase")]`, así que `session_id` viaja como `sessionId`. El spec preveía tener que hacer el mínimo si no estaba.
+  - El binario release se llama `millennium-clipboard.exe` (build) y para releases se **renombra a mano** a `Millennium Clipboard.exe` (con espacio) — por eso el zombie-killer matchea **ambos** nombres. La app que corre a diario es la del escritorio (`OneDrive\Desktop eQ\Millennium Clipboard.exe`, con espacio).
+- **Harness de test de Tauri en Windows (importante para futuras fases con tests):** agregar CUALQUIER test al crate hace que el linker MSVC deje de podar el stack GUI de tao/wry en el binario de test del lib; ese binario importa símbolos comctl32-v6 (`TaskDialogIndirect`) sin el manifest que embebe `tauri-build` en el `.exe` real → `STATUS_ENTRYPOINT_NOT_FOUND` (0xc0000139) al cargar, ANTES de correr ningún test. Diagnosticado con `llvm-readobj --coff-imports` (diff de imports: los tests suman ~145 símbolos Win32 GUI). Por eso los tests de `json_store` van `#[cfg(all(test, not(windows)))]` y la lógica se verifica en el harness aislado `scratchpad/jsonstore_verify` (no commiteado; es scratch). `cargo test --lib` en Windows queda VERDE (7/7 pre-existentes) porque los tests gateados no compilan.
+- **Entorno**: PowerShell 5.1 rompe los `git commit -m` con comillas dobles; usar `git commit -F -` con heredoc desde el Bash tool.

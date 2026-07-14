@@ -5,11 +5,13 @@
 2026-07-13 — ver SESSION_HANDOFF.md
 
 ## 🔴 Crítico
-- [ ] **Fase 2 Windows — correctness: pérdida de datos + bugs de UI** (`windows/phase-2-correctness.md`). **EMPEZAR ACÁ** (la Fase 1 quedó implementada + review adversarial + **verificada físicamente en 2 dispositivos 2026-07-13** en lo core: se ven, no parpadea, CPU ~0, reaper ~15 s, transferencias OK; archivada en `docs/archive/`).
-- [ ] Fase 3 Windows — seguridad: pinning real de certificado + CSP + escaping (`windows/phase-3-security.md`). **Sumar acá:** la entrada de autostart (`HKCU\...\Run`) que escribe `tauri-plugin-autostart` no lleva comillas → *unquoted path* (CWE-428) con rutas con espacios. Hoy funciona por la heurística de Windows, pero conviene reescribirla con comillas.
+- [ ] **Fase 2 — verificación FÍSICA del usuario** (implementada + review, pero NO probada en vivo). Datos: agregar un favorito → matar el proceso a mitad → reabrir (debe seguir); corromper un JSON a mano → reabrir (favoritos a default PERO aparece `<archivo>.json.corrupt` + `ERR [jsonstore] parse failed`). UI (2 instancias con `MILLENNIUM_INSTANCE` o 2 PCs): TARGET LOST, error que no se pisa a los 5 s, texto entrante que sobrevive un ACK, barras TX/RX independientes, rename que sobrevive un `peers-changed`.
+- [ ] **EMPEZAR ACÁ: Fase 3 Windows — seguridad**: pinning real de certificado + CSP + escaping (`windows/phase-3-security.md`). **Sumar acá:** la entrada de autostart (`HKCU\...\Run`) que escribe `tauri-plugin-autostart` no lleva comillas → *unquoted path* (CWE-428) con rutas con espacios. Hoy funciona por la heurística de Windows, pero conviene reescribirla con comillas.
 - [ ] **DECIDIR (antes de tocar Android):** núcleo headless vs foreground-only (`android/SPEC.md`)
 
 ## 🟡 Cuando se pueda
+- [ ] **Zombie-killer mata una instancia SANA en doble-launch** (pre-existente, NO regresión de Fase 2; confirmado por el review). El binario ya se llama `millennium-clipboard.exe`, así que el killer siempre mató a la instancia viva al relanzar, defeateando el "enfocar ventana" de single-instance. Hoy tolerable (el estado está persistido y se recarga). Fix correcto: chequear liveness (probe HTTPS `/info`) antes de matar — solo matar al que NO responde (el zombie real). Es más grande; no urgente.
+- [ ] **Fragilidad del harness de test en Windows**: agregar tests al crate rompe la carga del binario de test del lib (comctl32-v6 sin manifest → `STATUS_ENTRYPOINT_NOT_FOUND`). Por eso los tests de `json_store` van `#[cfg(not(windows))]` + harness aislado. Si alguna vez se quiere `cargo test` con GUI-tests en Windows, embeber el manifest en los binarios de test (linker arg) o extraer la lógica testeable a un crate sin Tauri.
 - [ ] Fase 1 — probar físicamente lo opcional: roaming (re-anuncio al cambiar de red) y QR con la IP nueva tras un roam. Verificado por máquina, no físico. No bloquea nada.
 - [ ] Android Fase A — ciclo de vida + aprobación nativa (`android/phase-A-lifecycle-and-approval.md`)
 - [ ] Android Fase B — binding WiFi + streaming a MediaStore (`android/phase-B-discovery-and-storage.md`)

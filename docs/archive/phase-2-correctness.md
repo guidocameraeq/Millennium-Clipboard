@@ -1,3 +1,5 @@
+> ✅ **IMPLEMENTADA 2026-07-13** — todas las Tareas (2.1, 2.2.a–f, 2.3, 2.4) aplicadas + review adversarial (3 confirmados + 1 endurecimiento). Verificación por máquina + round-trip de datos reales: OK. Verificación FÍSICA (datos reales + UI): PENDIENTE del usuario. Ver `docs/CHANGELOG.md` y `docs/SESSION_HANDOFF.md`. Archivado.
+
 # Millennium Clipboard — Windows · Fase 2: Correctness y seguridad de datos
 
 > Parte del plan de remediación de Millennium Clipboard. Leé primero `../00-SHARED-CONTEXT.md`.

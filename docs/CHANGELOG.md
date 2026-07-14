@@ -2,6 +2,29 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
+## 2026-07-13 — Fase 2 Windows: correctness y seguridad de datos (IMPLEMENTADA + review aplicado; falta verificación física)
+
+Spec archivado en `docs/archive/phase-2-correctness.md`. Un commit por Tarea (2.2 dividida en sub-bugs; ver `git log`). **Verificación por máquina: OK** — `cargo check`/`clippy` (13 warnings = baseline, 0 nuevos) / `cargo test --lib` 7/7 / `node --check` OK. **Round-trip sobre los 6 JSON reales del usuario: OK** (harness aislado sin Tauri, `include!` del `json_store.rs` vivo — los 6 stores cargan→guardan→cargan idéntico; `settings` pierde solo el campo vestigial `registerSendTo`, comportamiento pre-existente). **`.bat` de update probado a mano** (fallo→marcador tras 10 tries; feliz→swap+limpia). **Falta verificación física del usuario** (datos reales + UI, ver HANDOFF).
+
+### Added
+- **Módulo `json_store.rs`** — `JsonStore<T>` genérico: escritura atómica (`<file>.tmp` + `fs::rename` = replace atómico en Windows) y **backup-on-corrupt** (ante parseo fallido copia el crudo a `<file>.corrupt`, loguea `ERR` y cae a default — nunca más un `unwrap_or_default()` silencioso). `update()` mantiene el `Mutex` a través de serialize+persist (I/O sync, no viola la regla del `.await`), serializando writes concurrentes sobre el mismo store. 3 tests unitarios (round-trip, backup-on-corrupt, sin `.tmp` residual) gateados `#[cfg(all(test, not(windows)))]` (ver Fixed/harness).
+- **Barra de progreso RX** propia (`#rx-progress-block`, `setRxProgress`) separada de la TX, keyeada por `sessionId` (`state.activeReceive`). Superficie DOM `#incoming-toast` para el texto entrante, separada del toast de ACK.
+- **Comando `take_update_failure`** (pull) que el frontend consume en boot para mostrar un update que falló, sin depender de un emit temprano.
+
+### Changed
+- **Los 6 stores** (`preferences`, `settings`, `aliases`, `icon_overrides`, `manual_peers`, `clipboard_sync`) delegan el I/O en `JsonStore` conservando **firmas públicas, nombres de archivo y formato en disco** idénticos. `settings` usa `load_with_default` (no tiene `Default`); `loaded_from_corrupt()` preservado; `clipboard_sync` mantiene `last_synced_hash` y `hash_text/bytes` fuera del store.
+- **`setStatus(msg, {priority, ttl, force})`**: un info (mensaje de grilla ~5 s) ya no pisa un `warn`/`err` vigente hasta su TTL; una acción consciente (`selectPeer`) o una confirmación de éxito pasan `{force}`.
+- **Zombie-killer** (`windows_integration.rs`): mata por dueño del puerto `53319` **solo si el owner es uno de nuestros procesos** (chequeo por ambos nombres de deploy: `millennium-clipboard` build y `Millennium Clipboard` release renombrado), más por nombre; excluye el PID propio; **skip cuando `MILLENNIUM_INSTANCE` está seteada** (dev double-launch). Sin wildcards.
+- **`.bat` de update** (`updater.rs`): reintenta el `move` en loop (hasta 10×, ~1 s c/u) y si falla deja `<temp>\millennium-update-failed.txt`; en éxito borra un marcador rancio.
+
+### Fixed
+- **Pérdida silenciosa de datos** (Tarea 2.1): un corte a mitad de escritura ya no trunca un store (rename atómico); un byte corrupto ya no resetea favoritos/peers sin dejar rastro (`.corrupt` + log).
+- **UI que se pisaba** (Tarea 2.2): `peer.status` desconocido ya no congela la grilla (normalizado a `offline` + try/catch por fila; se sacó la clase `reaching` inexistente y se limpia `away`); el peer seleccionado que desaparece muestra `TARGET LOST` y **no se re-apunta solo** (no se manda al peer equivocado); el texto entrante ya no lo destruye un ACK; TX y RX ya no pelean por la misma barra; un rename inline sobrevive un `peers-changed`.
+- **Zombie-killer inútil en release** (Tarea 2.3): el bug apuntaba solo a `millennium-clipboard` y no liberaba el puerto del zombie real.
+- **Update que fallaba en silencio** (Tarea 2.4): un `move` único que fallaba dejaba al usuario en la versión vieja creyendo que actualizó; ahora reintenta y, si no puede, avisa al próximo arranque.
+- **Review adversarial (5 dim × 2 escépticos; 3 confirmados + 1 endurecimiento aplicados; 3 refutados)**: el TTL de `setStatus` suprimía la confirmación tras una acción del usuario (→ `{force}`); el zombie-killer mataba al dueño del puerto sin chequear propiedad (→ chequeo por nombre); el aviso de update fallido se perdía si el webview no estaba listo (→ modelo pull). Refutados: "mata instancia sana en doble-launch" (pre-existente, no lo introdujo el diff), "auto-select solo en initial rompe cold-boot" (es lo que pide el spec), race del `.tmp` (comandos sync serializados; igual endurecido).
+- **Harness de test de Tauri en Windows**: agregar cualquier test al crate hace que el linker MSVC deje de podar el stack GUI de tao/wry en el binario de test del lib, que entonces importa símbolos comctl32-v6 (`TaskDialogIndirect`) sin el manifest que embebe `tauri-build` → `STATUS_ENTRYPOINT_NOT_FOUND` al cargar. Los tests de `json_store` se gatearon `not(windows)` y se verificaron en un harness aislado. Anotado en TODO.
+
 ## 2026-07-13 — Fase 1 Windows: consolidar discovery / fin del parpadeo (COMPLETADA Y VERIFICADA — core)
 
 Spec archivado en `docs/archive/phase-1-discovery.md`. Un commit por Tarea (ver `git log`). **Verificación por máquina: OK** (`cargo check`/`clippy` sin warnings nuevos / `test` 7/7 / `build` linkea / `node --check`). **Verificación física con 2 dispositivos (2026-07-13): OK en lo core** — las 2 PCs se ven, el peer no parpadea, CPU ~0 en reposo, el reaper marca offline en ~15 s, y las transferencias andan en ambos sentidos (build release desplegado en las 2 PCs). Queda sin probar físicamente lo opcional (roaming / QR tras cambio de red): verificado por máquina, no físico.
