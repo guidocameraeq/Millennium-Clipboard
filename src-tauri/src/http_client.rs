@@ -52,6 +52,13 @@ struct PinnedFingerprintVerifier {
     expected: Option<String>, // hex lowercase, same definition as identity.fingerprint
 }
 
+/// The ring provider's signature-verification algorithms, computed once.
+/// Used to actually verify the handshake signature (see below).
+fn ring_sig_algs() -> &'static rustls::crypto::WebPkiSupportedAlgorithms {
+    static ALGS: OnceLock<rustls::crypto::WebPkiSupportedAlgorithms> = OnceLock::new();
+    ALGS.get_or_init(|| rustls::crypto::ring::default_provider().signature_verification_algorithms)
+}
+
 impl ServerCertVerifier for PinnedFingerprintVerifier {
     fn verify_server_cert(
         &self,
@@ -75,39 +82,34 @@ impl ServerCertVerifier for PinnedFingerprintVerifier {
         }
     }
 
-    // Peers use self-signed certs without a CA; we don't validate the
-    // handshake signature against a root, but rustls requires these methods
-    // to exist. We return "valid" because pinning the cert already binds us
-    // to the correct identity. DO NOT copy this to a client that talks to a
-    // public-CA server.
+    // We deliberately skip CA-chain / CN / SAN validation (peers are
+    // self-signed and identified by fingerprint, not hostname) — the pin in
+    // verify_server_cert replaces that. But we MUST still verify the handshake
+    // signature: it is the ONLY proof that the peer holds the PRIVATE key of
+    // the presented cert. Skipping it (returning assertion()) would let an
+    // attacker present a COPIED, public cert that hashes to the pinned
+    // fingerprint and MITM without owning the key. So delegate these two hooks
+    // to rustls' real signature verifiers (ring provider).
     fn verify_tls12_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, TlsError> {
-        Ok(HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls12_signature(message, cert, dss, ring_sig_algs())
     }
 
     fn verify_tls13_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, TlsError> {
-        Ok(HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls13_signature(message, cert, dss, ring_sig_algs())
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        // ring supports these; returning the standard list avoids rustls
-        // aborting with "no schemes".
-        vec![
-            SignatureScheme::ECDSA_NISTP256_SHA256,
-            SignatureScheme::ECDSA_NISTP384_SHA384,
-            SignatureScheme::ED25519,
-            SignatureScheme::RSA_PSS_SHA256,
-            SignatureScheme::RSA_PKCS1_SHA256,
-        ]
+        ring_sig_algs().supported_schemes()
     }
 }
 
