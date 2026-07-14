@@ -130,14 +130,24 @@ pub async fn check_for_update() -> Result<UpdateInfo> {
     let release_url = release["html_url"].as_str().unwrap_or("").to_string();
     let release_notes = release["body"].as_str().unwrap_or("").to_string();
 
-    let download_url = release["assets"]
+    let selected_asset = release["assets"]
         .as_array()
-        .and_then(|arr| pick_release_asset(arr.as_slice()))
-        .and_then(|a| a["browser_download_url"].as_str().map(String::from));
+        .and_then(|arr| pick_release_asset(arr.as_slice()));
+    let download_url = selected_asset.and_then(|a| a["browser_download_url"].as_str().map(String::from));
 
     let current = env!("CARGO_PKG_VERSION").to_string();
     let has_update = version_gt(&latest_tag, &current);
-    let download_sha256 = extract_sha256(&release_notes);
+    // Prefer GitHub's per-asset `digest` ("sha256:<hex>"): it's tied to the
+    // EXACT asset we download, so a unified release (both .exe and .apk)
+    // verifies correctly on each platform. Fall back to a `sha256:<hex>` line
+    // in the release body for older releases published before the digest field
+    // existed. (Reviewed 2026-07-13: the body-only approach aborted on every
+    // current release, which all ship a digest but no body hash.)
+    let download_sha256 = selected_asset
+        .and_then(|a| a["digest"].as_str())
+        .and_then(|d| d.strip_prefix("sha256:"))
+        .map(|h| h.to_ascii_lowercase())
+        .or_else(|| extract_sha256(&release_notes));
 
     Ok(UpdateInfo {
         current_version: current,
