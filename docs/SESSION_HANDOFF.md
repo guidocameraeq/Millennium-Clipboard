@@ -2,7 +2,7 @@
 
 > Save game del proyecto. `/cierre` lo SOBREESCRIBE ENTERO en cada sesión — acá nunca se apila historia (eso vive en CHANGELOG). El hook SessionStart lo inyecta en cada chat nuevo.
 
-**Cierre**: 2026-07-14 · **Último commit de código**: `39df5a9`. Los docs de cierre + el archivado van en commits aparte.
+**Cierre**: 2026-07-14 · **Último commit de código**: `5bb57e4` (bump 0.16.0). **Release v0.16.0 publicado** (final, `--latest`) y **desplegado en las 2 PCs por auto-update**. `main` pusheado a GitHub.
 
 ## Qué se hizo
 
@@ -20,24 +20,18 @@
 
 ## Estado
 
-- **Branch**: `main`. **Working tree**: limpio salvo los commits de docs de este cierre.
-- **Build (por máquina): OK** — `cargo check`/`clippy` (9-10 warnings, todas pre-existentes + 1 `#[allow]`; 0 nuevas reales) / `cargo build` (debug) linkea / `node --check` main.js+pre.js OK.
-- **4 harness aislados verdes** (scratchpad de la sesión, `rustc`/`cargo` sin Tauri): `safe_join`, `extract_sha256`, verifier de pinning, y **handshake TLS real e2e** (peer real→OK; cert copiado+clave distinta→FAIL `BadSignature`; TOFU→OK).
-- **NO verificado físicamente** (le toca al usuario): ver "Próximo paso".
+- **Branch**: `main` (pusheado). **Working tree**: limpio salvo los docs de este ajuste.
+- **Build (por máquina): OK** — `cargo check`/`clippy` (9-10 warnings, todas pre-existentes + 1 `#[allow]`; 0 nuevas reales) / `cargo build` release linkea (`.exe` 9.8 MB) / `node --check` main.js+pre.js OK.
+- **4 harness aislados verdes** (scratchpad, `rustc`/`cargo` sin Tauri): `safe_join`, `extract_sha256`, verifier de pinning, y **handshake TLS real e2e** (peer real→OK; cert copiado+clave distinta→FAIL `BadSignature`; TOFU→OK).
+- **VERIFICADO FÍSICAMENTE por el usuario (2026-07-14)** — el **core de Fase 3 anda en las 2 PCs**: el **auto-update** funcionó (v0.15.0 → v0.16.0 en ambas) y las **transferencias bidireccionales** funcionan → el **cert pinning NO rompió el uso diario** y la **CSP NO rompió la app**. Falta solo lo opcional (ver TODO 🟢): el ataque simulado con otro cert (ya probado por máquina con el harness → `BadSignature`), el bulk de ~50 archivos, y F12-limpio explícito. **No bloquea nada.**
 
 ## Próximo paso CONCRETO
 
-**Verificación física de la Fase 3 por el usuario** (2 instancias con `MILLENNIUM_INSTANCE`/`MILLENNIUM_PORT`, o las 2 PCs):
-1. **Pinning happy-path**: enviar texto + un archivo entre 2 peers emparejados → debe andar. Transferir ~50 archivos chicos → el throughput NO baja (pooling).
-2. **Pinning ataque**: levantar un 2º server con OTRA identidad en el `ip:port` que la UI cree del peer bueno (o cambiar a mano la fingerprint esperada) → el envío debe FALLAR en el handshake TLS ("cert fingerprint mismatch"), no después.
-3. **CSP**: F12/logs del WebView → CERO violaciones al arrancar/escanear/Settings/QR/recibir; fuentes cargan; los 3 botones de cierre de modal andan.
-4. **Compat**: un peer viejo self-signed YA emparejado sigue transfiriendo.
-
-Si algo del pinning falla y bloquea el uso diario: rollback contenido en 2 archivos (revertir `http_client.rs` a `client()` + restaurar el probe `/info` en `lib.rs`). CSP se revierte con `"csp": null`.
+Fase 3 cerrada y desplegada. El siguiente pendiente real del proyecto es la **verificación física de la Fase 2** por el usuario (datos que sobreviven a un cierre abrupto + bugs de UI; detalle en `docs/TODO.md` 🔴). Después: decidir el rumbo de Android (`android/SPEC.md`, headless vs foreground-only) antes de tocar ese código.
 
 ## Bloqueos
 
-- Ninguno para avanzar. Falta SOLO la verificación física (arriba). Fase 2 también sigue pendiente de verificación física del usuario (ver TODO).
+- Ninguno. Fase 3 verificada en su core y en producción (v0.16.0 en las 2 PCs). Queda pendiente la verificación física de Fase 2 (no bloquea seguir).
 
 ## Archivos tocados (Fase 3)
 
