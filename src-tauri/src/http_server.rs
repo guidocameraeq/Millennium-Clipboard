@@ -976,23 +976,120 @@ fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
+/// True si el componente es un nombre de archivo seguro para escribir en
+/// disco (multiplataforma, con foco en las trampas de Windows). Rechaza
+/// dispositivos reservados (CON/NUL/COM1..), ADS (`:`), caracteres
+/// ilegales en NTFS, bytes de control y dots/espacios finales.
+fn is_safe_component(s: &std::ffi::OsStr) -> bool {
+    let name = match s.to_str() {
+        Some(n) => n,
+        None => return false, // no UTF-8 válido → rechazar
+    };
+    if name.is_empty() {
+        return false;
+    }
+    // ADS / drive-relative: cualquier ':' es sospechoso en Windows.
+    if name.contains(':') {
+        return false;
+    }
+    // Caracteres ilegales en NTFS (y peligrosos en general).
+    if name.contains(['/', '\\', '<', '>', '"', '|', '?', '*']) {
+        return false;
+    }
+    // Bytes de control.
+    if name.chars().any(|c| (c as u32) < 0x20) {
+        return false;
+    }
+    // Windows strippea '.' y espacios finales → colisión/escritura en
+    // un nombre distinto del pedido.
+    if name.ends_with('.') || name.ends_with(' ') {
+        return false;
+    }
+    // Nombres de dispositivo reservados (con o sin extensión):
+    // CON, PRN, AUX, NUL, COM1..COM9, LPT1..LPT9.
+    let stem = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
+    const RESERVED: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    if RESERVED.contains(&stem.as_str()) {
+        return false;
+    }
+    true
+}
+
 /// Join base + optional relative folder + filename, refusing anything
-/// that escapes via `..`, absolute components or Windows drive prefixes.
+/// that escapes via `..`, absolute components or Windows drive prefixes,
+/// and any component that `is_safe_component` rejects (reserved device
+/// names, ADS, trailing dots/spaces, illegal chars).
 fn safe_join(base: &Path, name: &str, rel_path: Option<&str>) -> Option<PathBuf> {
     let mut target = base.to_path_buf();
     if let Some(rel) = rel_path {
         for comp in Path::new(rel).components() {
             match comp {
-                Component::Normal(s) => target.push(s),
+                Component::Normal(s) if is_safe_component(s) => target.push(s),
                 _ => return None,
             }
         }
     }
     for comp in Path::new(name).components() {
         match comp {
-            Component::Normal(s) => target.push(s),
+            Component::Normal(s) if is_safe_component(s) => target.push(s),
             _ => return None,
         }
     }
     Some(target)
+}
+
+#[cfg(all(test, not(windows)))]
+mod safe_join_tests {
+    use super::*;
+
+    fn base() -> PathBuf {
+        PathBuf::from("/tmp/dl")
+    }
+
+    #[test]
+    fn rejects_reserved_device_names() {
+        assert!(safe_join(&base(), "CON", None).is_none());
+        assert!(safe_join(&base(), "con", None).is_none()); // case-insensitive
+        assert!(safe_join(&base(), "NUL.txt", None).is_none()); // stem reservado
+        assert!(safe_join(&base(), "COM1", None).is_none());
+        assert!(safe_join(&base(), "LPT9.log", None).is_none());
+        assert!(safe_join(&base(), "PRN", None).is_none());
+        assert!(safe_join(&base(), "AUX", None).is_none());
+    }
+
+    #[test]
+    fn rejects_ads_and_illegal_chars() {
+        assert!(safe_join(&base(), "a:b", None).is_none()); // ADS
+        assert!(safe_join(&base(), "report.txt:hidden", None).is_none());
+        assert!(safe_join(&base(), "foo<bar", None).is_none());
+        assert!(safe_join(&base(), "pipe|name", None).is_none());
+    }
+
+    #[test]
+    fn rejects_trailing_dot_or_space() {
+        assert!(safe_join(&base(), "trailing.", None).is_none());
+        assert!(safe_join(&base(), "trailing ", None).is_none());
+    }
+
+    #[test]
+    fn accepts_legit_names_with_internal_dots() {
+        assert!(safe_join(&base(), "report.final.pdf", None).is_some());
+        assert!(safe_join(&base(), "normal.txt", None).is_some());
+        assert!(safe_join(&base(), "CONELRAD.txt", None).is_some()); // no es CON
+    }
+
+    #[test]
+    fn rejects_traversal_and_absolute() {
+        assert!(safe_join(&base(), "../escape", None).is_none());
+        assert!(safe_join(&base(), "/etc/passwd", None).is_none());
+    }
+
+    #[test]
+    fn rejects_reserved_subdir_in_rel_path() {
+        assert!(safe_join(&base(), "ok.txt", Some("sub/NUL")).is_none());
+        assert!(safe_join(&base(), "ok.txt", Some("good/dir")).is_some());
+    }
 }
