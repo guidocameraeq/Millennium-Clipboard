@@ -1743,7 +1743,11 @@
     settingsApplyUpdate.disabled = true;
     settingsApplyUpdate.textContent = '◷ DOWNLOADING...';
     try {
-      const result = await invoke('apply_update', { downloadUrl: updateInfoCache.downloadUrl });
+      const result = await invoke('apply_update', {
+        downloadUrl: updateInfoCache.downloadUrl,
+        // Integrity check: the backend aborts if this is missing/mismatched.
+        expectedSha256: updateInfoCache.downloadSha256 || null,
+      });
       // On Windows the app exits before we get here. On Android the
       // command returns the public Downloads URI where the APK was
       // published via MediaStore. We don't try to launch the system

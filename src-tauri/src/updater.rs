@@ -10,8 +10,49 @@
 
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 const REPO: &str = "guidocameraeq/Millennium-Clipboard";
+
+/// Extrae el SHA-256 esperado del binario publicado en el body del release.
+/// Convención: una línea `sha256:<64 hex>` (case-insensitive) en las notas.
+/// Deliberadamente tolerante: separa por whitespace y ':' y toma el primer
+/// token de 64 chars hexadecimales. Devuelve None si no hay ninguno — el
+/// caller decide (nosotros abortamos el update por seguridad).
+fn extract_sha256(body: &str) -> Option<String> {
+    for tok in body.split(|c: char| c.is_whitespace() || c == ':') {
+        let t = tok.trim();
+        if t.len() == 64 && t.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Some(t.to_ascii_lowercase());
+        }
+    }
+    None
+}
+
+/// Verifica que `bytes` hashee (SHA-256) a `expected`. Aborta si `expected`
+/// es None (release sin hash → fail-safe) o si no matchea. Compartido por
+/// el stage de Windows (.exe) y Android (.apk).
+#[cfg(any(target_os = "windows", target_os = "android"))]
+fn verify_sha256(bytes: &[u8], expected: Option<&str>) -> Result<()> {
+    let expected = expected.ok_or_else(|| {
+        anyhow::anyhow!(
+            "el release no publico un SHA-256 en sus notas — abortando el update por seguridad. \
+             Agrega una linea 'sha256:<64 hex>' al body del release."
+        )
+    })?;
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let got = hex::encode(hasher.finalize());
+    if !got.eq_ignore_ascii_case(expected) {
+        bail!(
+            "checksum no coincide: esperado {}, obtenido {} — NO se instala",
+            &expected[..16.min(expected.len())],
+            &got[..16]
+        );
+    }
+    crate::runtime_log::info(format!("[updater] SHA-256 verificado OK ({})", &got[..16]));
+    Ok(())
+}
 
 /// Pick which asset of a GitHub release is the portable Windows
 /// executable. Historically (v0.8.x – v0.10.0) we named the asset
@@ -48,6 +89,9 @@ pub struct UpdateInfo {
     pub download_url: Option<String>,
     pub release_url: String,
     pub release_notes: String,
+    /// SHA-256 hex (lowercase) del asset, parseado del body del release.
+    /// None si el release no lo publicó → el update se aborta al aplicar.
+    pub download_sha256: Option<String>,
 }
 
 pub async fn check_for_update() -> Result<UpdateInfo> {
@@ -93,6 +137,7 @@ pub async fn check_for_update() -> Result<UpdateInfo> {
 
     let current = env!("CARGO_PKG_VERSION").to_string();
     let has_update = version_gt(&latest_tag, &current);
+    let download_sha256 = extract_sha256(&release_notes);
 
     Ok(UpdateInfo {
         current_version: current,
@@ -101,6 +146,7 @@ pub async fn check_for_update() -> Result<UpdateInfo> {
         download_url,
         release_url,
         release_notes,
+        download_sha256,
     })
 }
 
@@ -130,7 +176,7 @@ fn version_gt(a: &str, b: &str) -> bool {
 /// script next to it, spawn the script detached. The caller should then
 /// exit the app so the script can move the file in place.
 #[cfg(target_os = "windows")]
-pub async fn download_and_stage(download_url: &str) -> Result<()> {
+pub async fn download_and_stage(download_url: &str, expected_sha256: Option<&str>) -> Result<()> {
     let client = reqwest::Client::builder()
         .user_agent(concat!("Millennium-Clipboard/", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(120))
@@ -144,6 +190,11 @@ pub async fn download_and_stage(download_url: &str) -> Result<()> {
         .bytes()
         .await
         .context("read new exe body")?;
+
+    // Verificación de integridad ANTES de escribir el staged .exe o el .bat.
+    // Si el release no publicó SHA-256, abortamos (fail-safe elegido por el
+    // dueño): nunca corremos un binario descargado sin verificar.
+    verify_sha256(&bytes, expected_sha256)?;
 
     let current_exe = std::env::current_exe().context("locate current exe")?;
     let temp_dir = std::env::temp_dir();
@@ -223,7 +274,11 @@ pub fn version_for_filename(download_url: &str) -> String {
 }
 
 #[cfg(target_os = "android")]
-pub async fn download_and_stage_apk(download_url: &str, cache_dir: &std::path::Path) -> Result<std::path::PathBuf> {
+pub async fn download_and_stage_apk(
+    download_url: &str,
+    cache_dir: &std::path::Path,
+    expected_sha256: Option<&str>,
+) -> Result<std::path::PathBuf> {
     let client = reqwest::Client::builder()
         .user_agent(concat!("Millennium-Clipboard/", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(300))
@@ -238,6 +293,11 @@ pub async fn download_and_stage_apk(download_url: &str, cache_dir: &std::path::P
         .await
         .context("read new apk body")?;
 
+    // Verificación de integridad ANTES de escribir el APK a disco. El
+    // instalador de Android verifica la firma del paquete, pero eso solo
+    // garantiza que está firmado por *alguna* clave, no por la nuestra.
+    verify_sha256(&bytes, expected_sha256)?;
+
     tokio::fs::create_dir_all(cache_dir)
         .await
         .with_context(|| format!("mkdir {}", cache_dir.display()))?;
@@ -249,6 +309,32 @@ pub async fn download_and_stage_apk(download_url: &str, cache_dir: &std::path::P
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "android")))]
-pub async fn download_and_stage(_download_url: &str) -> Result<()> {
+pub async fn download_and_stage(_download_url: &str, _expected_sha256: Option<&str>) -> Result<()> {
     bail!("auto-update is only supported on Windows and Android in this build");
+}
+
+#[cfg(all(test, not(windows)))]
+mod updater_tests {
+    use super::*;
+
+    #[test]
+    fn extract_sha256_finds_marker_line() {
+        let h = "9f2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b";
+        let body = format!("Release notes\n\nsha256:{h}  Millennium Clipboard.exe\n\nBye");
+        assert_eq!(extract_sha256(&body), Some(h.to_string()));
+    }
+
+    #[test]
+    fn extract_sha256_case_insensitive() {
+        let h = "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789";
+        let body = format!("sha256: {h}");
+        assert_eq!(extract_sha256(&body), Some(h.to_ascii_lowercase()));
+    }
+
+    #[test]
+    fn extract_sha256_none_when_absent() {
+        assert_eq!(extract_sha256("no hash here, just notes"), None);
+        // 40-hex (git sha) no debe matchear — pedimos exactamente 64.
+        assert_eq!(extract_sha256("commit 0123456789abcdef0123456789abcdef01234567"), None);
+    }
 }

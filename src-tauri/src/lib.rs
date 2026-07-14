@@ -1008,10 +1008,14 @@ fn set_clipboard_sync(
 }
 
 #[tauri::command]
-async fn apply_update(app: tauri::AppHandle, download_url: String) -> Result<String, String> {
+async fn apply_update(
+    app: tauri::AppHandle,
+    download_url: String,
+    expected_sha256: Option<String>,
+) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        updater::download_and_stage(&download_url)
+        updater::download_and_stage(&download_url, expected_sha256.as_deref())
             .await
             .map_err(|e| format!("{e:#}"))?;
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
@@ -1033,7 +1037,7 @@ async fn apply_update(app: tauri::AppHandle, download_url: String) -> Result<Str
             .path()
             .app_cache_dir()
             .map_err(|e| format!("resolve cache dir: {e}"))?;
-        let staged = updater::download_and_stage_apk(&download_url, &cache_dir)
+        let staged = updater::download_and_stage_apk(&download_url, &cache_dir, expected_sha256.as_deref())
             .await
             .map_err(|e| format!("{e:#}"))?;
         let bytes = tokio::fs::read(&staged)
