@@ -110,19 +110,20 @@ pub fn kill_other_millennium_processes() {
 
     let our_pid = std::process::id();
     let port = crate::discovery::DEFAULT_PORT;
-    // Target the zombie two ways, always excluding our own PID:
-    //  1) whoever actually LISTENS on the app port (the real root cause of
-    //     "another instance running" — a dead process still owning 53319);
-    //  2) by BOTH exe names (release 'Millennium Clipboard', dev
-    //     'millennium-clipboard'), as a fallback if the port was already
-    //     released but the process lingers.
-    // No wildcard match, so we never sweep unrelated user processes.
+    // Identify OUR processes by both exe names (deployed release is renamed
+    // 'Millennium Clipboard.exe', a fresh build is 'millennium-clipboard.exe').
+    // We only ever kill a PID that is one of OURS:
+    //  - by name (covers a zombie that already released the port but lingers);
+    //  - the owner of the app port 53319, but ONLY if that owner is one of our
+    //    processes — so we never force-kill an unrelated app that happens to
+    //    be listening on 53319. No wildcard match. Own PID always excluded.
     let ps_cmd = format!(
         r#"$ErrorActionPreference='SilentlyContinue';
 $our={pid};
+$ours=@(Get-Process -Name 'Millennium Clipboard','millennium-clipboard' | Select-Object -ExpandProperty Id);
 $targets=@();
-Get-NetTCPConnection -LocalPort {port} -State Listen | ForEach-Object {{ $targets += $_.OwningProcess }};
-Get-Process -Name 'Millennium Clipboard','millennium-clipboard' | ForEach-Object {{ $targets += $_.Id }};
+$targets += $ours;
+Get-NetTCPConnection -LocalPort {port} -State Listen | ForEach-Object {{ if ($ours -contains $_.OwningProcess) {{ $targets += $_.OwningProcess }} }};
 $targets | Sort-Object -Unique | Where-Object {{ $_ -and $_ -ne $our }} | ForEach-Object {{ Stop-Process -Id $_ -Force; Write-Output $_ }}"#,
         pid = our_pid,
         port = port

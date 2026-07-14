@@ -92,16 +92,18 @@ where
         self.loaded_corrupt
     }
 
-    /// Mutate the state and persist it atomically. The closure returns any
-    /// value the caller needs; the lock is released BEFORE the write so we
-    /// never hold the `Mutex` across the (blocking) filesystem I/O.
+    /// Mutate the state and persist it atomically. The `Mutex` is held across
+    /// serialize + persist so two concurrent updates on the SAME store are
+    /// fully serialized: the shared `<base>.tmp` can never be raced
+    /// (write→rename→write→rename) and the committed on-disk state always
+    /// matches the last mutation. This is safe — `persist()` is blocking
+    /// filesystem I/O, NOT an `.await`, so the "never hold a std::sync::Mutex
+    /// across an await" rule does not apply. Writes are tiny (small JSON), so
+    /// the extra lock-hold is negligible.
     pub fn update<R>(&self, f: impl FnOnce(&mut T) -> R) -> Result<R> {
-        let (ret, payload) = {
-            let mut guard = self.inner.lock().unwrap();
-            let ret = f(&mut guard);
-            let payload = serde_json::to_string_pretty(&*guard).context("serialize json store")?;
-            (ret, payload)
-        };
+        let mut guard = self.inner.lock().unwrap();
+        let ret = f(&mut guard);
+        let payload = serde_json::to_string_pretty(&*guard).context("serialize json store")?;
         self.persist(&payload)?;
         Ok(ret)
     }

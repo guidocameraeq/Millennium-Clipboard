@@ -242,7 +242,9 @@
   function setStatus(msg, opts) {
     const level = STATUS_LEVEL[(opts && opts.priority) || 'info'];
     const now = Date.now();
-    if (level === 0 && now < statusPriorityUntil) return;
+    // A conscious user action (opts.force) or any warn/err always shows; a
+    // routine info is suppressed only while a higher-priority TTL is live.
+    if (level === 0 && !(opts && opts.force) && now < statusPriorityUntil) return;
     setText(statusMsg, msg);
     if (level > 0) {
       const ttl = (opts && opts.ttl) != null ? opts.ttl : 5000;
@@ -661,7 +663,7 @@
     if (sendBtn) sendBtn.disabled = isOffline;
     setStatus(isOffline
       ? `PEER OFFLINE · ${peer.name} (waiting on grid)`
-      : `PEER LOCKED · ${peer.name}`);
+      : `PEER LOCKED · ${peer.name}`, { force: true });
     blip(660, 0.06);
     document.querySelectorAll('.peer-item').forEach((el) => {
       el.classList.toggle('selected', el.dataset.id === id);
@@ -948,7 +950,7 @@
         progressBlock.hidden = true;
         sendBtn.disabled = false;
         setProgress(0);
-        setStatus(`OK · delivered to ${peer.name}.`);
+        setStatus(`OK · delivered to ${peer.name}.`, { force: true });
         showToast(`${peer.name} · ${chars} CHARS · ACK`);
         textarea.value = '';
         updateCharCount();
@@ -999,7 +1001,7 @@
         sendBtn.disabled = false;
         setProgress(0);
         const count = state.queuedFiles.length;
-        setStatus(`OK · ${count} file(s) delivered to ${peer.name}.`);
+        setStatus(`OK · ${count} file(s) delivered to ${peer.name}.`, { force: true });
         showToast(`${peer.name} · ${count} FILE(S) · ACK`);
         state.queuedFiles = [];
         renderQueue();
@@ -2109,6 +2111,14 @@
     } catch (err) {
       console.error('settings load:', err);
     }
+
+    // Surface a previous failed auto-update swap. Pull model (not a pushed
+    // event): the backend holds the marker until we ask for it here, once the
+    // UI is ready, so a slow webview can never miss the notice.
+    try {
+      const upErr = await invoke('take_update_failure');
+      if (upErr) showBackendBanner('error', upErr);
+    } catch (_) {}
 
     updateCharCount();
     setTimeout(() => {
