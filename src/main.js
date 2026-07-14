@@ -480,6 +480,16 @@
     gaming:  peerIconImg('gaming',  'scale.png', 'Millennium Scale'),
     media:   peerIconImg('media',   'tauk.png',  'Millennium Tauk'),
   };
+  // Safe lookup: iconType comes from a peer (mDNS TXT / UDP hello, un-
+  // validated), so NEVER interpolate it into HTML. This returns a trusted
+  // local icon string for a known key, else the desktop default — and uses
+  // hasOwnProperty so a key like "constructor"/"__proto__" can't reach a
+  // prototype value.
+  function iconSvg(key) {
+    return Object.prototype.hasOwnProperty.call(ICON_SVG, key)
+      ? ICON_SVG[key]
+      : ICON_SVG.desktop;
+  }
   const ICON_KEYS = ['desktop', 'laptop', 'phone', 'server', 'gaming', 'media'];
   const ICON_LABELS = {
     desktop: 'EYE',
@@ -572,7 +582,7 @@
 
     const iconWrap = li.querySelector('.peer-icon');
     if (iconWrap && iconWrap.dataset.icon !== p.iconType) {
-      iconWrap.innerHTML = ICON_SVG[p.iconType] || ICON_SVG.desktop;
+      iconWrap.innerHTML = iconSvg(p.iconType);
       iconWrap.dataset.icon = p.iconType;
     }
 
@@ -607,7 +617,7 @@
     li.dataset.manual = p.manual ? 'true' : 'false';
 
     li.innerHTML = `
-      <div class="peer-icon" data-icon="${p.iconType}">${ICON_SVG[p.iconType] || ICON_SVG.desktop}</div>
+      <div class="peer-icon"></div>
       <div class="peer-info">
         <div class="peer-name-row">
           <span class="peer-name" title="Double-click to rename"></span>
@@ -628,6 +638,14 @@
         </div>
       </div>
     `;
+
+    // Icon: trusted local SVG chosen by a SAFE lookup; data-icon set via
+    // dataset (does NOT parse HTML) so a malicious iconType can't inject.
+    const iconWrap = li.querySelector('.peer-icon');
+    if (iconWrap) {
+      iconWrap.innerHTML = iconSvg(p.iconType);
+      iconWrap.dataset.icon = p.iconType;
+    }
 
     setText(li.querySelector('.peer-name'), p.name);
     setText(li.querySelector('.peer-hex'), p.hexId);
@@ -1059,14 +1077,27 @@
     (payload.files || []).forEach((f) => {
       const li = document.createElement('li');
       li.className = 'incoming-file-li';
-      const thumb = f.thumbnail
-        ? `<img class="incoming-thumb" src="${f.thumbnail}" alt="" />`
-        : `<span class="incoming-thumb incoming-thumb-empty">📄</span>`;
-      li.innerHTML = `
-        ${thumb}
-        <span class="file-name">${escapeHtml(f.name)}</span>
-        <span class="file-size">${formatBytes(f.size)}</span>
-      `;
+      // Thumbnail comes from the peer. Only accept a data:image/... URL
+      // (what thumbnails.rs actually produces); reject anything else
+      // (javascript:, data:text/html, ...) and fall back to the icon.
+      let thumb;
+      if (f.thumbnail && /^data:image\/(png|jpeg|gif|webp);base64,/.test(f.thumbnail)) {
+        thumb = document.createElement('img');
+        thumb.className = 'incoming-thumb';
+        thumb.alt = '';
+        thumb.src = f.thumbnail; // validated as data:image/...
+      } else {
+        thumb = document.createElement('span');
+        thumb.className = 'incoming-thumb incoming-thumb-empty';
+        thumb.textContent = '📄';
+      }
+      const nameEl = document.createElement('span');
+      nameEl.className = 'file-name';
+      nameEl.textContent = f.name;            // textContent, no HTML parsing
+      const sizeEl = document.createElement('span');
+      sizeEl.className = 'file-size';
+      sizeEl.textContent = formatBytes(f.size);
+      li.replaceChildren(thumb, nameEl, sizeEl);
       incomingFileList.appendChild(li);
     });
 
@@ -1077,13 +1108,24 @@
       const b = document.createElement('div');
       b.id = 'incoming-firstcontact';
       b.className = 'modal-firstcontact';
-      b.innerHTML = `
-        <div class="settings-label" style="color:var(--neon-magenta);text-shadow:0 0 6px var(--neon-magenta-glow);margin-bottom:6px">FIRST CONTACT</div>
-        <div style="display:flex;gap:6px;align-items:center;justify-content:space-between">
-          <span class="mono" style="font-size:11px;color:var(--text-mute)">${payload.senderIp}:${payload.senderPort || 53319}</span>
-          <button class="modal-btn small" id="firstcontact-save">+ SAVE PEER</button>
-        </div>
-      `;
+      // senderIp/senderPort come from the peer — build with textContent so
+      // a malicious value can't inject markup.
+      const label = document.createElement('div');
+      label.className = 'settings-label';
+      label.style.cssText = 'color:var(--neon-magenta);text-shadow:0 0 6px var(--neon-magenta-glow);margin-bottom:6px';
+      label.textContent = 'FIRST CONTACT';
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:6px;align-items:center;justify-content:space-between';
+      const addr = document.createElement('span');
+      addr.className = 'mono';
+      addr.style.cssText = 'font-size:11px;color:var(--text-mute)';
+      addr.textContent = `${payload.senderIp}:${payload.senderPort || 53319}`;
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'modal-btn small';
+      saveBtn.id = 'firstcontact-save';
+      saveBtn.textContent = '+ SAVE PEER';
+      row.append(addr, saveBtn);
+      b.replaceChildren(label, row);
       incomingFileList.parentNode.insertBefore(b, incomingFileList);
       b.querySelector('#firstcontact-save').addEventListener('click', async (e) => {
         const btn = e.target;
@@ -1348,11 +1390,18 @@
     setQrTab('show');
     try {
       const data = await invoke('generate_pair_qr');
+      // data.svg is produced locally by the qrcode crate (trusted, not
+      // peer data) — safe to inject. The error branch below is NOT: err
+      // can carry arbitrary text, so use textContent.
       qrCanvas.innerHTML = data.svg || '';
       qrCurrentPayload = data.payload || '';
       setText(qrPayload, qrCurrentPayload);
     } catch (err) {
-      qrCanvas.innerHTML = `<div style="padding:24px;color:#ff4d6b">${err}</div>`;
+      qrCanvas.replaceChildren();
+      const e = document.createElement('div');
+      e.style.cssText = 'padding:24px;color:#ff4d6b';
+      e.textContent = String(err);
+      qrCanvas.appendChild(e);
       qrCurrentPayload = '';
     }
   }
@@ -1553,7 +1602,7 @@
 
     // Render the big current icon + the 6-picker.
     const bigIcon = document.getElementById('peer-details-icon-current');
-    if (bigIcon) bigIcon.innerHTML = ICON_SVG[peer.iconType] || ICON_SVG.desktop;
+    if (bigIcon) bigIcon.innerHTML = iconSvg(peer.iconType);
     const picker = document.getElementById('peer-details-icon-picker');
     if (picker) {
       picker.innerHTML = ICON_KEYS.map((key) => `
@@ -1670,7 +1719,7 @@
       });
       // Update the big preview too.
       const bigIcon = document.getElementById('peer-details-icon-current');
-      if (bigIcon) bigIcon.innerHTML = ICON_SVG[icon] || ICON_SVG.desktop;
+      if (bigIcon) bigIcon.innerHTML = iconSvg(icon);
       blip(880, 0.04);
     } catch (err) {
       setStatus(`ERR icon · ${err}`);
