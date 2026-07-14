@@ -1,3 +1,5 @@
+> ✅ **IMPLEMENTADA 2026-07-14** — todas las Tareas (3.1–3.7) aplicadas + review adversarial (5 dim × 2 escépticos; 2 fixes confirmados aplicados: firma del handshake en el verifier de pinning + digest per-asset del updater; 2 refutados). Decisiones del dueño: 3.4 `/text` queda ABIERTO (documentado); 3.6 updater ABORTA sin hash. Verificación por máquina: OK (`cargo check`/`clippy`/`build` + 4 harness aislados). Verificación FÍSICA (pinning con 2 instancias/PCs, CSP sin violaciones en F12, peer emparejado transfiere): PENDIENTE del usuario. Ver `docs/CHANGELOG.md` y `docs/SESSION_HANDOFF.md`. Archivado.
+
 # Millennium Clipboard — Rust compartido + frontend · Fase 3: Seguridad
 
 > Parte del plan de remediación de Millennium Clipboard. Leé primero `../00-SHARED-CONTEXT.md`.

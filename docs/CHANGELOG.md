@@ -2,6 +2,31 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
+## 2026-07-14 — Fase 3 (Rust compartido + frontend): seguridad (IMPLEMENTADA + review aplicado; falta verificación física)
+
+Spec archivado en `docs/archive/phase-3-security.md`. Un commit por Tarea (ver `git log`). **Verificación por máquina: OK** — `cargo check`/`clippy` (sin warnings nuevos vs baseline; la única nueva, `prepare_upload` a 8 args, suprimida con `#[allow]`) / `cargo build` (debug) linkea / `node --check` main.js+pre.js OK. **4 harness aislados verdes** (los tests van `#[cfg(not(windows))]` por el bug de carga del binario de test): `safe_join` (reservados/ADS/dots), `extract_sha256` (marker/case/ausente), verifier de pinning (match/mismatch/case-insensitive/TOFU), y **handshake TLS real e2e** (rustls+rcgen): peer con clave real → OK; atacante con cert copiado + clave distinta → FAIL `BadSignature`; TOFU → OK. **Decisiones del dueño**: 3.4 `/text` queda ABIERTO (solo toast, no toca portapapeles ni disco); 3.6 updater ABORTA si no hay hash. **Falta verificación física del usuario** (pinning con 2 instancias/PCs, CSP sin violaciones en F12, peer emparejado sigue transfiriendo — ver HANDOFF).
+
+### Added
+- **Cert pinning real (Tarea 3.1)** — `PinnedFingerprintVerifier` (rustls `ServerCertVerifier`) hashea el cert end-entity DER (SHA-256) y exige que matchee la fingerprint esperada; **valida además la firma del handshake** (delega a `rustls::crypto::verify_tls12/13_signature` con el provider ring) para probar posesión de la clave privada. `client_for(expected_fp)` cachea un `reqwest::Client` **por fingerprint** (`Mutex<HashMap>`, clone Arc barato) → el pooling que evita LocalSend #1657 sigue vivo; el lock se suelta antes de todo `await`. `fetch_info_pinned` (poller) vs `fetch_info` TOFU (discovery/pairing/self-ping). `ring` instalado como crypto provider al arranque.
+- **CSP estricta (Tarea 3.2)** en `tauri.conf.json` (`default-src 'self'`; `script-src 'self'` sin `unsafe-inline`; `object-src 'none'`; `base-uri 'self'`; `frame-ancestors 'none'`; `img-src` con `data:`; `connect-src` con el IPC). 4 fuentes (Orbitron/Audiowide/Share Tech Mono/JetBrains Mono) **auto-hospedadas** en `src/fonts/*.woff2` (subset latin; Orbitron y JetBrains Mono son variables → 1 archivo/familia) + `@font-face`. Nuevo `src/pre.js` (ex `<script>` inline del `<head>`). Helper `iconSvg()` (lookup con `hasOwnProperty`).
+- **Endurecimiento de `safe_join` (Tarea 3.7)** — `is_safe_component` rechaza `CON/PRN/AUX/NUL/COM1-9/LPT1-9` (con o sin extensión), `:` (ADS), chars ilegales NTFS, bytes de control y `.`/espacio final; corre para `rel_path` y `name`.
+- **`DefaultBodyLimit` por-ruta (Tarea 3.5)** — `/clipboard/image` 48 MiB, `/prepare-upload` 8 MiB; el resto mantiene el default (2 MiB); `/upload` sin límite chico (streamea).
+- **Integridad del updater (Tarea 3.6)** — `UpdateInfo.download_sha256` + verificación SHA-256 del binario **antes** de escribir el staged `.exe`/`.bat`/`.apk`; aborta si no matchea o no hay hash. `extract_sha256` parsea `sha256:<64 hex>` del body.
+
+### Changed
+- **`/text` documentado como endpoint abierto (Tarea 3.4)** — decisión del dueño: cualquier peer del LAN puede mandar texto (solo dispara un toast; no toca portapapeles ni disco, a diferencia de `/clipboard`). Sin gate nuevo; documentado en el handler.
+- **Firmas de `http_client`**: `post_text`/`prepare_upload`/`upload_file`/`cancel_upload` reciben `expected_fp`; `post_clipboard`/`_image` pin-ean a la fingerprint del **receptor** (antes se descartaba). El poller de clipboard arrastra la fp del receptor.
+- **Updater lee el hash del `digest` per-asset de GitHub** (fix del review) — `check_for_update` toma `assets[].digest` (`sha256:<hex>`) del asset seleccionado, atado a la plataforma; `extract_sha256(body)` queda de fallback. Sin esto, un release unificado (exe+apk) rompía Android y ningún release actual (que no publica hash en el body) podía actualizar.
+
+### Removed
+- **`danger_accept_invalid_certs(true)`** de `http_client.rs` (Tarea 3.1): el cliente ya no acepta cualquier cert.
+- **Probe `/info` pre-envío spoofeable** en `send_text`/`send_files`: corría en otro socket que el payload (ventana MITM/TOCTOU); la pin del transporte lo cubre.
+- **`<link>` a Google Fonts** y el `<script>` inline del `<head>` en `index.html`; 3 `onclick` inline migrados a `addEventListener` (`add-peer-cancel` no tenía listener y quedaba muerto sin el onclick → cableado).
+
+### Fixed
+- **MITM con cert copiado (review, CRÍTICO)** — el verifier devolvía `Ok(assertion())` en `verify_tls12/13_signature` sin chequear la firma, así que pin-eaba el hash de bytes públicos sin probar posesión de la clave. Un atacante copiaba el cert de un peer emparejado y hacía MITM. Ahora la firma se valida contra la clave pública del cert presentado.
+- **XSS por datos de peer en `innerHTML` (Tarea 3.3 + review)** — thumbnail entrante (createElement + validación `data:image/`), `senderIp`/`senderPort` (textContent), branch de error del QR (textContent), y `iconType` de la TXT de mDNS (ya no se interpola en `data-icon` del `innerHTML` de `buildPeerItem`; `dataset` no parsea HTML). Refutados por el review (no aplicados): bypass Unicode COM¹/²/³ de `safe_join` (con prefijo de dir Windows no redirige al dispositivo, probado en la máquina real); framing "updater 100% roto" (abortar-sin-hash es decisión documentada).
+
 ## 2026-07-13 — Fase 2 Windows: correctness y seguridad de datos (IMPLEMENTADA + review aplicado; falta verificación física)
 
 Spec archivado en `docs/archive/phase-2-correctness.md`. Un commit por Tarea (2.2 dividida en sub-bugs; ver `git log`). **Verificación por máquina: OK** — `cargo check`/`clippy` (13 warnings = baseline, 0 nuevos) / `cargo test --lib` 7/7 / `node --check` OK. **Round-trip sobre los 6 JSON reales del usuario: OK** (harness aislado sin Tauri, `include!` del `json_store.rs` vivo — los 6 stores cargan→guardan→cargan idéntico; `settings` pierde solo el campo vestigial `registerSendTo`, comportamiento pre-existente). **`.bat` de update probado a mano** (fallo→marcador tras 10 tries; feliz→swap+limpia). **Falta verificación física del usuario** (datos reales + UI, ver HANDOFF).
