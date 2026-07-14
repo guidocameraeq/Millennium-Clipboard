@@ -213,6 +213,18 @@ async fn handle_text(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(payload): Json<TextPayload>,
 ) -> StatusCode {
+    // CONSENT — decisión de producto (Fase 3, Tarea 3.4): /text queda
+    // ABIERTO a cualquier peer del LAN, a propósito. A diferencia de
+    // /clipboard (que auto-escribe en el portapapeles del SO y por eso
+    // exige opt-in mutuo), el texto puntual solo dispara un toast/superficie
+    // en la UI; no toca el portapapeles ni el disco. El dueño eligió no
+    // poner gate para no romper el flujo casual "mandame un texto" entre
+    // dispositivos que todavía no emparejó.
+    //
+    // Limitación conocida (misma que /clipboard): el server no autentica al
+    // cliente (no mTLS), así que un gate por sender_fingerprint sería
+    // spoofeable de todos modos por quien conozca una huella conocida.
+    // Cerrar eso (auth mutua real) está anotado en docs/TODO.md.
     let sender_port = payload.sender_port.unwrap_or(crate::discovery::DEFAULT_PORT);
     let evt = IncomingTextEvent {
         text: payload.text,
