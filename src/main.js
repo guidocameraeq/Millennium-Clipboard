@@ -1920,6 +1920,13 @@
     if (e.target === addPeerModal) closeAddPeerModal();
   });
 
+  // CANCEL button — was an inline onclick in index.html; wired here now that
+  // a strict CSP (Fase 3, Tarea 3.2) blocks inline handlers. The other two
+  // modal-close buttons (settings-close, peer-details-close) already had
+  // addEventListener handlers, so only this one needed wiring.
+  const addPeerCancelBtn = document.getElementById('add-peer-cancel');
+  if (addPeerCancelBtn) addPeerCancelBtn.addEventListener('click', closeAddPeerModal);
+
   const IPV4_RE = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
 
   async function submitAddPeer() {
