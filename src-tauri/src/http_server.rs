@@ -10,7 +10,7 @@
 use anyhow::{Context, Result};
 use axum::{
     body::Body,
-    extract::{ConnectInfo, Path as AxumPath, Query, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Path as AxumPath, Query, State},
     http::{HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
@@ -125,10 +125,27 @@ pub async fn run(
         sessions: Arc::new(Mutex::new(HashMap::new())),
     };
 
+    // Per-route body limits. Only the two routes that buffer a big JSON
+    // body in RAM (base64 image / prepare-upload thumbnails) get a raised
+    // limit; every other route keeps axum's small default (2 MiB), which
+    // is plenty for /text, /clipboard, /info. NEVER set this globally —
+    // that would open /text to huge bodies too.
+    //
+    // Base64 inflates ~4/3, so 48 MiB of JSON lets a ~32 MiB PNG through.
+    const CLIP_IMAGE_LIMIT: usize = 48 * 1024 * 1024;
+    // prepare-upload carries N base64 thumbnails (~96px each) + metadata;
+    // 8 MiB is generous and cuts absurd payloads.
+    const PREPARE_LIMIT: usize = 8 * 1024 * 1024;
+
     let router = Router::new()
         .route("/info", get(handle_info))
         .route("/text", post(handle_text))
-        .route("/prepare-upload", post(handle_prepare_upload))
+        .route(
+            "/prepare-upload",
+            post(handle_prepare_upload).layer(DefaultBodyLimit::max(PREPARE_LIMIT)),
+        )
+        // /upload streams the body (not Json) — no small limit or we'd cut
+        // large files. Its size is bounded by the per-file session size.
         .route("/upload/{session_id}/{file_id}", post(handle_upload))
         .route(
             "/upload/{session_id}/{file_id}/progress",
@@ -136,7 +153,10 @@ pub async fn run(
         )
         .route("/cancel/{session_id}", post(handle_cancel))
         .route("/clipboard", post(handle_clipboard))
-        .route("/clipboard/image", post(handle_clipboard_image))
+        .route(
+            "/clipboard/image",
+            post(handle_clipboard_image).layer(DefaultBodyLimit::max(CLIP_IMAGE_LIMIT)),
+        )
         .with_state(state);
 
     let tls = RustlsConfig::from_pem(cert_pem.into_bytes(), key_pem.into_bytes())
