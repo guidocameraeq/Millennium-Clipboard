@@ -524,9 +524,12 @@ pub fn start(
                 let mut probes: FuturesUnordered<_> = due
                     .into_iter()
                     .map(|(fp, ip, port, hex, icon)| async move {
+                        // Pinned probe: the peer's cert must hash to its known
+                        // fingerprint or the handshake fails (Fase 3, 3.1), so
+                        // an impostor at this address can't keep it "online".
                         let res = tokio::time::timeout(
                             Duration::from_secs(5),
-                            crate::http_client::fetch_info(&ip, port),
+                            crate::http_client::fetch_info_pinned(&ip, port, &fp),
                         )
                         .await;
                         (fp, ip, port, hex, icon, res)

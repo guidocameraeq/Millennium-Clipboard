@@ -151,17 +151,11 @@ async fn send_text(
         text.chars().count()
     );
 
-    let remote = http_client::fetch_info(&target.ip, target.port)
-        .await
-        .map_err(|e| format!("identity probe failed: {e:#}"))?;
-    if remote.fingerprint != peer_id {
-        return Err(format!(
-            "fingerprint mismatch — expected {}, got {}",
-            &peer_id[..16],
-            &remote.fingerprint[..16]
-        ));
-    }
-
+    // No pre-send /info probe anymore: the TLS handshake is pinned to
+    // peer_id (Fase 3, Tarea 3.1), so post_text only completes if the cert
+    // at (ip, port) hashes to the expected fingerprint. The old probe ran on
+    // a DIFFERENT socket than the payload, so a MITM could pass it and then
+    // serve from another cert — the pin closes that window.
     http_client::post_text(
         &target.ip,
         target.port,
@@ -169,6 +163,7 @@ async fn send_text(
         state.identity.alias.clone(),
         state.identity.fingerprint.clone(),
         state.server_port,
+        &peer_id,
     )
     .await
     .map_err(|e| format!("send failed: {e:#}"))?;
@@ -200,13 +195,9 @@ async fn send_files(
         .cloned()
         .ok_or_else(|| format!("peer {} not on the grid", peer_id))?;
 
-    // Verify identity (Fase 5 cross-check, reused).
-    let remote = http_client::fetch_info(&target.ip, target.port)
-        .await
-        .map_err(|e| format!("identity probe failed: {e:#}"))?;
-    if remote.fingerprint != peer_id {
-        return Err("fingerprint mismatch — peer changed identity".into());
-    }
+    // Identity is enforced at the TLS layer now: prepare_upload/upload_file
+    // are pinned to peer_id (Fase 3, Tarea 3.1). The old /info cross-check
+    // ran on a separate socket and was spoofable — dropped.
 
     // Gather metadata for each file.
     let session_id = Uuid::new_v4().simple().to_string();
@@ -268,6 +259,7 @@ async fn send_files(
         &state.identity.fingerprint,
         state.server_port,
         &prepare_files,
+        &peer_id,
     )
     .await
     .map_err(|e| format!("prepare: {e:#}"))?;
@@ -287,6 +279,7 @@ async fn send_files(
             token,
             path,
             *size,
+            &peer_id,
         )
         .await
         .map_err(|e| format!("upload {}: {e:#}", path.display()))?;
@@ -327,7 +320,7 @@ async fn cancel_session(
         .get(&peer_id)
         .cloned()
         .ok_or_else(|| format!("peer {} not on the grid", peer_id))?;
-    http_client::cancel_upload(&target.ip, target.port, &session_id)
+    http_client::cancel_upload(&target.ip, target.port, &session_id, &peer_id)
         .await
         .map_err(|e| format!("{e:#}"))
 }
@@ -936,7 +929,11 @@ fn spawn_clipboard_poller(
     // ---- Async side: fan each snapshot out to the opted-in peers.
     tauri::async_runtime::spawn(async move {
         while let Some(snap) = rx.recv().await {
-            let targets: Vec<(String, u16)> = {
+            // (receiver_fp, ip, port). The enabled set holds the fingerprints
+            // of the peers we sync with — i.e. the RECEIVERS — so we carry
+            // each one to pin the TLS handshake to the right destination
+            // (Fase 3, Tarea 3.1).
+            let targets: Vec<(String, String, u16)> = {
                 let enabled = store.enabled_snapshot();
                 if enabled.is_empty() {
                     Vec::new()
@@ -945,7 +942,7 @@ fn spawn_clipboard_poller(
                     enabled
                         .into_iter()
                         .filter(|fp| fp != &my_fingerprint)
-                        .filter_map(|fp| p.get(&fp).map(|r| (r.ip.clone(), r.port)))
+                        .filter_map(|fp| p.get(&fp).map(|r| (fp.clone(), r.ip.clone(), r.port)))
                         .collect()
                 }
             };
@@ -953,15 +950,15 @@ fn spawn_clipboard_poller(
                 continue;
             }
 
-            for (ip, port) in targets {
+            for (receiver_fp, ip, port) in targets {
                 let alias = my_alias.clone();
-                let fp = my_fingerprint.clone();
+                let fp = my_fingerprint.clone(); // sender's own fp (goes in the payload)
                 match &snap {
                     ClipSnapshot::Text(t) => {
                         let text = t.clone();
                         tauri::async_runtime::spawn(async move {
                             if let Err(e) =
-                                http_client::post_clipboard(&ip, port, &text, &alias, &fp).await
+                                http_client::post_clipboard(&ip, port, &text, &alias, &fp, &receiver_fp).await
                             {
                                 runtime_log::warn(format!(
                                     "[clipboard] text sync to {}:{} failed: {}",
@@ -974,7 +971,7 @@ fn spawn_clipboard_poller(
                         let b64 = png_base64.clone();
                         tauri::async_runtime::spawn(async move {
                             if let Err(e) = http_client::post_clipboard_image(
-                                &ip, port, &b64, &alias, &fp,
+                                &ip, port, &b64, &alias, &fp, &receiver_fp,
                             )
                             .await
                             {
@@ -1152,6 +1149,13 @@ pub fn run() {
     // `setup` callback. Release binaries use windows_subsystem="windows"
     // which swallows stderr — without this hook every panic is invisible.
     install_panic_hook();
+
+    // Install ring as the process-wide rustls crypto provider ONCE, before any
+    // TLS work. axum-server (server) and our pinned reqwest clients (Fase 3,
+    // Tarea 3.1) both build rustls configs via ClientConfig/ServerConfig
+    // builder(), which panic with "no process-level CryptoProvider available"
+    // if none is installed. Idempotent: .ok() swallows the "already set" error.
+    let _ = rustls::crypto::ring::default_provider().install_default();
 
     // Best-effort: clean up any millennium-clipboard.exe processes left
     // behind by a previous crashed launch BEFORE tauri tries to bind

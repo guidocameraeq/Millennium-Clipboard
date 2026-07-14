@@ -1,20 +1,37 @@
-// Millennium Clipboard — HTTPS client (Fase 5–7)
+// Millennium Clipboard — HTTPS client (Fase 5–7, cert pinning Fase 3)
 //
-// Cert chain validation is intentionally skipped — we cross-check the
-// peer fingerprint via /info before sending, and ignore CN/SAN since
-// peers identify themselves by fingerprint, not hostname.
+// Peers are self-signed and identify themselves by the SHA-256 of their
+// DER cert (their "fingerprint"). We do NOT validate a CA chain or CN/SAN.
+// Instead the TLS handshake is PINNED: the client only completes the
+// handshake if the server's end-entity cert hashes to the fingerprint we
+// expect (see PinnedFingerprintVerifier). This closes the old MITM hole
+// where a spoofable /info probe "verified" the peer on a different socket
+// than the one carrying the payload.
 //
-// IMPORTANT: a single Client is shared across all sends so the
-// connection is pooled (avoids LocalSend bug #1657: 7000 small files
-// collapse to 80 KB/s when each upload pays the TLS handshake).
+// TOFU mode (expected == None) accepts any cert and is used ONLY for
+// discovery/pairing (fetch_info, add_peer_by_ip, pair_with_qr_payload),
+// where we don't trust any fingerprint yet — the real pin happens on the
+// NEXT send to that peer.
+//
+// IMPORTANT: Clients are pooled PER expected-fingerprint (a cached
+// HashMap<fp, Client>), because use_preconfigured_tls freezes the verifier
+// at build() time so we need one Client per pin. reqwest::Client is a cheap
+// Arc clone that shares the pool, so cloning per request does NOT reopen
+// connections — this keeps the pooling that avoids LocalSend bug #1657
+// (7000 small files collapsing to 80 KB/s when each upload pays a fresh
+// TLS handshake).
 
 use anyhow::{bail, Context, Result};
 use futures_util::StreamExt;
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::{DigitallySignedStruct, Error as TlsError, SignatureScheme};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tokio_util::io::ReaderStream;
@@ -23,20 +40,112 @@ const CHUNK: usize = 64 * 1024;
 const PROGRESS_EVERY: Duration = Duration::from_millis(120);
 
 // ---------------------------------------------------------------------------
-// Shared HTTP client (pooled, kept warm)
+// Cert pinning (Fase 3, Tarea 3.1)
 // ---------------------------------------------------------------------------
 
-fn client() -> &'static reqwest::Client {
-    static C: OnceLock<reqwest::Client> = OnceLock::new();
-    C.get_or_init(|| {
-        reqwest::Client::builder()
-            .danger_accept_invalid_certs(true)
-            .pool_idle_timeout(Some(Duration::from_secs(90)))
-            .pool_max_idle_per_host(8)
-            .timeout(Duration::from_secs(300))
-            .build()
-            .expect("build reqwest client")
-    })
+/// Verifier that pins the SHA-256 fingerprint of the end-entity cert.
+/// If `expected` is None it runs in TOFU mode: accepts any cert (equivalent
+/// to the old behaviour) — used ONLY for /info during discovery/pairing
+/// where we don't trust anyone yet.
+#[derive(Debug)]
+struct PinnedFingerprintVerifier {
+    expected: Option<String>, // hex lowercase, same definition as identity.fingerprint
+}
+
+impl ServerCertVerifier for PinnedFingerprintVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, TlsError> {
+        let mut hasher = Sha256::new();
+        hasher.update(end_entity.as_ref());
+        let got = hex::encode(hasher.finalize());
+        match &self.expected {
+            None => Ok(ServerCertVerified::assertion()), // TOFU
+            Some(exp) if exp.eq_ignore_ascii_case(&got) => Ok(ServerCertVerified::assertion()),
+            Some(exp) => Err(TlsError::General(format!(
+                "cert fingerprint mismatch: expected {}, got {}",
+                &exp[..16.min(exp.len())],
+                &got[..16.min(got.len())]
+            ))),
+        }
+    }
+
+    // Peers use self-signed certs without a CA; we don't validate the
+    // handshake signature against a root, but rustls requires these methods
+    // to exist. We return "valid" because pinning the cert already binds us
+    // to the correct identity. DO NOT copy this to a client that talks to a
+    // public-CA server.
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, TlsError> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, TlsError> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        // ring supports these; returning the standard list avoids rustls
+        // aborting with "no schemes".
+        vec![
+            SignatureScheme::ECDSA_NISTP256_SHA256,
+            SignatureScheme::ECDSA_NISTP384_SHA384,
+            SignatureScheme::ED25519,
+            SignatureScheme::RSA_PSS_SHA256,
+            SignatureScheme::RSA_PKCS1_SHA256,
+        ]
+    }
+}
+
+fn build_client(expected_fp: Option<&str>) -> reqwest::Client {
+    let verifier = Arc::new(PinnedFingerprintVerifier {
+        expected: expected_fp.map(|s| s.to_ascii_lowercase()),
+    });
+
+    let mut cfg = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(verifier)
+        .with_no_client_auth();
+    // ALPN empty is fine: axum-server doesn't negotiate h2 here.
+    cfg.alpn_protocols.clear();
+
+    reqwest::Client::builder()
+        .use_preconfigured_tls(cfg)
+        .pool_idle_timeout(Some(Duration::from_secs(90)))
+        .pool_max_idle_per_host(8)
+        .timeout(Duration::from_secs(300))
+        .build()
+        .expect("build reqwest client")
+}
+
+/// Return a client pinned to `expected_fp`, created once and cached. Keyed by
+/// the fingerprint (or "__tofu__" for the discovery mode). The Mutex is held
+/// only long enough to clone the (Arc-backed) Client out — never across an
+/// await — so it respects the no-lock-across-await rule.
+fn client_for(expected_fp: Option<&str>) -> reqwest::Client {
+    static CACHE: OnceLock<Mutex<HashMap<String, reqwest::Client>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = expected_fp
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_else(|| "__tofu__".to_string());
+    let mut map = cache.lock().unwrap();
+    map.entry(key)
+        .or_insert_with(|| build_client(expected_fp))
+        .clone()
 }
 
 // ---------------------------------------------------------------------------
@@ -53,9 +162,24 @@ pub struct RemoteInfo {
     pub protocol: String,
 }
 
+/// TOFU probe (no pinning) — for discovery/pairing where we don't trust a
+/// fingerprint yet (add_peer_by_ip, pair_with_qr_payload, self-ping). The
+/// caller compares the returned fingerprint itself.
 pub async fn fetch_info(ip: &str, port: u16) -> Result<RemoteInfo> {
+    fetch_info_inner(ip, port, None).await
+}
+
+/// Pinned probe — for the discovery poller, which already knows the peer's
+/// expected fingerprint. The TLS handshake fails if the cert at (ip, port)
+/// doesn't hash to `expected_fp`, so an impostor squatting the address can't
+/// keep the peer marked "online".
+pub async fn fetch_info_pinned(ip: &str, port: u16, expected_fp: &str) -> Result<RemoteInfo> {
+    fetch_info_inner(ip, port, Some(expected_fp)).await
+}
+
+async fn fetch_info_inner(ip: &str, port: u16, expected_fp: Option<&str>) -> Result<RemoteInfo> {
     let url = format!("https://{}:{}/info", ip, port);
-    let resp = client()
+    let resp = client_for(expected_fp)
         .get(&url)
         .send()
         .await
@@ -86,9 +210,10 @@ pub async fn post_text(
     sender_alias: String,
     sender_fingerprint: String,
     sender_port: u16,
+    expected_fp: &str,
 ) -> Result<()> {
     let url = format!("https://{}:{}/text", ip, port);
-    let resp = client()
+    let resp = client_for(Some(expected_fp))
         .post(&url)
         .json(&TextPayload { text, sender_alias, sender_fingerprint, sender_port })
         .send()
@@ -134,6 +259,7 @@ pub struct PrepareUploadResponse {
     pub files: HashMap<String, String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn prepare_upload(
     ip: &str,
     port: u16,
@@ -142,9 +268,10 @@ pub async fn prepare_upload(
     sender_fingerprint: &str,
     sender_port: u16,
     files: &[PrepareFile],
+    expected_fp: &str,
 ) -> Result<PrepareUploadResponse> {
     let url = format!("https://{}:{}/prepare-upload", ip, port);
-    let resp = client()
+    let resp = client_for(Some(expected_fp))
         .post(&url)
         .json(&PrepareUploadRequest {
             session_id,
@@ -199,12 +326,13 @@ async fn fetch_upload_progress(
     session_id: &str,
     file_id: &str,
     token: &str,
+    expected_fp: &str,
 ) -> u64 {
     let url = format!(
         "https://{}:{}/upload/{}/{}/progress?token={}",
         ip, port, session_id, file_id, token
     );
-    match client().get(&url).send().await {
+    match client_for(Some(expected_fp)).get(&url).send().await {
         Ok(resp) if resp.status().is_success() => match resp.json::<UploadProgress>().await {
             Ok(p) => p.bytes_received,
             Err(_) => 0,
@@ -213,6 +341,7 @@ async fn fetch_upload_progress(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn upload_file(
     app: AppHandle,
     ip: &str,
@@ -222,6 +351,7 @@ pub async fn upload_file(
     token: &str,
     path: &Path,
     total: u64,
+    expected_fp: &str,
 ) -> Result<()> {
     // Up to 3 retries (~initial + 2 resume attempts). Failures within
     // a retry call `fetch_upload_progress` so the next attempt only
@@ -234,7 +364,7 @@ pub async fn upload_file(
         let resume_from = if attempt == 1 {
             0
         } else {
-            fetch_upload_progress(ip, port, session_id, file_id, token).await
+            fetch_upload_progress(ip, port, session_id, file_id, token, expected_fp).await
         };
         match upload_file_once(
             app.clone(),
@@ -246,6 +376,7 @@ pub async fn upload_file(
             path,
             total,
             resume_from,
+            expected_fp,
         )
         .await
         {
@@ -263,6 +394,7 @@ pub async fn upload_file(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn upload_file_once(
     app: AppHandle,
     ip: &str,
@@ -273,6 +405,7 @@ async fn upload_file_once(
     path: &Path,
     total: u64,
     resume_from: u64,
+    expected_fp: &str,
 ) -> Result<()> {
     let url = format!(
         "https://{}:{}/upload/{}/{}?token={}",
@@ -338,7 +471,7 @@ async fn upload_file_once(
     });
 
     let remaining = total.saturating_sub(resume_from);
-    let mut req = client()
+    let mut req = client_for(Some(expected_fp))
         .post(&url)
         .header("content-length", remaining.to_string());
     if resume_from > 0 {
@@ -366,9 +499,14 @@ async fn upload_file_once(
     Ok(())
 }
 
-pub async fn cancel_upload(ip: &str, port: u16, session_id: &str) -> Result<()> {
+pub async fn cancel_upload(
+    ip: &str,
+    port: u16,
+    session_id: &str,
+    expected_fp: &str,
+) -> Result<()> {
     let url = format!("https://{}:{}/cancel/{}", ip, port, session_id);
-    let _ = client().post(&url).send().await; // best-effort
+    let _ = client_for(Some(expected_fp)).post(&url).send().await; // best-effort
     Ok(())
 }
 
@@ -390,9 +528,10 @@ pub async fn post_clipboard(
     text: &str,
     sender_alias: &str,
     sender_fingerprint: &str,
+    receiver_fp: &str,
 ) -> Result<()> {
     let url = format!("https://{}:{}/clipboard", ip, port);
-    let resp = client()
+    let resp = client_for(Some(receiver_fp))
         .post(&url)
         .json(&ClipboardPayload { text, sender_alias, sender_fingerprint })
         .send()
@@ -422,9 +561,10 @@ pub async fn post_clipboard_image(
     png_base64: &str,
     sender_alias: &str,
     sender_fingerprint: &str,
+    receiver_fp: &str,
 ) -> Result<()> {
     let url = format!("https://{}:{}/clipboard/image", ip, port);
-    let resp = client()
+    let resp = client_for(Some(receiver_fp))
         .post(&url)
         .json(&ClipboardImagePayload {
             png_base64,
@@ -445,4 +585,60 @@ pub async fn post_clipboard_image(
         bail!("clipboard/image endpoint returned {}", resp.status());
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tests — cert pinning verifier (Fase 3, Tarea 3.1)
+// ---------------------------------------------------------------------------
+// Gated not(windows): adding any test to the crate breaks the lib test binary
+// load on Windows (comctl32-v6 / STATUS_ENTRYPOINT_NOT_FOUND). Verified in an
+// isolated cargo harness on the host; runs normally on non-Windows CI.
+#[cfg(all(test, not(windows)))]
+mod pinning_tests {
+    use super::*;
+
+    /// Generate a real self-signed cert (same crate as identity.rs) and its
+    /// SHA-256 DER fingerprint — the exact definition the app pins against.
+    fn make_cert_der() -> (CertificateDer<'static>, String) {
+        let ck = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let der = ck.cert.der().clone();
+        let mut h = Sha256::new();
+        h.update(der.as_ref());
+        let fp = hex::encode(h.finalize());
+        (der, fp)
+    }
+
+    fn verify(v: &PinnedFingerprintVerifier, der: &CertificateDer<'_>) -> Result<(), TlsError> {
+        let name = ServerName::try_from("localhost").unwrap();
+        v.verify_server_cert(der, &[], &name, &[], UnixTime::now())
+            .map(|_| ())
+    }
+
+    #[test]
+    fn accepts_matching_fingerprint() {
+        let (der, fp) = make_cert_der();
+        let v = PinnedFingerprintVerifier { expected: Some(fp) };
+        assert!(verify(&v, &der).is_ok());
+    }
+
+    #[test]
+    fn accepts_matching_fingerprint_case_insensitive() {
+        let (der, fp) = make_cert_der();
+        let v = PinnedFingerprintVerifier { expected: Some(fp.to_uppercase()) };
+        assert!(verify(&v, &der).is_ok());
+    }
+
+    #[test]
+    fn rejects_mismatched_fingerprint() {
+        let (der, _fp) = make_cert_der();
+        let v = PinnedFingerprintVerifier { expected: Some("a".repeat(64)) };
+        assert!(verify(&v, &der).is_err());
+    }
+
+    #[test]
+    fn tofu_accepts_any_cert() {
+        let (der, _fp) = make_cert_der();
+        let v = PinnedFingerprintVerifier { expected: None };
+        assert!(verify(&v, &der).is_ok());
+    }
 }
