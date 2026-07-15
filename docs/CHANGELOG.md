@@ -2,6 +2,18 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
+## 2026-07-15 — Fase 2: verificación física Bloque A (datos) OK + auditoría de UI + SPEC de pulido READY
+
+Sesión de **verificación + auditoría + spec**; **sin cambios de código** (`src/` y `src-tauri/` intactos). Todo lo de datos se probó con una **instancia aislada** (`MILLENNIUM_INSTANCE=verif`, `MILLENNIUM_PORT=53400`), **sin tocar los datos reales**.
+
+### Verificado (físico, por el usuario)
+- **Fase 2 · Bloque A (Datos) — OK**: (1) un favorito sobrevive a un kill **forzado** — escritura atómica (sin `.tmp` residual), archivo íntegro tras el crash, `[prefs] loaded 1 favorite(s)` al reabrir; (2) un `prefs-verif.json` corrompido a mano → `ERR [jsonstore] parse failed` + `prefs-verif.json.corrupt` con el dato recuperable + reset a default. Dos matices honestos anotados (el archivo original queda corrupto hasta el próximo write; `prefs` no muestra aviso visual de corrupción, solo el log → TODO 🟢).
+- **Fase 2 · Bloque B (UI) — 1/5 OK**: "texto entrante sobrevive un ACK" (`#incoming-toast` y `#toast` conviven). Faltan 4 (necesitan 2 PCs): TARGET LOST, error que no se pisa a los 5 s, barras TX/RX, rename que sobrevive `peers-changed`.
+
+### Docs
+- **Auditoría de UI** (workflow: 4 dimensiones + verificación adversarial + consolidación, 30 agentes) → **18 hallazgos verificados** contra el código.
+- **`docs/SPEC-ui-polish.md` (READY)** — spec delta de pulido de UI: 6 tareas (recortes de info; drag&drop→FILE y "0 B"; UX chicos; rediseño de la cola; Config colapsable con `<details>`; contraste con preview), bloque **NO SE TOCA** (motor de transferencia, render por diff, escaping, CSP+cert pinning, backend, datos), 9 criterios verificables. Decisiones del dueño: D1 auto-selección al primer peer **visible** según el filtro; D2 contraste **con preview** (solo si aprueba); D3 los 2 hallazgos que tocan el render por diff (conteo de peers repetido, navegar la lista con teclado) quedan **diferidos** a un spec aparte.
+
 ## 2026-07-14 — Fase 3 (Rust compartido + frontend): seguridad (IMPLEMENTADA + review aplicado; **release v0.16.0** + verificación física del core OK)
 
 Spec archivado en `docs/archive/phase-3-security.md`. Un commit por Tarea (ver `git log`). **Verificación por máquina: OK** — `cargo check`/`clippy` (sin warnings nuevos vs baseline; la única nueva, `prepare_upload` a 8 args, suprimida con `#[allow]`) / `cargo build` (debug) linkea / `node --check` main.js+pre.js OK. **4 harness aislados verdes** (los tests van `#[cfg(not(windows))]` por el bug de carga del binario de test): `safe_join` (reservados/ADS/dots), `extract_sha256` (marker/case/ausente), verifier de pinning (match/mismatch/case-insensitive/TOFU), y **handshake TLS real e2e** (rustls+rcgen): peer con clave real → OK; atacante con cert copiado + clave distinta → FAIL `BadSignature`; TOFU → OK. **Decisiones del dueño**: 3.4 `/text` queda ABIERTO (solo toast, no toca portapapeles ni disco); 3.6 updater ABORTA si no hay hash. **Publicado como release final v0.16.0** (bump `5bb57e4`) con el `.exe` (9.8 MB); GitHub calcula el `digest` per-asset que el updater nuevo verifica. **Verificación física del usuario (2026-07-14): OK en el core** — auto-update v0.15.0→v0.16.0 en las 2 PCs + transferencias bidireccionales funcionando (pinning no rompe el uso diario, CSP no rompe la app). Pendiente solo lo opcional (ataque simulado —ya probado por máquina con el harness de handshake→`BadSignature`—, bulk de ~50 archivos, F12 explícito; ver TODO 🟢).
