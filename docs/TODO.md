@@ -5,7 +5,6 @@
 2026-07-15 — ver SESSION_HANDOFF.md
 
 ## 🔴 Crítico
-- [ ] **Ejecutar `docs/SPEC-ui-polish.md` (READY)** — pulido de UI: recortes de info, drag&drop→FILE + "0 B", UX chicos, rediseño de la cola, Config colapsable, contraste con preview. En chat nuevo: `inicio — ejecutá el spec docs/SPEC-ui-polish.md (está READY)` + `/smoke` al final (criterio #1 = regresión). NO toca el render por diff ni la seguridad (ver "NO SE TOCA" del spec).
 - [ ] **Fase 2 — verificación física Bloque B (UI): faltan 4** (necesitan 2 PCs). Bloque A (datos) ✅ verificado 2026-07-15 (ver CHANGELOG). Faltan: **TARGET LOST**, **error que no se pisa a los 5 s**, **barras TX/RX independientes**, **rename que sobrevive un `peers-changed`**. Notas: en una misma PC NO corren 2 instancias (single-instance por identifier) → 2 PCs, o cerrar la real + 1 instancia aislada (`MILLENNIUM_INSTANCE`+`MILLENNIUM_PORT`). Para TARGET LOST hace falta un peer **NO favorito** (`DRACOSSSLAPTOP` es favorito; `PEER_TTL=15 s`).
 - [ ] **DECIDIR (antes de tocar Android):** núcleo headless vs foreground-only (`android/SPEC.md`)
 
@@ -22,6 +21,7 @@
 - [ ] Android Fase C — portapapeles, QR, UI móvil (`android/phase-C-clipboard-qr-mobile.md`)
 
 ## 🟢 Ideas / algún día
+- [ ] **UI-polish — round-trip físico de transferencia (criterio #1)**: falta enviar/recibir texto y archivo entre 2 PCs con el frontend nuevo (acá no se pudo: single-instance bloquea un 2º peer local; peers reales offline). Riesgo casi nulo — solo cambió UI, el motor de transferencia está intacto. Eyeball en la próxima sesión de 2 PCs.
 - [ ] **Fase 3 — sub-checks opcionales no corridos en vivo** (el core SÍ se verificó el 2026-07-14: auto-update en las 2 PCs + transferencias bidireccionales OK → pinning no rompe el uso diario, CSP no rompe la app). Faltan, sin urgencia: el **ataque simulado** (2º server con otro cert en el `ip:port` del peer bueno → debe fallar el handshake) —ya probado por máquina con el harness de handshake real (cert copiado → `BadSignature`), falta la prueba física—; el bulk de ~50 archivos chicos (throughput/pooling); y F12 sin violaciones de CSP de forma explícita.
 - [ ] **UI — zonas protegidas (diferido del SPEC-ui-polish, decisión D3)**: (a) el conteo de peers aparece repetido 3-4 veces (badge + "NN visible" + PEERS/FAV del pie); (b) la lista de peers no se navega con teclado. Ambos tocan el render por diff (`renderPeers`/`buildPeerItem`) → requieren su propio spec chico + OK para entrar a la zona protegida.
 - [ ] **UI — aviso visual cuando `prefs` se corrompe**: hoy la corrupción de favoritos solo deja rastro en el log + `.corrupt`, sin cartel en pantalla (`settings` sí tiene manejo especial). Mejora de UX chica; detectada en la verificación física de Fase 2 (2026-07-15).

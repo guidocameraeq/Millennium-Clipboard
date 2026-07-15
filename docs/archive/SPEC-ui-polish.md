@@ -1,6 +1,6 @@
 # SPEC: Pulido de UI — Millennium Clipboard
 Sacar ruido visual, arreglar 2 bugs del flujo de archivos y reorganizar la config, sin tocar el motor de transferencia ni la seguridad.
-- Estado: READY
+- Estado: IMPLEMENTADA 2026-07-15 (T1–T6; T6 = opción B #607c8f, aprobada por el dueño). Verificada E2E por CDP con consola limpia, salvo el round-trip físico de transferencia (necesita 2 PCs). Archivada en docs/archive/.
 - Fecha: 2026-07-15
 
 ## Por qué (el dolor)

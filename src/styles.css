@@ -58,7 +58,7 @@
 
   --text-bright: #e6fbff;
   --text-mute: #7894a8;
-  --text-dim: #455d70;
+  --text-dim: #607c8f; /* T6: raised from #455d70 for legibility (WCAG AA 4.7:1) */
 
   --grid-line: rgba(0, 240, 255, 0.08);
   --grid-line-hot: rgba(0, 240, 255, 0.22);
@@ -438,6 +438,7 @@ html, body {
 }
 
 .target-hex {
+  display: none;
   font-size: 11px;
   color: var(--text-mute);
   letter-spacing: 2px;
@@ -909,7 +910,7 @@ html, body {
 
 .composer-meta {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   margin-top: 8px;
   font-size: 10px;
   letter-spacing: 2px;
@@ -964,6 +965,16 @@ html, body {
   color: var(--text-mute);
 }
 
+/* In-box queue state summary ("N archivo(s) listo(s)") — T4. */
+.dropzone-count {
+  margin-top: 10px;
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--neon-cyan);
+  text-shadow: 0 0 8px var(--neon-cyan-glow);
+}
+.dropzone-count[hidden] { display: none; }
+
 .dropzone-corners {
   position: absolute;
   inset: 0;
@@ -990,12 +1001,52 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  /* Cap the list so many files scroll internally instead of pushing TRANSMIT
+     off-screen (T4). flex:none stops the parent .mode-panel column stretching it. */
+  flex: none;
+  max-height: 168px;
+  overflow-y: auto;
 }
 
 .file-queue li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   padding: 6px 10px;
   background: rgba(0, 240, 255, 0.04);
   border-left: 2px solid var(--neon-cyan);
+}
+
+.file-queue .q-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-queue .q-meta {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-mute);
+}
+
+/* Remove-from-queue button (replaces the old <a>[X] link) — T3/T4. */
+.file-queue .queue-remove {
+  flex: none;
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+  color: var(--neon-magenta);
+  cursor: pointer;
+}
+.file-queue .queue-remove:hover {
+  text-shadow: 0 0 8px var(--neon-magenta-glow);
 }
 
 /* ==========================================================================
@@ -1155,7 +1206,21 @@ html, body {
   user-select: none;
 }
 
-.sound-toggle input { display: none; }
+.sound-toggle input {
+  /* Visually hidden but STILL focusable / in tab order (was display:none, which
+     removed every switch from keyboard reach). The input stays rendered so the
+     `input:checked + .sound-track` sibling styling below keeps working. */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 
 .sound-track {
   width: 30px;
@@ -1186,6 +1251,28 @@ html, body {
   left: 17px;
   background: var(--neon-cyan);
   box-shadow: 0 0 6px var(--neon-cyan);
+}
+
+/* Keyboard focus ring (T3) — only on keyboard nav (:focus-visible), never on a
+   mouse click, so the neon look is untouched for pointer users. */
+button:focus-visible,
+textarea:focus-visible,
+.text-input:focus-visible,
+.rename-input:focus-visible {
+  outline: 2px solid var(--neon-cyan);
+  outline-offset: 2px;
+}
+/* #text-composer sets outline:none at id specificity, so its ring must also be
+   id-specific to win. */
+#text-composer:focus-visible {
+  outline: 2px solid var(--neon-cyan);
+  outline-offset: -2px;
+}
+/* The switch <input> is visually hidden, so paint its focus ring on the
+   adjacent visible track. */
+.sound-toggle input:focus-visible + .sound-track {
+  outline: 2px solid var(--neon-cyan);
+  outline-offset: 2px;
 }
 
 /* ==========================================================================
@@ -1790,8 +1877,6 @@ html, body {
     font-size: 12px;
   }
 
-  /* Settings: section headers more spaced */
-  .settings-section { margin-top: 22px; font-size: 11px; }
   .settings-row {
     flex-direction: column;
     align-items: stretch;
@@ -2021,8 +2106,8 @@ html.is-mobile .composer {
   min-height: 0 !important;
 }
 html.is-mobile .file-queue {
-  max-height: none !important;
-  overflow: visible !important;
+  max-height: 40vh !important;
+  overflow-y: auto !important;
 }
 
 /* ---- Settings rows: label + control inline (compact) ---- */
@@ -2194,9 +2279,8 @@ html.is-mobile .status-strip {
   border-top: 1px solid var(--neon-cyan-soft) !important;
   z-index: 150 !important;
 }
-html.is-mobile .status-strip .status-item:nth-child(4),
-html.is-mobile .status-strip .status-item:nth-child(5) {
-  display: none !important; /* hide PROTO + CLACK toggle on phones — too noisy */
+html.is-mobile .status-strip .status-item:nth-child(4) {
+  display: none !important; /* hide CLACK toggle on phones — too noisy */
 }
 html.is-mobile .status-text {
   font-size: 9px !important;
@@ -2562,17 +2646,42 @@ html.is-mobile .status-val { font-size: 9px !important; }
 .settings-body {
   overflow-y: auto;
 }
-.settings-section {
+
+/* Settings — collapsible groups (T5): native <details>/<summary>, no JS (CSP-safe).
+   <summary> keeps the old section-header look plus a rotating disclosure chevron. */
+.settings-group {
+  border-bottom: 1px solid var(--neon-cyan-soft);
+}
+.settings-group:last-of-type {
+  border-bottom: none;
+}
+.settings-group > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   margin: 18px 0 8px;
-  padding: 0 0 4px;
+  padding: 0 0 8px;
   font-family: var(--font-display);
   font-size: 10px;
   letter-spacing: 3px;
   color: var(--neon-cyan);
   text-shadow: 0 0 6px var(--neon-cyan-glow);
-  border-bottom: 1px solid var(--neon-cyan-soft);
 }
-.settings-section:first-child {
+.settings-group > summary::-webkit-details-marker { display: none; }
+.settings-group > summary::after {
+  content: '▾';
+  font-size: 11px;
+  opacity: 0.7;
+  transition: transform 0.15s ease;
+}
+.settings-group:not([open]) > summary::after {
+  transform: rotate(-90deg);
+}
+.settings-group:first-of-type > summary {
   margin-top: 0;
 }
 

@@ -2,6 +2,28 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
+## 2026-07-15 — Pulido de UI (SPEC-ui-polish) IMPLEMENTADO (T1–T6)
+
+Se ejecutó entero `docs/SPEC-ui-polish.md` (ahora en `docs/archive/`). **Solo frontend** (`src/index.html`, `src/main.js`, `src/styles.css`); backend Rust y motor de transferencia **intactos**. Verificado E2E manejando el webview real por **CDP** (WebView2 remote-debugging): capturas + `Runtime.evaluate` + lectura de consola → **0 errores, 0 violaciones de CSP** en todos los estados. **8/9 criterios verificados**; el #1 solo en su parte de consola/CSP (el round-trip físico de transferencia necesita 2 PCs → pendiente, riesgo casi nulo). Review adversarial (5 lentes + verificación) → 0 bugs de correctitud / NO SE TOCA / escaping; 4 hallazgos cosméticos bajos, limpiados.
+
+### Added
+- **Estado de la cola dentro del cuadro (T4)** — `#dropzone-count` "N archivo(s) listo(s)"; `.file-queue` con `max-height:168px` + scroll interno (`flex:none`) → varios archivos ya no empujan TRANSMIT (mobile: `40vh`).
+- **Foco accesible (T3)** — `:focus-visible` (anillo cian) en botones, textarea y switches (con override id para `#text-composer` que traía `outline:none`); los switches vuelven al tab-order (visually-hidden en vez de `display:none`, manteniendo el `input:checked + .sound-track`); `focusFirstControl()` mete el foco al 1er control al abrir los 5 modales (settings, log, qr, peer-details, add-peer).
+- **`activateMode()` (T2)** — extraída del click de los `.mode-btn`, reutilizable programáticamente.
+
+### Changed
+- **Config colapsable (T5)** — las 7 secciones planas (`h3.settings-section`) → 4 grupos `<details class="settings-group">/<summary>` (GENERAL abierto; TRANSFERS & NOTIFICATIONS y SYSTEM `.desktop-only`; UPDATES). Nativo, **sin JS** (CSP-safe, confirma el supuesto MEDIO del spec). Los 17 ids que lee el JS, preservados; frontera Android intacta.
+- **`renderQueue` reescrito (T4)** — `createElement` + `textContent` (sin `innerHTML`); estado en el cuadro; el tamaño solo si `>0` (mata el "0 B"); botón quitar `<a>[X]` → `<button class="queue-remove" aria-label>` (el handler delegado `[data-remove]` sigue matcheando).
+- **Auto-selección al abrir (T3, D1)** — primer peer **VISIBLE según el filtro** (espeja el predicado de `renderPeers`: favoritos→`p.favorite`, si no→`p.status!=='offline'`), no `state.peers[0]` a secas → ya no "traba" a un peer que no está en la lista visible. Toca SOLO la línea de auto-selección, no `renderPeers`.
+- **Contraste de etiquetas (T6, D2, preview aprobado)** — `--text-dim` `#455d70 → #607c8f` (3.0:1 → 4.7:1, cumple WCAG AA). El dueño eligió la opción B tras ver el antes/después (artifact).
+- **Drag&drop activa modo FILE (T2)** — `tauri://drag-drop` llama `activateMode('file')` si cayó ≥1 archivo. Antes, soltar en modo TEXT dejaba `#mode-file` oculto y `transmit()` mandaba texto vacío ("empty payload").
+- **Textos de modales (T1)** — 5 párrafos con jerga (mDNS, fingerprint/port, "MANUAL + favourite") reescritos a criollo corto (add-peer por IP, forget peer, QR mostrar/escanear/pegar).
+- **Cartel CTRL+ENTER (limpieza review)** — `.composer-meta` a `justify-content:flex-end` para que el hint quede a la derecha tras sacar el contador.
+
+### Removed
+- **Ruido visual (T1)** — UPTIME (nodo HUD + ticker + const), 2 slogans del placeholder, `PROTO mDNS+HTTPS`, el contador `0000 CHARS` (nodo + `updateCharCount` + const + listener + 2 call-sites), la fila falsa **DATA DIR** (`settings-data-dir`, vía T5). El hex bajo "TRANSMIT TO" se oculta por CSS (sigue en cada peer → no se pierde desambiguación). La regla CSS mobile del PROTO se reapuntó a `nth-child(4)` para no destapar el toggle CLACK.
+- **Código muerto** — `escapeHtml()` (sin uso tras reescribir `renderQueue`) y las reglas CSS `.settings-section` huérfanas tras T5.
+
 ## 2026-07-15 — Fase 2: verificación física Bloque A (datos) OK + auditoría de UI + SPEC de pulido READY
 
 Sesión de **verificación + auditoría + spec**; **sin cambios de código** (`src/` y `src-tauri/` intactos). Todo lo de datos se probó con una **instancia aislada** (`MILLENNIUM_INSTANCE=verif`, `MILLENNIUM_PORT=53400`), **sin tocar los datos reales**.

@@ -42,10 +42,6 @@
           <span class="hud-label">NODE</span>
           <span class="hud-value mono" id="hud-ip">—</span>
         </div>
-        <div class="hud-stat">
-          <span class="hud-label">UPTIME</span>
-          <span class="hud-value mono" id="hud-uptime">00:00:00</span>
-        </div>
       </div>
       <div class="hud-right">
         <button class="hud-btn" data-action="refresh" title="Rescan network">
@@ -83,7 +79,7 @@
           <button class="filter-btn active" data-filter="favorites">★ FAVORITES</button>
           <button class="filter-btn" data-filter="all">ALL</button>
           <div class="filter-spacer"></div>
-          <button class="filter-btn add-peer-btn" id="add-peer-btn" title="Register a peer by IP (for networks where mDNS is blocked)">+ ADD</button>
+          <button class="filter-btn add-peer-btn" id="add-peer-btn" title="Agregar un equipo por su IP, si no aparece solo en la lista.">+ ADD</button>
         </div>
         <span class="filter-hint mono" id="filter-hint">scanning...</span>
 
@@ -124,7 +120,6 @@
             <div class="textarea-grid"></div>
           </div>
           <div class="composer-meta">
-            <span class="mono"><span id="char-count">0000</span> CHARS</span>
             <span class="mono">CTRL+ENTER → TRANSMIT</span>
           </div>
         </div>
@@ -136,6 +131,7 @@
               DROP FILES TO QUEUE
               <small>or click to browse</small>
             </div>
+            <div class="dropzone-count mono" id="dropzone-count" hidden></div>
             <div class="dropzone-corners">
               <span></span><span></span><span></span><span></span>
             </div>
@@ -185,10 +181,6 @@
       <div class="status-item">
         <span class="status-key">FAV</span>
         <span class="status-val mono" id="status-fav">00</span>
-      </div>
-      <div class="status-item">
-        <span class="status-key">PROTO</span>
-        <span class="status-val mono">mDNS+HTTPS</span>
       </div>
       <div class="status-item">
         <label class="sound-toggle">
@@ -312,7 +304,7 @@
             </label>
           </div>
         </div>
-        <p class="forget-hint mono">Forget clears all saved info. The peer will reappear in ALL if seen on the network again.</p>
+        <p class="forget-hint mono">Olvidar borra todo lo guardado de este equipo. Si sigue en la red, vuelve a aparecer en ALL.</p>
       </div>
       <div class="modal-actions">
         <button class="modal-btn reject" id="peer-details-remove">🗑 FORGET PEER</button>
@@ -332,7 +324,7 @@
         <span class="modal-title">REGISTER PEER BY IP</span>
       </header>
       <div class="modal-body">
-        <p class="settings-label" style="margin-bottom:12px">For office networks where mDNS is blocked. Enter the peer's local IP. The remote machine must be running Millennium Clipboard.</p>
+        <p class="settings-label" style="margin-bottom:12px">Escribí la IP local del otro equipo. Tiene que tener Millennium abierto.</p>
         <div class="settings-row">
           <span class="settings-label">IP ADDRESS</span>
           <input type="text" class="text-input" id="add-peer-ip" placeholder="192.168.1.42" autocomplete="off" />
@@ -362,34 +354,34 @@
       </header>
       <div class="modal-body settings-body">
 
-        <!-- ▸ GENERAL -->
-        <h3 class="settings-section">▸ GENERAL</h3>
-        <div class="settings-row">
-          <span class="settings-label">DOWNLOAD FOLDER</span>
-          <div class="settings-control">
-            <span class="settings-value mono" id="settings-download-dir">—</span>
-            <button class="modal-btn small" id="settings-pick-dir">▸ CHANGE</button>
-          </div>
-        </div>
-
-        <!-- ▸ INTERFACE — available on every platform; disabling the
+        <!-- GENERAL & INTERFACE — available on every platform; disabling the
              decorative FX is the cheap-GPU / battery-saver mode. -->
-        <h3 class="settings-section">▸ INTERFACE</h3>
-        <div class="settings-row">
-          <span class="settings-label">VISUAL FX (GRID / SCANLINE)</span>
-          <div class="settings-control">
-            <label class="sound-toggle">
-              <input type="checkbox" id="settings-fx" />
-              <span class="sound-track"><span class="sound-thumb"></span></span>
-              <span class="settings-value mono" id="settings-fx-label">ON</span>
-            </label>
+        <details class="settings-group" open>
+          <summary>▸ GENERAL</summary>
+          <div class="settings-row">
+            <span class="settings-label">DOWNLOAD FOLDER</span>
+            <div class="settings-control">
+              <span class="settings-value mono" id="settings-download-dir">—</span>
+              <button class="modal-btn small" id="settings-pick-dir">▸ CHANGE</button>
+            </div>
           </div>
-        </div>
+          <div class="settings-row">
+            <span class="settings-label">VISUAL FX (GRID / SCANLINE)</span>
+            <div class="settings-control">
+              <label class="sound-toggle">
+                <input type="checkbox" id="settings-fx" />
+                <span class="sound-track"><span class="sound-thumb"></span></span>
+                <span class="settings-value mono" id="settings-fx-label">ON</span>
+              </label>
+            </div>
+          </div>
+        </details>
 
-        <!-- ▸ TRANSFERS — desktop-only. On Android the OS shows an
-             accept prompt anyway and auto-accept makes less sense. -->
-        <div class="desktop-only">
-          <h3 class="settings-section">▸ TRANSFERS</h3>
+        <!-- TRANSFERS & NOTIFICATIONS — desktop-only. On Android the OS shows an
+             accept prompt anyway and uses native OS toasts, so both toggles
+             would do nothing on mobile. -->
+        <details class="settings-group desktop-only">
+          <summary>▸ TRANSFERS &amp; NOTIFICATIONS</summary>
           <div class="settings-row">
             <span class="settings-label">AUTO-ACCEPT FROM FAVORITES</span>
             <div class="settings-control">
@@ -400,12 +392,6 @@
               </label>
             </div>
           </div>
-        </div>
-
-        <!-- ▸ NOTIFICATIONS — desktop-only. Android uses native OS toasts;
-             the toggle here would do nothing on mobile. -->
-        <div class="desktop-only">
-          <h3 class="settings-section">▸ NOTIFICATIONS</h3>
           <div class="settings-row">
             <span class="settings-label">DESKTOP NOTIFICATIONS</span>
             <div class="settings-control">
@@ -416,11 +402,11 @@
               </label>
             </div>
           </div>
-        </div>
+        </details>
 
-        <!-- ▸ SYSTEM — every option below is desktop-only. -->
-        <div class="desktop-only">
-          <h3 class="settings-section">▸ SYSTEM</h3>
+        <!-- SYSTEM — every option below is desktop-only. -->
+        <details class="settings-group desktop-only">
+          <summary>▸ SYSTEM</summary>
           <div class="settings-row">
             <span class="settings-label">START WITH WINDOWS</span>
             <div class="settings-control">
@@ -441,35 +427,29 @@
               </label>
             </div>
           </div>
-        </div>
+        </details>
 
-        <!-- ▸ UPDATES — redesigned from scratch in v0.15.0.
-             Two stacked blocks instead of nested flexbox so nothing
-             overlaps on any screen width:
+        <!-- UPDATES — redesigned in v0.15.0: two stacked blocks instead of
+             nested flexbox so nothing overlaps on any screen width —
                row 1: current version + CHECK button
                row 2 (hidden until check finds something): status text
                       + APPLY button — both full-width on a column. -->
-        <h3 class="settings-section">▸ UPDATES</h3>
-        <div class="settings-row updates-row">
-          <div class="updates-block">
-            <div class="updates-line">
-              <span class="settings-label updates-label">CURRENT</span>
-              <span class="settings-value mono" id="settings-update-status">v0.0.0</span>
+        <details class="settings-group">
+          <summary>▸ UPDATES</summary>
+          <div class="settings-row updates-row">
+            <div class="updates-block">
+              <div class="updates-line">
+                <span class="settings-label updates-label">CURRENT</span>
+                <span class="settings-value mono" id="settings-update-status">v0.0.0</span>
+              </div>
+              <button class="modal-btn updates-btn" id="settings-check-update">▸ CHECK FOR UPDATE</button>
             </div>
-            <button class="modal-btn updates-btn" id="settings-check-update">▸ CHECK FOR UPDATE</button>
+            <div class="updates-block updates-action" id="settings-update-action" hidden>
+              <div class="updates-banner mono" id="settings-update-banner"></div>
+              <button class="modal-btn updates-btn accent" id="settings-apply-update">▸ DOWNLOAD &amp; INSTALL</button>
+            </div>
           </div>
-          <div class="updates-block updates-action" id="settings-update-action" hidden>
-            <div class="updates-banner mono" id="settings-update-banner"></div>
-            <button class="modal-btn updates-btn accent" id="settings-apply-update">▸ DOWNLOAD &amp; INSTALL</button>
-          </div>
-        </div>
-
-        <!-- ▸ DIAGNOSTICS -->
-        <h3 class="settings-section">▸ DIAGNOSTICS</h3>
-        <div class="settings-row settings-info">
-          <span class="settings-label">DATA DIR</span>
-          <span class="settings-value mono" id="settings-data-dir">%APPDATA%\com.guidocameraeq.millennium</span>
-        </div>
+        </details>
       </div>
       <div class="modal-actions">
         <button class="modal-btn accept" id="settings-close">✓ CLOSE</button>
@@ -522,7 +502,7 @@
       <div class="modal-body">
         <div id="qr-pane-show" class="qr-pane">
           <div class="qr-canvas" id="qr-canvas"></div>
-          <p class="qr-hint mono">Scan from another Millennium peer (Android or another desktop). The QR encodes your fingerprint, alias and the local IP/port where you're listening.</p>
+          <p class="qr-hint mono">Escaneá este código desde otro equipo con Millennium para vincularlo.</p>
           <div class="settings-row settings-info">
             <span class="settings-label">PAYLOAD</span>
             <span class="settings-value mono" id="qr-payload" style="font-size:9px;word-break:break-all"></span>
@@ -531,9 +511,9 @@
         <div id="qr-pane-add" class="qr-pane" hidden>
           <div id="qr-scan-block" hidden style="margin-bottom:14px">
             <button class="modal-btn accept" id="qr-scan-btn" style="width:100%;min-height:52px;font-size:13px;letter-spacing:2px">▸ SCAN WITH CAMERA</button>
-            <p class="qr-hint mono" style="margin-top:8px">Tap the button above and point the camera at the QR shown on your desktop's Millennium app.</p>
+            <p class="qr-hint mono" style="margin-top:8px">Tocá el botón y apuntá la cámara al código QR del otro equipo.</p>
           </div>
-          <p class="qr-hint mono">Or paste the QR's contents below. The peer will be added as MANUAL + favourite.</p>
+          <p class="qr-hint mono">O pegá acá el contenido del QR para agregar el equipo.</p>
           <textarea class="text-input qr-paste" id="qr-paste-input" placeholder='{"v":1,"type":"millennium-pair",...}'></textarea>
           <div class="modal-error mono" id="qr-add-error" hidden></div>
         </div>

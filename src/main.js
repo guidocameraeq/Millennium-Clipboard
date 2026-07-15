@@ -87,7 +87,6 @@
 
   // ---------- DOM refs -----------------------------------------------------
   const textarea = document.getElementById('text-composer');
-  const charCount = document.getElementById('char-count');
   const peerList = document.getElementById('peer-list');
   const targetName = document.getElementById('target-name');
   const targetHex = document.getElementById('target-hex');
@@ -98,7 +97,6 @@
   const statusFav = document.getElementById('status-fav');
   const hudHost = document.getElementById('hud-host');
   const hudIp = document.getElementById('hud-ip');
-  const hudUptime = document.getElementById('hud-uptime');
   const hudVersion = document.getElementById('hud-version');
   const sendBtn = document.getElementById('send-btn');
   const progressBlock = document.getElementById('progress-block');
@@ -115,6 +113,7 @@
   const incomingToastText = document.getElementById('incoming-toast-text');
   const dropzone = document.getElementById('dropzone');
   const fileQueue = document.getElementById('file-queue');
+  const dropzoneCount = document.getElementById('dropzone-count');
   const soundToggle = document.getElementById('sound-toggle');
 
   // Modals
@@ -341,23 +340,11 @@
     return state.peers.some((p) => p.id === fingerprint);
   }
 
-  // ---------- Uptime ticker -------------------------------------------------
-  const t0 = Date.now();
-  setInterval(() => {
-    const s = Math.floor((Date.now() - t0) / 1000);
-    const hh = String(Math.floor(s / 3600)).padStart(2, '0');
-    const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
-    const ss = String(s % 60).padStart(2, '0');
-    hudUptime.textContent = `${hh}:${mm}:${ss}`;
-  }, 1000);
-
   // ---------- Typewriter placeholder rotator -------------------------------
   const placeholderLines = [
     'TYPE OR PASTE > TRANSMIT TO PEER...',
     'TEXT, URL, SNIPPET — ANY PAYLOAD.',
     'PRESS CTRL+ENTER TO SEND.',
-    'NO CLOUD. NO ACCOUNT. JUST THE GRID.',
-    'mDNS DISCOVERY · TLS PINNED · LAN ONLY.',
   ];
   let phTimer = null;
   let phIdx = 0;
@@ -412,12 +399,6 @@
   }
   document.addEventListener('visibilitychange', syncFxPaused);
   syncFxPaused();
-
-  // ---------- Character counter --------------------------------------------
-  function updateCharCount() {
-    charCount.textContent = String(textarea.value.length).padStart(4, '0');
-  }
-  textarea.addEventListener('input', updateCharCount);
 
   // ---------- Audio (click-clack + blips) ----------------------------------
   let audioCtx = null;
@@ -800,16 +781,34 @@
   });
 
   // ---------- Mode switch (TEXT / FILE) ------------------------------------
+  // Activate a mode (TEXT / FILE) programmatically: sets state.mode, toggles the
+  // .mode-btn active class and shows/hides the matching .mode-panel. Reused by
+  // the click handler and by the drag-drop handler (T2: drops must reveal FILE).
+  function activateMode(mode) {
+    state.mode = mode;
+    document.querySelectorAll('.mode-btn').forEach((b) => {
+      b.classList.toggle('active', b.dataset.mode === mode);
+    });
+    document.querySelectorAll('.mode-panel').forEach((p) => {
+      const active = p.id === `mode-${mode}`;
+      p.classList.toggle('active', active);
+      p.hidden = !active;
+    });
+  }
+
+  // Move keyboard focus into a modal when it opens (T3), so Tab/Escape reach its
+  // controls and screen readers land inside it instead of on the trigger button.
+  function focusFirstControl(modal) {
+    if (!modal) return;
+    const el = modal.querySelector(
+      'button, [href], input:not([type="hidden"]), select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    if (el) el.focus();
+  }
+
   document.querySelectorAll('.mode-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
-      state.mode = btn.dataset.mode;
-      document.querySelectorAll('.mode-btn').forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
-      document.querySelectorAll('.mode-panel').forEach((p) => {
-        const active = p.id === `mode-${state.mode}`;
-        p.classList.toggle('active', active);
-        p.hidden = !active;
-      });
+      activateMode(btn.dataset.mode);
       blip(550, 0.04);
     });
   });
@@ -823,23 +822,50 @@
   }
 
   function renderQueue() {
-    fileQueue.innerHTML = '';
-    if (state.queuedFiles.length === 0) {
+    fileQueue.textContent = '';
+    const n = state.queuedFiles.length;
+    if (dropzoneCount) {
+      dropzoneCount.hidden = n === 0;
+      dropzoneCount.textContent =
+        n === 0 ? '' : `${n} archivo${n === 1 ? '' : 's'} listo${n === 1 ? '' : 's'}`;
+    }
+    if (n === 0) {
       fileQueue.hidden = true;
       return;
     }
     fileQueue.hidden = false;
+    // Built with createElement + textContent only — the file name never touches
+    // innerHTML, so no escaping helper is needed and no markup can be injected.
     state.queuedFiles.forEach((f, idx) => {
       const li = document.createElement('li');
-      li.innerHTML = `<span>▸ ${escapeHtml(f.name)}</span><span style="opacity:.7"> · ${formatBytes(f.size)} · <a href="#" data-remove="${idx}" style="color:var(--neon-magenta);text-decoration:none">[X]</a></span>`;
+
+      const name = document.createElement('span');
+      name.className = 'q-name';
+      name.textContent = `▸ ${f.name}`;
+      name.title = f.name;
+
+      const meta = document.createElement('span');
+      meta.className = 'q-meta';
+
+      if (f.size > 0) {
+        const size = document.createElement('span');
+        size.className = 'q-size';
+        size.textContent = formatBytes(f.size);
+        meta.appendChild(size);
+      }
+
+      const rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'queue-remove';
+      rm.dataset.remove = String(idx);
+      rm.setAttribute('aria-label', `Quitar ${f.name}`);
+      rm.textContent = '✕';
+      meta.appendChild(rm);
+
+      li.appendChild(name);
+      li.appendChild(meta);
       fileQueue.appendChild(li);
     });
-  }
-
-  function escapeHtml(s) {
-    const div = document.createElement('div');
-    div.textContent = s;
-    return div.innerHTML;
   }
 
   fileQueue.addEventListener('click', (e) => {
@@ -906,6 +932,7 @@
   listen('tauri://drag-drop', async (event) => {
     dropzone.style.background = '';
     const paths = event.payload?.paths || [];
+    if (paths.length > 0) activateMode('file');
     for (const path of paths) {
       await addPathToQueue(path);
     }
@@ -971,7 +998,6 @@
         setStatus(`OK · delivered to ${peer.name}.`, { force: true });
         showToast(`${peer.name} · ${chars} CHARS · ACK`);
         textarea.value = '';
-        updateCharCount();
       }, 600);
     } catch (err) {
       clearInterval(tick);
@@ -1235,6 +1261,7 @@
       ? '▸ DOWNLOAD & INSTALL'
       : '▸ DOWNLOAD & RESTART';
     settingsModal.hidden = false;
+    focusFirstControl(settingsModal);
   }
 
   function closeSettingsModal() {
@@ -1311,6 +1338,7 @@
       logLines = 1;
     }
     logModal.hidden = false;
+    focusFirstControl(logModal);
     repaintLog();
   }
 
@@ -1387,6 +1415,7 @@
   async function openQrModal() {
     if (!qrModal) return;
     qrModal.hidden = false;
+    focusFirstControl(qrModal);
     setQrTab('show');
     try {
       const data = await invoke('generate_pair_qr');
@@ -1622,6 +1651,7 @@
     peerDetailsRemove.textContent = '🗑 FORGET PEER';
 
     peerDetailsModal.hidden = false;
+    focusFirstControl(peerDetailsModal);
   }
 
   function closePeerDetailsModal() {
@@ -1777,7 +1807,7 @@
       settingsUpdateStatus.textContent = `ERR · ${err}`;
     } finally {
       settingsCheckUpdate.disabled = false;
-      settingsCheckUpdate.textContent = '▸ CHECK';
+      settingsCheckUpdate.textContent = '▸ CHECK FOR UPDATE';
     }
   });
 
@@ -1904,6 +1934,7 @@
     addPeerSubmit.disabled = false;
     addPeerSubmit.textContent = '▸ REGISTER';
     addPeerModal.hidden = false;
+    focusFirstControl(addPeerModal);
     setTimeout(() => addPeerIp.focus(), 0);
   }
 
@@ -2180,7 +2211,6 @@
       if (upErr) showBackendBanner('error', upErr);
     } catch (_) {}
 
-    updateCharCount();
     setTimeout(() => {
       if (statusMsg.textContent.startsWith('GRID ONLINE')
           || statusMsg.textContent.startsWith('GRID · waiting')) {
@@ -2218,8 +2248,16 @@
     // Auto-select the first peer ONLY on the initial load — never on later
     // snapshots, and never right after losing the target.
     if (initial && !state.selectedPeerId && !state.targetLost && state.peers.length > 0) {
-      state.selectedPeerId = state.peers[0].id;
-      selectPeer(state.selectedPeerId);
+      // Auto-select the first peer VISIBLE under the active filter (the UI starts
+      // on FAVORITES), not blindly peers[0] — otherwise it can lock onto a peer
+      // that isn't shown. Mirrors renderPeers' filter predicate exactly.
+      const firstVisible = state.peers.find((p) =>
+        state.filter === 'favorites' ? p.favorite : p.status !== 'offline'
+      );
+      if (firstVisible) {
+        state.selectedPeerId = firstVisible.id;
+        selectPeer(state.selectedPeerId);
+      }
     }
 
     if (state.peers.length === 0) {
