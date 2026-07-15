@@ -1,39 +1,37 @@
-# Millennium Clipboard
+# ◣◢ Millennium Clipboard
 
-Share text and files between devices on the same local network. Cross-platform: Windows desktop and Android mobile.
+**Share text, files and your clipboard between Windows and Android on the same Wi-Fi.**
+No cloud. No accounts. Nothing ever leaves your local network.
 
-> **Status:** 🚧 Early prototype. Architecture decisions taken, code not started.
+[**⬇ Download for Windows**](https://github.com/guidocameraeq/Millennium-Clipboard/releases/latest) · [**🌐 Landing**](https://guidocameraeq.github.io/Millennium-Clipboard) · Windows 10/11 &amp; Android
 
-## What & Why
+![Millennium Clipboard](assets/screenshot.png)
 
-Moving snippets and files between your own devices — PC↔PC or PC↔phone on the same Wi-Fi — should be trivial. It isn't. The usual workarounds (emailing yourself, WhatsApp-to-self, USB cables, cloud storage) are clunky.
+## What it is
 
-**Millennium Clipboard** is a small, local-only utility that discovers your other devices on the LAN and lets you send text or files to a specific one. Mark trusted devices as favorites; the rest stay out of your face.
+Moving a snippet or a few files between your own devices — PC↔PC or PC↔phone on the same network — should be trivial. Millennium Clipboard discovers your other devices on the LAN and lets you send text or files to a specific one, peer-to-peer. Mark trusted devices as favorites; keep the clipboard in sync if you want.
 
-## Aesthetic
+Everything runs on your local network. There is no server in the middle and no account to create.
 
-Windows 98 base UI (beveled borders, gray panels, classic controls) combined with **typewriter typography and click-clack animations**. Vintage, deliberate, a little playful.
+## Features
+
+- **LAN-only, zero cloud** — devices talk directly over your Wi-Fi; your data never touches a third-party server.
+- **Text, files &amp; clipboard** — send a note, a batch of files, or keep the clipboard synced between machines.
+- **Auto-discovery** — peers find each other over mDNS; add one by IP or scan a QR on locked-down networks.
+- **Encrypted &amp; pinned** — every transfer runs over HTTPS with a self-signed certificate per device, pinned by fingerprint.
+- **Windows &amp; Android** — send both ways, straight into your Downloads.
+- **Auto-updates** — new versions verify their own SHA-256 before installing.
+
+## Download
+
+Grab the latest `millennium-clipboard.exe` from [**Releases**](https://github.com/guidocameraeq/Millennium-Clipboard/releases/latest) — no installer, just run it. Both devices need to be on the same Wi-Fi network.
 
 ## Stack
 
-- **Framework:** [Tauri 2.0](https://v2.tauri.app/) — Rust backend, web frontend, ~10 MB binaries.
-- **UI:** [98.css](https://jdan.github.io/98.css/) for vintage controls, monospace fonts for typewriter feel.
-- **Discovery:** mDNS (`_millennium._tcp.local`).
-- **Transport:** HTTPS REST with self-signed certs and fingerprint pinning.
+- **[Tauri 2](https://v2.tauri.app/)** — Rust backend, vanilla JS/CSS frontend (no framework, no bundler), ~10 MB binary.
+- **Discovery:** mDNS (`_millennium._tcp.local`) + UDP broadcast.
+- **Transport:** HTTPS (axum + rustls) with self-signed per-device certificates and fingerprint pinning.
 - **Targets:** Windows `.exe` and Android `.apk`.
-
-## Roadmap
-
-- [ ] Project skeleton (Tauri init, monorepo layout)
-- [ ] mDNS discovery — desktop
-- [ ] HTTPS transfer endpoints
-- [ ] Send text MVP
-- [ ] Send files MVP
-- [ ] UI: device list with Win98 + typewriter styling
-- [ ] Favorites / trusted devices
-- [ ] Android port
-- [ ] History view
-- [ ] Clipboard sync (stretch)
 
 ## License
 
