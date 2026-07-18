@@ -78,6 +78,24 @@ arboard = "3"
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.55"
 
+# CCD (Connecting and Configuring Displays) API para el módulo de displays
+# (SPEC-displays, migrado de Monarch). raw-dylib ⇒ no necesita import libs del
+# Windows SDK; el link lo prueba el CI (Fase 0). Features = las que usa el motor
+# de Monarch (enumerate/apply/topology). SOLO bajo cfg(windows): Android NO debe
+# ver este crate. Pin 0.60 (convive con el 0.61.x transitivo de tauri/wry).
+windows = { version = "0.60", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Devices_Display",
+  "Win32_Graphics_Gdi",
+  "Win32_System_Com",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Threading",
+  "Win32_UI_ColorSystem",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
 # Mobile-only plugins (Android / iOS)
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 tauri-plugin-barcode-scanner = "2"

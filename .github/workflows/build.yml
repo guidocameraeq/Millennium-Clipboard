@@ -1,0 +1,60 @@
+name: Build Windows (portable .exe)
+
+# Portado de Monarch (build-personal.yml), adaptado a Millennium:
+#  - npm (no yarn): frontend vanilla, sin bundler ⇒ SIN paso "build frontend".
+#  - bundle.active=false en tauri.conf ⇒ `tauri build` no genera instalador;
+#    el artefacto es el .exe portable directo.
+#  - crt-static ya viene de .cargo/config.toml (VC++ Redist no requerido).
+# Fase 0 del SPEC-displays: prueba que `windows 0.60` (raw-dylib) ENLAZA en el
+# runner MSVC. El link smoke en lib.rs referencia una función CCD real, así que
+# un build verde = el import raw-dylib se resolvió.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, feat/displays]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build portable millennium-clipboard.exe
+    runs-on: windows-latest
+    # 90 (no 60): la 1ra corrida en frio compila LTO+codegen-units=1 sobre un
+    # arbol pesado + DOS versiones del crate windows (0.60 pineado + 0.61.x
+    # transitivo de tauri/wry). Cacheado baja a ~20-30 min.
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust (MSVC target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install JS dependencies (Tauri CLI)
+        run: npm ci
+
+      - name: Build portable .exe
+        run: npm run tauri build
+
+      - name: Upload portable .exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: millennium-clipboard-${{ github.sha }}
+          if-no-files-found: error
+          path: src-tauri/target/release/millennium-clipboard.exe

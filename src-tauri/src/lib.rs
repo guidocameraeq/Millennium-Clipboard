@@ -30,6 +30,31 @@ mod android_fs_bridge;
 #[cfg(target_os = "windows")]
 mod windows_integration;
 
+// Fase 0 (SPEC-displays): smoke de linkeo de `windows = 0.60`. Referencia una
+// función CCD raw-dylib REAL (mismo patrón que Monarch enumerate.rs:473) para
+// que el build del CI PRUEBE en el runner MSVC que el crate `windows` enlaza —
+// un dep sin usar no emite el import raw-dylib y no probaría nada. Se llama una
+// vez al arranque (path alcanzable ⇒ el linker no lo descarta). La Fase 1 lo
+// reemplaza por el backend real migrado de Monarch.
+#[cfg(target_os = "windows")]
+mod ccd_link_smoke {
+    use windows::Win32::Devices::Display::{GetDisplayConfigBufferSizes, QDC_ALL_PATHS};
+
+    pub(crate) fn probe_and_log() {
+        let mut path_count = 0u32;
+        let mut mode_count = 0u32;
+        // SAFETY: consulta CCD read-only; solo cuenta buffers, sin punteros de
+        // salida. Sin unwrap/expect a propósito (panic=abort ⇒ un panic tumba
+        // todo el proceso); el status se loguea, nunca se desenrolla.
+        let status =
+            unsafe { GetDisplayConfigBufferSizes(QDC_ALL_PATHS, &mut path_count, &mut mode_count) };
+        crate::runtime_log::info(format!(
+            "[displays] Fase 0 link smoke: GetDisplayConfigBufferSizes status={} paths={} modes={}",
+            status.0, path_count, mode_count
+        ));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Wire types shared with the frontend
 // ---------------------------------------------------------------------------
@@ -1164,6 +1189,11 @@ pub fn run() {
     // respond.
     #[cfg(target_os = "windows")]
     windows_integration::kill_other_millennium_processes();
+
+    // Fase 0 (SPEC-displays): fuerza el linkeo de `windows 0.60` (ver mod
+    // ccd_link_smoke). Aditivo y no-fatal; la Fase 1 lo reemplaza.
+    #[cfg(target_os = "windows")]
+    ccd_link_smoke::probe_and_log();
 
     let mut builder = tauri::Builder::default();
 
