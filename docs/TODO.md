@@ -2,7 +2,12 @@
 
 > ÚNICA fuente de pendientes del proyecto. Completado → SE BORRA (la historia vive en CHANGELOG y git). Header de 1 línea, sin narrativa de sesión.
 
-2026-07-15 — ver SESSION_HANDOFF.md
+2026-07-18 — ver SESSION_HANDOFF.md
+
+## 🔵 Displays (SPEC-displays — misión activa; roadmap de fases en `docs/SPEC-displays.md`)
+- [ ] **Fase 0 — smoke en la máquina de 3 displays** (cierra la Fase 0 del todo): bajar el `.exe` del [run verde](https://github.com/guidocameraeq/Millennium-Clipboard/actions/runs/29650684956), correrlo, ver `[displays] Fase 0 link smoke: … status=0 paths=N modes=M` en el log + confirmar que clipboard/discovery/transferencias siguen igual. **Es lo único físico pendiente de Fase 0** (el CI ya la dio por verde).
+- [ ] **Fase 1 — Ver los monitores (siguiente build)**: vendorizar el crate puro `monarch` por subtree + `displays_get_snapshot` read-only + HUD/modal/lista. Detalle en HANDOFF y en el SPEC. Chat nuevo.
+- [ ] **Sumar el build de Android al CI** (follow-up, no bloquea Fase 1): `cargo check` corre en el host y NO caza una fuga de `cfg` que rompa Android — solo `tauri android build` la revela. Guard automático antes de sumar más código Win32.
 
 ## 🔴 Crítico
 - [ ] **Fase 2 — verificación física Bloque B (UI): faltan 4** (necesitan 2 PCs). Bloque A (datos) ✅ verificado 2026-07-15 (ver CHANGELOG). Faltan: **TARGET LOST**, **error que no se pisa a los 5 s**, **barras TX/RX independientes**, **rename que sobrevive un `peers-changed`**. Notas: en una misma PC NO corren 2 instancias (single-instance por identifier) → 2 PCs, o cerrar la real + 1 instancia aislada (`MILLENNIUM_INSTANCE`+`MILLENNIUM_PORT`). Para TARGET LOST hace falta un peer **NO favorito** (`DRACOSSSLAPTOP` es favorito; `PEER_TTL=15 s`).

@@ -2,42 +2,43 @@
 
 > Save game del proyecto. `/cierre` lo SOBREESCRIBE ENTERO en cada sesión — acá nunca se apila historia (eso vive en CHANGELOG). El hook SessionStart lo inyecta en cada chat nuevo.
 
-**Cierre**: 2026-07-15 · **Base**: `da7e9d8` · **Esta sesión SÍ tocó código** (frontend). **Working tree antes del commit**: `src/index.html`, `src/main.js`, `src/styles.css` (pulido de UI) + docs de cierre + SPEC archivado. Sin push (nadie lo pidió).
+**Cierre**: 2026-07-18 · **Último commit**: `5585175` · **Branch**: `feat/displays` (**pusheado**, origin coincide) · **Working tree**: limpio. **Esta sesión SÍ tocó código** (backend, aditivo y gateado a Windows).
 
-## Qué se hizo — SPEC de pulido de UI IMPLEMENTADO (T1–T6)
+## Qué se hizo — SPEC-displays: **Fase 0 IMPLEMENTADA y VERIFICADA (CI verde)**
 
-Se ejecutó entero `docs/SPEC-ui-polish.md` (ahora en `docs/archive/`). **Solo frontend**; backend Rust y **motor de transferencia INTACTOS** (el diff son solo los 3 archivos de `src/`). Cada tarea se vio andando en la app real con **consola limpia (0 errores, 0 CSP)**.
+Arrancó el SPEC de migrar el motor de monitores de **Monarch → Millennium** (`docs/SPEC-displays.md`, commit `a7224b3`). Se ejecutó **solo la Fase 0** (el prerequisito bloqueante: montar el CI y probar que `windows 0.60` linkea). Nada de código de displays real todavía — eso es Fase 1.
 
-- **T1 — Recortes**: fuera UPTIME (HUD + `setInterval` ticker + su const), 2 slogans del placeholder, `PROTO mDNS+HTTPS`, el contador `0000 CHARS` (nodo + `updateCharCount` + const + listener + 2 call-sites), la fila falsa DATA DIR (vía T5); hex del target oculto por CSS (sigue visible en cada peer); 5 textos de modales reescritos a criollo sin jerga.
-- **T2 — Drag&drop**: se extrajo `activateMode()`; el handler `tauri://drag-drop` ahora activa modo FILE si cae ≥1 archivo (bug: antes soltar en modo TEXT no mostraba nada y transmitía vacío). "0 B" oculto.
-- **T3 — UX**: switches accesibles (visually-hidden → vuelven al tab-order) + `:focus-visible` en botones/textarea/switches (con override id para `#text-composer`); `focusFirstControl()` mete el foco al 1er control de los 5 modales; label del botón update consistente; **auto-selección = primer peer VISIBLE según el filtro** (espeja el predicado de `renderPeers`, sin tocarlo).
-- **T4 — Cola**: estado dentro del cuadro ("N archivo(s) listo(s)"), lista con `max-height:168px` + scroll interno (no empuja TRANSMIT), `renderQueue` reescrito con `createElement`/`textContent` (sin `innerHTML`; se borró `escapeHtml` huérfano), botón quitar = `<button aria-label>`.
-- **T5 — Config**: 7 secciones planas → 4 `<details>/<summary>` (GENERAL abierto; TRANSFERS&NOTIFICATIONS y SYSTEM `.desktop-only`; UPDATES). Nativo, **sin JS** (CSP-safe). Los 17 ids preservados; DATA DIR eliminado.
-- **T6 — Contraste (GATE)**: se mostró preview antes/después (artifact) → el dueño eligió **opción B**: `--text-dim #455d70 → #607c8f` (4.7:1, cumple WCAG AA).
-
-**Review adversarial** (workflow, 5 lentes + verificación) → **0 bugs de correctitud, 0 violaciones de NO SE TOCA, 0 agujeros de escaping**. 4 hallazgos BAJOS (cosméticos), ya limpiados: reglas `.settings-section` muertas, override mobile inerte de `.settings-group > summary`, y `.composer-meta` (cartel CTRL+ENTER devuelto a la derecha con `flex-end`).
+- **CI nuevo** (`.github/workflows/build.yml`, commit `5585175`): portado del `build-personal.yml` de Monarch, adaptado a Millennium → **npm** (no yarn), **sin instalador** (`bundle.active=false`), target `x86_64-pc-windows-msvc`, artefacto `millennium-clipboard.exe`. El crt-static ya venía del `.cargo/config.toml` (commit `5ffdfca`). Trigger: push a `feat/displays` + `workflow_dispatch`. `timeout: 90` (la 1ra corrida en frío compila dos versiones del crate `windows`).
+- **`windows = 0.60`** con 10 features CCD (enumerate/apply/topology) agregado **SOLO bajo `[target.'cfg(target_os = "windows")'.dependencies]`** → **Android NO lo ve** (el riesgo #1 del SPEC). Pin 0.60 (convive con el 0.61.x transitivo de tauri/wry — dos árboles paralelos).
+- **Smoke de linkeo** (`lib.rs`, `mod ccd_link_smoke`): llama `GetDisplayConfigBufferSizes` (función CCD raw-dylib REAL) desde `run()`, loguea por `runtime_log::info`, **sin `unwrap`/`expect`** (respeta `panic=abort`). Aditivo y no-fatal. Un dep sin usar no emite el import raw-dylib → por eso se referencia de verdad. **La Fase 1 lo reemplaza** por el backend migrado de Monarch.
+- **Review adversarial** (workflow, 4 lentes: ci-yaml / rust-compile / android-cfg-leak / link-proof) ANTES del push → **4× would-pass, 0 blockers**. Único nit (bajo): `timeout 60→90` para la corrida en frío. Aplicado.
 
 ## Estado
-- **Branch** `main`. **Frontend** parcheado y commiteado. `node --check` main.js/pre.js OK. **Backend Rust INTACTO**.
-- **App**: durante la sesión corrió `npm run tauri dev` (frontend live desde `src/`). **Al cerrar, la app dev sigue corriendo** — para volver a tu app normal, cerrala; para tener el pulido en tu `.exe` de uso diario, rebuild con `npm run tauri build` (embebe el frontend nuevo).
-- **Datos reales intactos** (no se tocaron favoritos/alias/settings).
+- **Branch `feat/displays`**, pusheado (`origin/feat/displays` = `5585175`). **Working tree limpio** — todo commiteado y en GitHub.
+- **Núcleo de Millennium INTACTO**: clipboard, discovery mDNS, servidor HTTPS, transferencias, pinning. El diff es **aditivo + gateado** (una llamada one-shot al arranque, sin poll, sin timer → CPU en reposo no se toca).
+- **Compilación real**: el gate es el **CI MSVC verde** (compila + LINKEA de verdad; más fuerte que un `cargo check` local). **El build local sigue sin andar** (falta MSVC/`dlltool` en la máquina de Guido — pre-existente, es la premisa del SPEC: el binario sale del CI, no local). Correr `cargo check` local acá fallaría por el toolchain, no por el código.
 
-## Criterios de aceptación (9)
-**8/9 verificados E2E por CDP** (evidencia en CHANGELOG). El **#1** tiene su parte de consola/CSP verificada (limpia); falta solo el **round-trip FÍSICO de transferencia** (enviar/recibir entre 2 peers) — no se pudo acá: single-instance bloquea un 2º peer en la misma PC y los peers reales están offline. **Riesgo casi nulo**: el motor de transferencia y el backend están intactos; la única línea rozada en el camino de envío fue sacar una llamada cosmética.
+## Evidencia de la Fase 0 (run **VERDE**)
+- Run: https://github.com/guidocameraeq/Millennium-Clipboard/actions/runs/29650684956 · **11,4 min** · todos los pasos `success`.
+- Pasos clave: `Build portable .exe` ✅ (⇒ `windows 0.60` compiló y **linkeó** raw-dylib en MSVC) · `Upload portable .exe` ✅ (`if-no-files-found: error` ⇒ el `.exe` existe de verdad).
+- Artefacto: `millennium-clipboard-5585175…` · **4,2 MB** · vivo.
+- **Criterios de aceptación Fase 0**: workflow verde ✅ · `.exe` portable producido ✅ · `windows 0.60` en el grafo de deps + linkeado ✅ → **el riesgo [ALTO] del SPEC (que `windows 0.60` no linkee) queda RETIRADO.**
 
 ## Próximo paso CONCRETO
-1. **(Opcional, con la 2ª PC prendida)** Probar el round-trip: enviar/recibir **texto y un archivo** entre las 2 PCs con el frontend nuevo → que llegue completo y F12 sin errores. Es lo único físico pendiente del pulido.
-2. **Para el uso diario**: `npm run tauri build` y reemplazar el `.exe` (así el pulido queda embebido; hoy solo se ve en `tauri dev`).
-3. **(Aparte, no bloquea)** las 4 pruebas de Fase 2 Bloque B (2 PCs) siguen pendientes.
+1. **(Usuario, cierra la Fase 0 del todo)** Bajar el `.exe` del run verde y correrlo en el **desktop de 3 displays** → en el log tiene que aparecer `[displays] Fase 0 link smoke: GetDisplayConfigBufferSizes status=0 paths=N modes=M` (adelanto de confianza: la API de monitores responde en tu máquina). De paso, confirmar que **clipboard/discovery/transferencias siguen igual** (criterio de regresión — solo se prueba corriéndolo).
+2. **Chat nuevo → Fase 1 del SPEC-displays** ("Ver los monitores", read-only, CERO `SetDisplayConfig`): vendorizar el crate puro `monarch` por **git subtree** en `src-tauri/vendor/monarch/`; copiar `enumerate/topology/win32_types/mod` + el enum `SystemDisplayBackend` tras `#[cfg(windows)]`; **un** comando `displays_get_snapshot` async con `spawn_blocking` (el `std::Mutex` DENTRO del closure, nunca a través del `.await`); front: botón HUD `.desktop-only` + modal + lista. `MockBackend` (`MONARCH_FORCE_MOCK_BACKEND`) como fallback dev cross-platform. Criterio: en el desktop de 3 displays aparecen los 3 reales con nombre/resolución/Hz + badges; `cargo test` del vendor = 22 verdes sin MSVC.
+3. **(Follow-up, NO bloquea Fase 1)** Sumar el **build de Android al CI** — `cargo check` corre en el host y **no** detecta una fuga de `cfg` que rompa Android; solo `tauri android build` la revela. Hoy la Fase 0 está gateada correcta (review lo confirmó), pero conviene el guard automático antes de sumar más código Win32.
 
 ## Bloqueos
-- Ninguno.
+- Ninguno para la Fase 1. El riesgo bloqueante del proyecto (link de `windows 0.60`) ya está despejado.
 
 ## Archivos tocados
-- **Código**: `src/index.html`, `src/main.js`, `src/styles.css`.
-- **Docs**: este HANDOFF, CHANGELOG, TODO; **`docs/SPEC-ui-polish.md` → `docs/archive/`** (implementado).
+- **Código**: `.github/workflows/build.yml` (nuevo), `src-tauri/Cargo.toml` (+`windows 0.60`), `src-tauri/src/lib.rs` (+`ccd_link_smoke`).
+- **Docs**: `docs/SPEC-displays.md` (nuevo, ya commiteado `a7224b3`; status actualizado a Fase 0 done), este HANDOFF, CHANGELOG, TODO.
 
 ## Contexto importante (para la próxima sesión)
-- **Cómo verifiqué el frontend sin 2 PCs (reusable)**: `npm run tauri dev` con `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<puerto LIBRE>` → CDP al webview real (`http://127.0.0.1:<devport>`): capturas, `Runtime.evaluate` (emular `tauri://drag-drop`, abrir modales, togglear, leer estilos), consola/CSP (`Log`/`Runtime`), `Input.dispatchKeyEvent` para Tab (anillo de foco). Ojo: **el 9222 puede estar tomado por otra sesión** → puerto propio + filtrar el target por `tauri.localhost`, nunca un `file://`. Helper `cdp.js` (scratchpad). Ver memoria `millennium-cdp-webview-testing`.
-- **T6**: artifact de comparación de contraste publicado; el dueño eligió B (#607c8f).
-- **Single-instance** confirmado otra vez: la 2ª instancia en la misma PC reenvía y sale aun con `MILLENNIUM_INSTANCE`; el bypass necesitaría tocar el Rust (fuera de alcance). Ver `millennium-testing-2-instancias`.
+- **El smoke NO es código de displays** — es un canario de link (prueba que el crate `windows` enlaza en el runner). La Fase 1 lo borra y pone el backend real. No lo trates como una feature.
+- **CI**: corre en push a `feat/displays` o `workflow_dispatch` manual. La 1ra corrida en frío tardó 11,4 min (holgado vs el timeout de 90).
+- **Convivencia de versiones `windows`**: la 0.60 (mía, pineada) y la 0.61.x (transitiva de tauri/wry) conviven sin choque — confirmado por el review y por el CI verde. **Mantener el pin 0.60** (la persistencia del snapshot en Fase 2/3 hace `memcpy` de structs `DISPLAYCONFIG_*`; un mismatch de layout invalidaría el snapshot).
+- **Regla que mandó acá**: Monarch es **MIT** — al vendorizar en Fase 1 hay que **preservar el aviso de copyright** en el vendor y documentarlo en `docs/DECISIONS.md` (que todavía no existe en Millennium; lo crea la Fase 1).
+- **Doctrina CCD intocable (para Fase 2)**: dry-run `SDC_VALIDATE` obligatorio, pre-estado como precondición dura, verificar **re-enumerando** (nunca por el status de retorno), y el **watchdog de auto-rollback** (manager pasivo + glue que dispara) — PROHIBIDO simplificarlo (es el bug de la TV irrecuperable que Monarch nació para matar).

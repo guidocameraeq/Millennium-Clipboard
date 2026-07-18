@@ -2,6 +2,16 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
+## 2026-07-18 — SPEC-displays Fase 0 (CI + link smoke de `windows 0.60`) IMPLEMENTADA + VERIFICADA (CI verde)
+
+Arrancó `docs/SPEC-displays.md` (migrar el motor de monitores de Monarch a Millennium, 4 fases). Se ejecutó **solo la Fase 0** — el prerequisito bloqueante: montar CI y probar que `windows 0.60` **linkea** en el runner MSVC. Diff **aditivo + gateado a `cfg(windows)`**; núcleo de Millennium (clipboard/discovery/HTTPS/transferencias/pinning) **intacto**. **Verificado con el CI VERDE** (run [29650684956](https://github.com/guidocameraeq/Millennium-Clipboard/actions/runs/29650684956), 11,4 min, todos los pasos `success`, artefacto `.exe` 4,2 MB) → **el riesgo [ALTO] del SPEC (que `windows 0.60` no linkee sin MSVC local) queda retirado**. Review adversarial previo al push (4 lentes: ci-yaml / rust-compile / android-cfg-leak / link-proof) → 4× would-pass, 0 blockers; único nit aplicado: `timeout 60→90`.
+
+### Added
+- **CI de Windows** (`.github/workflows/build.yml`) — portado del `build-personal.yml` de Monarch, adaptado a Millennium: **npm** (no yarn/vite), **sin instalador** (`bundle.active=false`), `frontendDist ../src`, target `x86_64-pc-windows-msvc` (crt-static ya en `.cargo/config.toml`), artefacto `millennium-clipboard.exe`. Trigger: push a `feat/displays` + `workflow_dispatch`; cache de Rust (Swatinem); `timeout: 90` (la 1ra corrida en frío compila las dos versiones del crate `windows`).
+- **`windows = 0.60`** (`src-tauri/Cargo.toml`) con 10 features CCD (enumerate/apply/topology) **SOLO bajo `[target.'cfg(target_os = "windows")'.dependencies]`** → Android no lo ve. Pin 0.60 (convive con el 0.61.x transitivo de tauri/wry, dos árboles paralelos).
+- **Smoke de linkeo** (`src-tauri/src/lib.rs`, `mod ccd_link_smoke`) — llama `GetDisplayConfigBufferSizes` (función CCD raw-dylib REAL, mismo patrón que Monarch) desde `run()` y loguea el status por `runtime_log::info`. **Sin `unwrap`/`expect`** (respeta `panic=abort`), aditivo y no-fatal. Un dep sin usar no emite el import raw-dylib → se referencia de verdad para que el CI pruebe el link. **La Fase 1 lo reemplaza** por el backend migrado.
+- **`docs/SPEC-displays.md`** (commit `a7224b3`) — el plan de la migración (SPEC delta): AGREGA/MODIFICA/NO SE TOCA, 4 fases (0 CI · 1 ver monitores · 2 apply con red de seguridad · 3 perfiles/watcher/lienzo), criterios de aceptación por fase, riesgos (watchdog de auto-rollback, fuga de `cfg`, `panic=abort`, licencia MIT).
+
 ## 2026-07-15 — Pulido de UI (SPEC-ui-polish) IMPLEMENTADO (T1–T6)
 
 Se ejecutó entero `docs/SPEC-ui-polish.md` (ahora en `docs/archive/`). **Solo frontend** (`src/index.html`, `src/main.js`, `src/styles.css`); backend Rust y motor de transferencia **intactos**. Verificado E2E manejando el webview real por **CDP** (WebView2 remote-debugging): capturas + `Runtime.evaluate` + lectura de consola → **0 errores, 0 violaciones de CSP** en todos los estados. **8/9 criterios verificados**; el #1 solo en su parte de consola/CSP (el round-trip físico de transferencia necesita 2 PCs → pendiente, riesgo casi nulo). Review adversarial (5 lentes + verificación) → 0 bugs de correctitud / NO SE TOCA / escaping; 4 hallazgos cosméticos bajos, limpiados.
