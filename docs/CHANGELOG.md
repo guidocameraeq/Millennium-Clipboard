@@ -2,6 +2,69 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
+## 2026-07-20 (c) — SPEC-displays Fase 2: attach/detach de la TV **con red de auto-rollback**
+
+Entra el motor que efectivamente cambia los monitores, con las dos piezas de seguridad puestas.
+**Sin verificar en hardware todavía**: lo de acá abajo está probado por compilación y por tests, no
+por una TV prendiéndose. Ver `SESSION_HANDOFF.md` para qué falta.
+
+### Added
+- **`src-tauri/src/displays/apply.rs`** (portado de Monarch @ `7f9f63b`) — el motor que llama
+  `SetDisplayConfig`. Las **5 llamadas con sus combinaciones exactas de flags**, incluida la sonda
+  `SDC_VALIDATE` obligatoria, más el guardado/restauración de rampas de gamma, calibración de color
+  y fondos de pantalla alrededor del cambio. Un verificador comparó función por función contra el
+  donante: **cero drift** de flags, condicionales, orden de operaciones ni constantes.
+- **`src-tauri/src/displays/topology.rs`** (portado) — el backend con cache en `Mutex`, los merges,
+  el remapeo de `DisplayId` (los LUID de las placas cambian al suspender) y la **escalera de rescate
+  completa**: attach explícito con batch creciendo de a uno → `SDC_TOPOLOGY_EXTEND` →
+  `DisplaySwitch /extend` → rollback + error preciso. **Sin la persistencia binaria del snapshot**
+  (ADR-008).
+- **`src-tauri/src/displays/watchdog.rs`** (nuevo, no es copia) — el **gatillo** del auto-rollback,
+  que es la pieza que el crate puro NO tiene. Cierra una carrera del donante (dormía exacto el plazo
+  y preguntaba después; si despertaba un pelo antes, el hilo moría y nadie volvía a preguntar) con
+  margen + reintentos acotados. **8 tests.** Ver ADR-009.
+- **`src-tauri/src/displays/system_events.rs`** (nuevo) — ventana oculta que escucha
+  `WM_POWERBROADCAST` y tira el cache al despertar la máquina. `WM_DISPLAYCHANGE` queda
+  deliberadamente para la Fase 3 (invalidar ahí borraría el recuerdo del monitor detachado).
+  Costo en reposo: **cero** — `GetMessageW` bloquea, no hay poll.
+- **`src-tauri/src/displays/store.rs`** (nuevo) — `MillenniumConfigStore` sobre el `JsonStore`
+  atómico, apuntando a `%APPDATA%\com.guidocameraeq.millennium\displays.json`. Ver ADR-010.
+- **`src-tauri/src/displays/{backend,ids}.rs`** (nuevos) — selector real/mock, y la identidad de
+  monitor ida y vuelta (con 4 tests: si el parseo "adivinara", el cambio le caería al monitor
+  equivocado).
+- **Comandos `displays_toggle` / `displays_confirm` / `displays_revert`** y eventos
+  `displays-changed` / `displays-confirmation`.
+- **Frontend**: botón ATTACH/DETACH por fila (deshabilitado en el último monitor prendido) y barra
+  de confirmación con cuenta regresiva + CONFIRMAR / REVERTIR AHORA. La cuenta se **rehidrata** si
+  cerrás y reabrís el modal, porque el reloj lo lleva el backend.
+- **`src-tauri/displays-tests/`** + **`.github/workflows/displays-tests.yml`** — resuelve un hallazgo
+  incómodo: **los tests de este repo no corrían en ningún lado**, ni local ni en CI (`build.yml`
+  nunca invocó `cargo test`). Ahora 13 tests de la red de seguridad corren en cada push, con un paso
+  que falla si corrieron menos de los esperados. Ver ADR-011.
+
+### Changed
+- **`enumerate.rs` / `win32_types.rs`** — se restauró lo que la Fase 1 había podado: `AttachablePath`
+  y el campo `attachable` (los candidatos de re-adjuntado que salen de `QDC_ALL_PATHS`) y
+  `query_active_only_topology` (el snapshot mínimo que usa un detach). Todo el endurecimiento de la
+  Fase 1 sigue en pie.
+- **`lib.rs`** — arranque del motor **no-fatal**: si no levanta, se anota y Millennium anda igual.
+  `.manage()` propio y gateado, sin campo nuevo en `AppState` (ADR-005). Los comandos obtienen el
+  estado con `try_state`, **nunca** con un parámetro `State<...>`: Tauri **panica** al resolver un
+  State ausente, y con `panic = "abort"` eso se llevaría puesto el portapapeles.
+- **`docs/DECISIONS.md`** — la "Doctrina CCD heredada" pasa de "para la Fase 2" a **implementada**,
+  con una tabla de dónde vive cada punto. Nuevos ADR-008 a ADR-011.
+
+### Fixed
+- **Acople frágil del rescate del error 87**: el texto `"SetDisplayConfig failed: 87"` estaba escrito
+  a mano en dos archivos. Cambiar el `format!` de uno apagaba la escalera de rescate **en silencio**.
+  Ahora la constante y su reconocedor viven juntos en `apply.rs`.
+- **Dos agujeros en la red, encontrados trazando el camino del apply** (los dos dejaban un cambio
+  aplicado sin nadie persiguiéndolo — el bug exacto que esta fase viene a matar):
+  si la **re-enumeración de verificación fallaba**, y si el **rollback inmediato fallaba**. En los
+  dos casos ahora queda el watchdog armado.
+
+---
+
 ## 2026-07-20 (b) — Gate de Android en el CI: cierra el hueco que dejó la Fase 1
 
 El aislamiento de plataforma pasa de **revisado por lectura** a **probado**. Hasta acá el único job era `windows-latest`, donde por definición TODO el código windows-only compila y una fuga de `cfg` no se nota; recién se hubiera visto intentando un build de Android a mano, meses después. Verificado **contra la API de GitHub**, no contra el reporte de la sesión que lo construyó.

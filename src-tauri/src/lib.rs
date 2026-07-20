@@ -1151,10 +1151,102 @@ async fn prepare_file_for_send(
 /// Fase 1 no tiene estado, así que la regla de "nunca sostener un lock a través
 /// de un `.await`" se cumple por construcción — no hay nada que sostener.
 #[tauri::command]
-async fn displays_get_snapshot() -> Result<displays::DisplaysSnapshot, String> {
+async fn displays_get_snapshot(app: tauri::AppHandle) -> Result<displays::DisplaysSnapshot, String> {
+    // Con el motor de la Fase 2 arrancado, la foto sale de ahí: además de los
+    // monitores trae el estado de la confirmación pendiente, que es lo que
+    // permite rehidratar la cuenta regresiva si el modal se cerró y se reabrió.
+    // Sin motor (no-Windows, o arranque fallido) se cae al camino de lectura
+    // puro de la Fase 1, que sigue funcionando igual.
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(estado) = estado_displays(&app) {
+            return tokio::task::spawn_blocking(move || estado.snapshot())
+                .await
+                .map_err(|e| format!("displays: la tarea de enumeración se cayó: {e}"))?;
+        }
+    }
+
+    let _ = &app;
     tokio::task::spawn_blocking(displays::snapshot)
         .await
         .map_err(|e| format!("displays: la tarea de enumeración se cayó: {e}"))?
+}
+
+/// El estado de displays, si arrancó.
+///
+/// `try_state` y NO un parámetro `State<...>` en la firma del comando: si el
+/// estado no está registrado, Tauri **panica** al resolver el parámetro, y con
+/// `panic = "abort"` eso se lleva puesto el portapapeles, el discovery y las
+/// transferencias. Devolver `None` y contestar un error del dominio es la
+/// diferencia entre "la sección de monitores no arrancó" y "se cerró la app".
+#[cfg(target_os = "windows")]
+fn estado_displays(app: &tauri::AppHandle) -> Option<displays::DisplaysState> {
+    // `Manager` (que aporta `try_state`) ya está importado arriba en el archivo.
+    app.try_state::<displays::DisplaysState>()
+        .map(|estado| (*estado).clone())
+}
+
+/// Mensaje único para cuando el módulo no está disponible, así la UI no muestra
+/// dos textos distintos para la misma situación.
+fn displays_no_disponible() -> String {
+    "la sección de monitores no está disponible en esta sesión (solo Windows; si estás en Windows, mirá el LOG: el motor no arrancó)".to_string()
+}
+
+/// Prende o apaga un monitor. La red de auto-rollback la arma el módulo.
+#[tauri::command]
+async fn displays_toggle(
+    app: tauri::AppHandle,
+    display_id: String,
+) -> Result<displays::DisplaysSnapshot, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let estado = estado_displays(&app).ok_or_else(displays_no_disponible)?;
+        // `spawn_blocking`: adentro hay syscalls CCD que tardan y un
+        // `std::sync::Mutex`. Nada de eso puede correr en el reactor, y el lock
+        // nunca cruza un `.await` porque adentro del closure no hay ninguno.
+        return tokio::task::spawn_blocking(move || estado.toggle(&display_id))
+            .await
+            .map_err(|e| format!("displays: la tarea de cambio se cayó: {e}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (&app, &display_id);
+        Err(displays_no_disponible())
+    }
+}
+
+/// "Así está bien": cancela el auto-rollback.
+#[tauri::command]
+async fn displays_confirm(app: tauri::AppHandle) -> Result<displays::DisplaysSnapshot, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let estado = estado_displays(&app).ok_or_else(displays_no_disponible)?;
+        return tokio::task::spawn_blocking(move || estado.confirm())
+            .await
+            .map_err(|e| format!("displays: la tarea de confirmación se cayó: {e}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = &app;
+        Err(displays_no_disponible())
+    }
+}
+
+/// "Volvé atrás ya", sin esperar a que venza el plazo.
+#[tauri::command]
+async fn displays_revert(app: tauri::AppHandle) -> Result<displays::DisplaysSnapshot, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let estado = estado_displays(&app).ok_or_else(displays_no_disponible)?;
+        return tokio::task::spawn_blocking(move || estado.revert())
+            .await
+            .map_err(|e| format!("displays: la tarea de vuelta atrás se cayó: {e}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = &app;
+        Err(displays_no_disponible())
+    }
 }
 
 #[tauri::command]
@@ -1645,6 +1737,39 @@ pub fn run() {
                 icons: icon_store,
                 server_port,
             });
+
+            // 6. Motor de displays (SPEC-displays, Fase 2). `.manage()` PROPIO y
+            //    gateado, no un campo en `AppState`: así el `#[cfg]` vive en un
+            //    solo lugar (ADR-005). El arranque es **no-fatal** — si el motor
+            //    CCD no levanta, se anota y Millennium sigue andando sin la
+            //    sección de monitores; el clipboard no depende de esto.
+            #[cfg(target_os = "windows")]
+            {
+                match app.path().app_data_dir() {
+                    Ok(data_dir) => {
+                        // El emisor es el único punto donde el módulo de displays
+                        // toca Tauri. Vive acá para que `src/displays/` quede
+                        // libre de Tauri y se pueda type-checkear local.
+                        let emisor_handle = app.handle().clone();
+                        let emisor: displays::Emisor =
+                            Box::new(move |nombre, payload| {
+                                let _ = emisor_handle.emit(nombre, payload);
+                            });
+                        match displays::init(&data_dir, emisor) {
+                            Ok(estado) => {
+                                app.manage(estado);
+                                runtime_log::info("[displays] motor de monitores listo");
+                            }
+                            Err(e) => runtime_log::warn(format!(
+                                "[displays] el motor de monitores no arrancó: {e} — el resto de Millennium anda igual"
+                            )),
+                        }
+                    }
+                    Err(e) => runtime_log::warn(format!(
+                        "[displays] sin carpeta de datos ({e}): el motor de monitores no arranca"
+                    )),
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1680,6 +1805,9 @@ pub fn run() {
             pair_with_qr_payload,
             prepare_file_for_send,
             displays_get_snapshot,
+            displays_toggle,
+            displays_confirm,
+            displays_revert,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

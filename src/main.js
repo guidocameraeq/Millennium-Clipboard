@@ -200,7 +200,9 @@
     activeTransfer: null, // { sessionId, files: [{ fileId, name, size, bytes }], totalBytes }
     activeReceive: null, // { sessionId } — RX bar keying, independent of TX (2.2.e)
     targetLost: false, // the selected peer vanished from the snapshot (2.2.b)
-    displays: [], // monitores del ultimo snapshot (SPEC-displays Fase 1, read-only)
+    displays: [], // monitores del ultimo snapshot (SPEC-displays)
+    displaysPending: null, // { deadlineAt } mientras un cambio espera confirmacion (Fase 2)
+    displaysBusy: false, // hay un invoke de displays en vuelo: no encimar otro
   };
 
   // ---------- Progress bar segments ----------------------------------------
@@ -1594,9 +1596,13 @@
   });
 
 
-  // ---------- Displays modal (SPEC-displays, Fase 1) ------------------------
-  // SOLO LECTURA: lista los monitores que reporta Windows. No cambia nada —
-  // attach/detach con red de seguridad es la Fase 2.
+  // ---------- Displays modal (SPEC-displays, Fase 2) ------------------------
+  // Lista los monitores que reporta Windows y deja prender/apagar uno. Todo
+  // cambio entra "a prueba": el backend arranca un watchdog y vuelve al layout
+  // anterior si nadie confirma. Este archivo NO revierte por su cuenta — solo
+  // dibuja el reloj y le avisa al backend; el que decide siempre es el backend
+  // (si la pantalla se apaga y el usuario no puede ni ver la ventana, el
+  // rollback tiene que salir igual).
   const displaysBtn = document.getElementById('hud-displays-btn');
   const displaysModal = document.getElementById('displays-modal');
   const displaysList = document.getElementById('displays-list');
@@ -1606,6 +1612,10 @@
   const displaysMockWarning = document.getElementById('displays-mock-warning');
   const displaysRefreshBtn = document.getElementById('displays-refresh');
   const displaysCloseBtn = document.getElementById('displays-close');
+  const displaysPendingBar = document.getElementById('displays-pending');
+  const displaysPendingText = document.getElementById('displays-pending-text');
+  const displaysConfirmBtn = document.getElementById('displays-confirm');
+  const displaysRevertBtn = document.getElementById('displays-revert');
 
   // El modulo de monitores es Windows-only. En Android el comando existe igual
   // (devuelve Err), asi que esconder el boton es cosmetico, no load-bearing.
@@ -1636,6 +1646,64 @@
     return badges;
   }
 
+  // --- Cuenta regresiva de confirmacion ------------------------------------
+  // UN solo interval para todo el modulo, y se limpia siempre: al confirmar, al
+  // revertir, al cerrar el modal y antes de arrancar otro. Un timer huerfano es
+  // CPU en reposo, que es justo lo que este proyecto vigila.
+  let displaysCountdownTimer = null;
+  let displaysLastShownSec = -1;
+
+  function stopDisplaysCountdown() {
+    if (displaysCountdownTimer !== null) {
+      clearInterval(displaysCountdownTimer);
+      displaysCountdownTimer = null;
+    }
+    displaysLastShownSec = -1;
+  }
+
+  function renderDisplaysPending() {
+    const pending = state.displaysPending;
+    if (displaysPendingBar) displaysPendingBar.hidden = !pending;
+    if (!pending) return;
+    const remaining = Math.max(0, pending.deadlineAt - Date.now());
+    const secs = Math.ceil(remaining / 1000);
+    // Escribir en el DOM solo cuando cambia el segundo que se ve: el interval
+    // corre mas fino que eso para no atrasarse, no para repintar.
+    if (secs !== displaysLastShownSec) {
+      displaysLastShownSec = secs;
+      setText(displaysPendingText, secs > 0 ? `REVIERTE SOLO EN ${secs}s` : 'REVIRTIENDO…');
+    }
+    // Llego a cero: el reloj ya no tiene nada que contar. Quien avisa como
+    // termino es el evento displays-confirmation del backend.
+    if (remaining <= 0) stopDisplaysCountdown();
+  }
+
+  function startDisplaysCountdown(remainingMs) {
+    stopDisplaysCountdown();
+    const ms = Number(remainingMs);
+    // Se guarda el DEADLINE, no un contador que se va restando: un setInterval
+    // se atrasa (ventana en segundo plano, GC, un apply que trabo el hilo) y el
+    // numero terminaria mintiendo sobre cuanto falta de verdad.
+    state.displaysPending = { deadlineAt: Date.now() + (Number.isFinite(ms) && ms > 0 ? ms : 0) };
+    renderDisplaysPending();
+    // El reloj solo tickea con el modal a la vista: cerrado no hay nada que
+    // repintar, y el que revierte de verdad vive en el backend.
+    if (displaysModal && !displaysModal.hidden && state.displaysPending.deadlineAt > Date.now()) {
+      displaysCountdownTimer = setInterval(renderDisplaysPending, 250);
+    }
+  }
+
+  function clearDisplaysPending() {
+    stopDisplaysCountdown();
+    state.displaysPending = null;
+    renderDisplaysPending();
+  }
+
+  function refreshDisplaysUi() {
+    renderDisplays();
+    renderDisplaysPending();
+  }
+
   function buildDisplayItem(d) {
     const li = document.createElement('li');
     li.className = 'display-item';
@@ -1652,7 +1720,10 @@
           <span class="display-hz"></span>
         </div>
       </div>
-      <div class="display-badges"></div>`;
+      <div class="display-badges"></div>
+      <div class="display-actions">
+        <button class="modal-btn small display-toggle-btn" type="button"></button>
+      </div>`;
     updateDisplayItem(li, d);
     return li;
   }
@@ -1663,6 +1734,27 @@
     setText(li.querySelector('.display-name'), d.name);
     setText(li.querySelector('.display-res'), formatResolution(d));
     setText(li.querySelector('.display-hz'), formatHz(d.refreshMhz));
+
+    const btn = li.querySelector('.display-toggle-btn');
+    if (btn) {
+      const detaching = !!d.active;
+      btn.textContent = detaching ? 'DETACH' : 'ATTACH';
+      btn.classList.toggle('reject', detaching);
+      // canDetach habla SOLO de apagar. No se mira en una fila ya apagada: si
+      // el backend alguna vez la marcara false ahi, ATTACH quedaria muerto para
+      // siempre y el monitor no se podria volver a prender nunca.
+      const lastOne = detaching && d.canDetach === false;
+      const waiting = !!state.displaysPending;
+      btn.disabled = lastOne || waiting || state.displaysBusy;
+      // El title es el unico lugar donde se explica por que esta apagado.
+      if (lastOne) {
+        btn.title = 'Es el único monitor activo: apagarlo te deja la máquina a ciegas.';
+      } else if (waiting) {
+        btn.title = 'Hay un cambio esperando confirmación.';
+      } else {
+        btn.title = detaching ? 'Apagar este monitor' : 'Encender este monitor';
+      }
+    }
 
     const badgeBox = li.querySelector('.display-badges');
     if (badgeBox) {
@@ -1713,23 +1805,97 @@
     }
   }
 
+  // Un solo lugar donde se muestra un error de monitores, para que el cartel
+  // del modal, la linea de status y el log del backend nunca cuenten historias
+  // distintas del mismo problema.
+  function showDisplaysError(err) {
+    const msg = String(err);
+    if (displaysError) {
+      // textContent: el mensaje puede venir de Windows, nunca por innerHTML.
+      displaysError.textContent = msg;
+      displaysError.hidden = false;
+    }
+    setStatus(`ERR displays · ${msg}`, { priority: 'err' });
+    reportToBackend('ERR', `displays: ${msg}`);
+  }
+
+  // Todo snapshot que llega del backend (lectura, toggle, confirm o revert)
+  // entra por aca. El backend es el dueño del estado: la UI no adivina nada,
+  // ni siquiera si sigue habiendo un cambio pendiente.
+  function applyDisplaysSnapshot(snapshot) {
+    state.displays = Array.isArray(snapshot?.displays) ? snapshot.displays : [];
+    if (displaysMockWarning) displaysMockWarning.hidden = snapshot?.source !== 'mock';
+    const remainingMs = Number(snapshot?.pending?.remainingMs);
+    if (Number.isFinite(remainingMs) && remainingMs > 0) {
+      // Rehidratacion: si el usuario cerro y reabrio el modal en el medio, la
+      // cuenta reaparece con lo que quedaba segun el reloj del backend.
+      startDisplaysCountdown(remainingMs);
+    } else {
+      clearDisplaysPending();
+    }
+    refreshDisplaysUi();
+  }
+
   async function loadDisplays() {
     if (displaysError) displaysError.hidden = true;
     try {
-      const snapshot = await invoke('displays_get_snapshot');
-      state.displays = Array.isArray(snapshot?.displays) ? snapshot.displays : [];
-      if (displaysMockWarning) displaysMockWarning.hidden = snapshot?.source !== 'mock';
-      renderDisplays();
+      applyDisplaysSnapshot(await invoke('displays_get_snapshot'));
     } catch (err) {
       state.displays = [];
-      renderDisplays();
+      clearDisplaysPending();
       if (displaysMockWarning) displaysMockWarning.hidden = true;
-      if (displaysError) {
-        // textContent: el mensaje puede venir de Windows, nunca por innerHTML.
-        displaysError.textContent = String(err);
-        displaysError.hidden = false;
-      }
-      setStatus(`ERR displays · ${err}`, { priority: 'err' });
+      refreshDisplaysUi();
+      showDisplaysError(err);
+    }
+  }
+
+  // Prender o apagar un monitor. El comando vuelve con el snapshot ya
+  // verificado por el backend (re-enumerado, no "me devolvio 0 asi que anduvo").
+  async function toggleDisplay(id) {
+    if (state.displaysBusy || state.displaysPending) return;
+    const target = (state.displays || []).find((d) => d.id === id);
+    if (!target) return;
+    state.displaysBusy = true;
+    if (displaysError) displaysError.hidden = true;
+    refreshDisplaysUi(); // apaga los botones mientras Windows piensa
+    blip(660, 0.06);
+    setStatus(
+      `DISPLAYS · ${target.active ? 'apagando' : 'encendiendo'} ${target.name}…`,
+      { force: true }
+    );
+    try {
+      applyDisplaysSnapshot(await invoke('displays_toggle', { displayId: id }));
+    } catch (err) {
+      // El apply pudo quedar a mitad de camino: lo unico confiable es volver a
+      // leer la topologia antes de mostrar nada.
+      try { await loadDisplays(); } catch (_) {}
+      showDisplaysError(err);
+    } finally {
+      state.displaysBusy = false;
+      refreshDisplaysUi();
+    }
+  }
+
+  // CONFIRMAR / REVERTIR AHORA: los dos hacen lo mismo salvo el comando.
+  async function resolveDisplaysPending(command, doneMsg) {
+    if (!state.displaysPending || state.displaysBusy) return;
+    state.displaysBusy = true;
+    // El reloj se frena ya (la decision esta tomada), pero la barra queda a la
+    // vista con el numero congelado hasta que vuelva el snapshot.
+    stopDisplaysCountdown();
+    if (displaysConfirmBtn) displaysConfirmBtn.disabled = true;
+    if (displaysRevertBtn) displaysRevertBtn.disabled = true;
+    try {
+      applyDisplaysSnapshot(await invoke(command));
+      setStatus(`DISPLAYS · ${doneMsg}`, { force: true });
+    } catch (err) {
+      try { await loadDisplays(); } catch (_) {}
+      showDisplaysError(err);
+    } finally {
+      state.displaysBusy = false;
+      if (displaysConfirmBtn) displaysConfirmBtn.disabled = false;
+      if (displaysRevertBtn) displaysRevertBtn.disabled = false;
+      refreshDisplaysUi();
     }
   }
 
@@ -1744,12 +1910,26 @@
     // lectura todavia no sabemos eso.
     if (displaysEmpty) displaysEmpty.hidden = true;
     displaysModal.hidden = false;
-    focusFirstControl(displaysModal);
+    // Si al cerrar el modal habia un cambio esperando, el reloj vuelve a correr
+    // en el acto: el deadline es absoluto, asi que sigue siendo valido aunque
+    // nadie lo estuviera mirando. El snapshot que llega en un instante lo
+    // corrige con el numero del backend.
+    if (state.displaysPending) {
+      startDisplaysCountdown(state.displaysPending.deadlineAt - Date.now());
+    }
+    // A mano, NO focusFirstControl: el primer boton del DOM ahora es CONFIRMAR,
+    // que casi siempre vive en la barra oculta — enfocar algo con display:none
+    // no hace nada y el foco se queda en el body (adios teclado).
+    const firstFocus = (state.displaysPending && displaysConfirmBtn) ? displaysConfirmBtn : displaysRefreshBtn;
+    if (firstFocus) firstFocus.focus(); else focusFirstControl(displaysModal);
     await loadDisplays();
   }
 
   function closeDisplaysModal() {
     if (displaysModal) displaysModal.hidden = true;
+    // El timer no sobrevive al modal. state.displaysPending SI: guarda el
+    // deadline para poder rehidratar al reabrir.
+    stopDisplaysCountdown();
   }
 
   if (displaysCloseBtn) displaysCloseBtn.addEventListener('click', closeDisplaysModal);
@@ -1757,6 +1937,30 @@
     displaysRefreshBtn.addEventListener('click', async () => {
       blip(880, 0.06);
       await loadDisplays();
+    });
+  }
+  if (displaysConfirmBtn) {
+    displaysConfirmBtn.addEventListener('click', () => {
+      blip(1100, 0.05);
+      resolveDisplaysPending('displays_confirm', 'cambio confirmado');
+    });
+  }
+  if (displaysRevertBtn) {
+    displaysRevertBtn.addEventListener('click', () => {
+      blip(440, 0.08);
+      resolveDisplaysPending('displays_revert', 'cambio revertido');
+    });
+  }
+  // Delegacion: el listener vive en la <ul>, no en cada boton. Con render por
+  // diff las filas se reusan y se borran solas; enganchar por fila seria
+  // acumular listeners o perderlos.
+  if (displaysList) {
+    displaysList.addEventListener('click', (e) => {
+      const btn = e.target && e.target.closest ? e.target.closest('.display-toggle-btn') : null;
+      if (!btn || btn.disabled) return;
+      const li = btn.closest('.display-item');
+      const id = li && li.dataset ? li.dataset.id : null;
+      if (id) toggleDisplay(id);
     });
   }
   if (displaysModal) {
@@ -2369,6 +2573,40 @@
       setStatus(`🖼 ${senderAlias} → image clipboard: ${width}×${height}`);
       blip(1320, 0.06);
       notify(`🖼 Image clipboard from ${senderAlias}`, `${width}×${height} ready to paste`);
+    });
+
+    // Monitores (SPEC-displays Fase 2). La topologia cambio: puede ser un
+    // attach/detach nuestro o un cable que alguien movio. Se relee SOLO con el
+    // modal abierto — cerrado, el snapshot no lo ve nadie.
+    await listen('displays-changed', () => {
+      if (displaysModal && !displaysModal.hidden) loadDisplays();
+    });
+
+    // Ciclo de confirmacion. El reloj es del backend; esto solo lo dibuja.
+    await listen('displays-confirmation', (event) => {
+      const payload = event.payload || {};
+      const modalOpen = !!(displaysModal && !displaysModal.hidden);
+      if (payload.kind === 'applied') {
+        const ms = Number(payload.timeoutMs);
+        startDisplaysCountdown(Number.isFinite(ms) && ms > 0 ? ms : 10000);
+        refreshDisplaysUi();
+        setStatus('DISPLAYS · confirmá el cambio o vuelve solo', { priority: 'warn', ttl: 12000 });
+      } else if (payload.kind === 'confirmed') {
+        clearDisplaysPending();
+        refreshDisplaysUi();
+        if (modalOpen) loadDisplays();
+        setStatus('DISPLAYS · cambio confirmado', { force: true });
+      } else if (payload.kind === 'reverted') {
+        clearDisplaysPending();
+        refreshDisplaysUi();
+        if (modalOpen) loadDisplays();
+        // El "por que" importa: revertir a mano y quedarse sin confirmar a
+        // tiempo se ven identicos en pantalla, y no son lo mismo.
+        const why = payload.reason === 'timeout' ? 'nadie confirmó a tiempo'
+          : payload.reason === 'error' ? 'el cambio falló'
+          : 'lo revertiste vos';
+        setStatus(`DISPLAYS · volvió atrás (${why})`, { priority: 'warn', ttl: 8000 });
+      }
     });
 
     // Preload settings (used by transmit + settings modal)

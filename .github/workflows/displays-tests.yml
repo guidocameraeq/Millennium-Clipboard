@@ -1,0 +1,83 @@
+name: Displays logic tests
+
+# Corre los tests de la RED DE SEGURIDAD del módulo de displays (SPEC-displays,
+# Fase 2): el auto-rollback, la ruta del store y el parseo de identidad.
+#
+# Por qué es un job aparte y no un paso de `build.yml`:
+#  - `cargo test` sobre el crate de la app NO funciona: en Windows arrastra el
+#    stack de tao/wry al binario de tests y muere al cargar
+#    (STATUS_ENTRYPOINT_NOT_FOUND). Por eso los tests del repo estaban gateados
+#    con `#[cfg(all(test, not(windows)))]`... y por eso no corrían en NINGÚN
+#    lado: el único job era windows-latest y nunca invocaba `cargo test`.
+#    Eran decoración.
+#  - `src-tauri/displays-tests/` es un crate chico que incluye por `#[path]` los
+#    archivos REALES que son windows-free (watchdog, store, ids). Sin `windows`
+#    ni `tauri`, linkea sin drama.
+#
+# Qué protege, concretamente: que si nadie confirma un cambio de monitores, el
+# watchdog lo revierta solo. Es la garantía de que un layout malo no queda pegado
+# y deja la máquina inusable — el bug que Monarch nació para matar. Sin este job,
+# la única prueba de que eso anda es que alguien lo corrió a mano una vez.
+#
+# Corre en ubuntu porque es más rápido y barato: nada de lo que se testea acá es
+# específico de Windows en tiempo de ejecución (los archivos llevan
+# `#![cfg(target_os = "windows")]`, así que el crate se compila para Windows...
+# — ojo, ver el paso de abajo).
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - feat/displays
+      - 'ci/**'
+
+permissions:
+  contents: read
+
+jobs:
+  displays-tests:
+    name: cargo test (logica de displays)
+    # windows-latest y no ubuntu: los archivos incluidos llevan
+    # `#![cfg(target_os = "windows")]` adentro, así que en Linux se compilarían
+    # VACÍOS y el job daría verde sin haber corrido un solo test. Esa es
+    # exactamente la clase de gate decorativo que este archivo viene a eliminar.
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri/displays-tests -> target
+
+      - name: Tests de la logica de displays
+        working-directory: src-tauri/displays-tests
+        run: cargo test
+
+      # Red contra el gate decorativo: si los `#![cfg]` alguna vez hicieran que
+      # los archivos se compilen vacíos, `cargo test` daría verde con 0 tests.
+      # Este paso exige que hayan corrido tests de verdad, y cuántos.
+      - name: Verificar que los tests CORRIERON (no 0 tests)
+        working-directory: src-tauri/displays-tests
+        shell: bash
+        run: |
+          salida=$(cargo test 2>&1)
+          echo "$salida"
+          corridos=$(echo "$salida" | grep -oE '^running [0-9]+ tests?' | grep -oE '[0-9]+' | head -1)
+          : "${corridos:=0}"
+          echo "Tests corridos: $corridos"
+          if [ "$corridos" -lt 10 ]; then
+            echo "::error::Corrieron $corridos tests (se esperaban 10 o más). Un gate que no ejecuta nada es decoración."
+            exit 1
+          fi
+
+      - name: Tests del crate puro vendorizado
+        working-directory: src-tauri/vendor/monarch
+        run: cargo test

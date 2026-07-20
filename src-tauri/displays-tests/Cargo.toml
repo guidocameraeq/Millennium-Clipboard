@@ -1,0 +1,38 @@
+# Tests de logica del modulo de displays (SPEC-displays, Fase 2).
+#
+# # Por que existe un crate aparte para esto
+#
+# Los tests de `src/displays/` no se pueden correr desde el crate de la app:
+#   - En Windows, `cargo test` sobre `millennium-clipboard` arrastra el stack de
+#     tao/wry al binario de tests y muere al cargar (STATUS_ENTRYPOINT_NOT_FOUND).
+#   - Y en la maquina del dueno ni siquiera llega ahi: linkear contra el crate
+#     `windows` falla con `dlltool.exe: program not found`.
+# Resultado: los `#[cfg(all(test, not(windows)))]` que ya habia en el repo no
+# corrian en ningun lado, ni local ni en el CI. Eran decoracion.
+#
+# Este crate incluye por `#[path]` SOLO los archivos del modulo que son
+# windows-free por diseno (watchdog, store, ids). Sin el crate `windows` y sin
+# tauri, el binario de tests linkea sin problema — en esta maquina y en el CI.
+#
+# No copia nada: chequea y testea los archivos REALES, asi que no puede
+# desincronizarse del codigo que va al binario.
+#
+#   cd src-tauri/displays-tests && cargo test
+#
+# `[workspace]` vacio: lo mantiene FUERA del workspace de la app, igual que
+# `vendor/monarch`. Sin eso moveria el `[profile.release]` (y con el
+# `panic = "abort"`) del crate principal — ver docs/DECISIONS.md ADR-001.
+
+[package]
+name = "displays-tests"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+monarch = { path = "../vendor/monarch" }

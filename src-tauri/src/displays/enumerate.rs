@@ -1,16 +1,17 @@
 // Enumeración de monitores por la CCD API de Windows. Migrado de Monarch @ 7f9f63b
 // (`src-tauri/src/backend/windows/enumerate.rs`) — ver docs/DECISIONS.md ADR-002.
 //
-// Este archivo es SOLO LECTURA por construcción: las únicas tres funciones Win32
-// que ejecuta son `GetDisplayConfigBufferSizes`, `QueryDisplayConfig` y
-// `DisplayConfigGetDeviceInfo`. NO hay `SetDisplayConfig` ni
-// `ChangeDisplaySettings` en ningún camino de acá (verificable con grep sobre
-// todo `src-tauri/`). Cambiar la topología es Fase 2 y todavía no vive en el
-// repo.
+// Este archivo sigue siendo SOLO LECTURA aun en la Fase 2: las únicas tres
+// funciones Win32 que ejecuta son `GetDisplayConfigBufferSizes`,
+// `QueryDisplayConfig` y `DisplayConfigGetDeviceInfo`. Acá NO hay
+// `SetDisplayConfig` ni `ChangeDisplaySettings`; quien escribe la topología es
+// `apply.rs`. Este módulo solo mira y describe.
 //
-// PODADO respecto del donante: no viaja la cosecha de `AttachablePath` (el
-// segundo `for` sobre ALL_PATHS) ni `query_active_only_topology`. Ambas cosas
-// existen solo para alimentar el re-adjuntado por `SetDisplayConfig`.
+// FASE 2 — se restauró lo que la Fase 1 había podado, porque ahora existe el
+// apply que lo consume: la cosecha de `AttachablePath` (el segundo `for` sobre
+// ALL_PATHS) y `query_active_only_topology`. Los candidatos de attach salen
+// SIEMPRE de la enumeración viva; nunca de un archivo en disco (la persistencia
+// binaria del donante no viaja, ver docs/DECISIONS.md).
 //
 // ENDURECIDO respecto del donante (Millennium compila release con
 // `panic = "abort"`: un panic acá se lleva puesto TODO el proceso, clipboard
@@ -36,7 +37,9 @@ use windows::Win32::Devices::Display::{
 };
 use windows::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 
-use super::win32_types::{luid_to_u64, make_display_id, RawTopologySnapshot, TopologySnapshot};
+use super::win32_types::{
+    luid_to_u64, make_display_id, AttachablePath, RawTopologySnapshot, TopologySnapshot,
+};
 
 const DISPLAYCONFIG_PATH_ACTIVE_FLAG: u32 = 0x0000_0001;
 
@@ -127,13 +130,17 @@ fn log_enumeration_if_changed(stats: &EnumerationStats) {
     }
 }
 
-/// Make connected-but-inactive displays visible even when QDC_DATABASE_CURRENT enrichment did
-/// not surface their paths (seen in the field: a detached TV visible in Windows Display settings
-/// but absent from the database query). QDC_ALL_PATHS lists every source combination for every
-/// connected target; each yet-unrepresented connected target is added as display info.
+/// Hace visibles los monitores conectados-pero-inactivos aunque el enriquecimiento por
+/// `QDC_DATABASE_CURRENT` no haya sacado a la luz sus paths. Es un caso visto en la cancha:
+/// una TV desconectada que aparece en la configuración de pantallas de Windows pero NO en la
+/// consulta a la base. `QDC_ALL_PATHS` lista cada combinación de source para cada target
+/// conectado; cada target conectado todavía no representado se agrega como display, y sus
+/// paths se guardan en `snapshot.attachable` para que el rescate pueda activarlo
+/// **explícitamente** (Monarch ADR-003: attach explícito, nunca "extender todo").
 ///
-/// (Donante: acá además se cosechaban los paths en `snapshot.attachable` para que
-/// el recovery pudiera activarlos explícitamente. Eso es Fase 2 y no viaja.)
+/// Esos paths NO se agregan a `snapshot.raw` a propósito: `raw` es la configuración *actual*
+/// y va derecho a `SetDisplayConfig` en cada apply. Mezclar candidatos ahí encendería
+/// monitores que nadie pidió.
 fn seed_connected_inactive_displays(snapshot: &mut TopologySnapshot, stats: &mut EnumerationStats) {
     // El donante descartaba este error en silencio (`let ... else { return }`).
     // Acá NO se puede: si ALL_PATHS falla, los monitores conectados-pero-apagados
@@ -159,6 +166,10 @@ fn seed_connected_inactive_displays(snapshot: &mut TopologySnapshot, stats: &mut
         .iter()
         .filter_map(|display| display.id.edid_hash)
         .collect::<std::collections::HashSet<_>>();
+    // Los conectores que este seeder dio de alta recién ahora. Solo de ÉSTOS se
+    // cosechan candidatos de attach abajo: los que ya venían activos no hay que
+    // volver a encenderlos.
+    let mut seeded_connectors = std::collections::HashSet::new();
 
     for path in &all_paths {
         let adapter_luid = luid_to_u64(
@@ -208,15 +219,15 @@ fn seed_connected_inactive_displays(snapshot: &mut TopologySnapshot, stats: &mut
             .get(&target_key)
             .and_then(|mode| target_mode_refresh_mhz(mode).ok())
             .unwrap_or(60_000);
-        // Resolution/position are deliberately a 0x0 sentinel: QDC_ALL_PATHS only carries modes
-        // for ACTIVE paths, so a source-mode lookup here would alias another display's geometry
-        // (the source id of an inactive path points at a source that belongs to whoever is
-        // currently driving it).
+        // Resolución y posición son a propósito un centinela 0x0: `QDC_ALL_PATHS` solo trae
+        // modos de los paths ACTIVOS, así que buscar el source-mode acá devolvería la
+        // geometría de OTRO monitor (el source id de un path inactivo apunta a un source que
+        // le pertenece a quien lo esté manejando ahora).
         //
-        // En Monarch el merge de cache le devolvía la última geometría real. Acá
-        // no hay cache (la Fase 1 no la necesita: ver ADR-002), así que el 0x0
-        // llega tal cual a la UI, que lo muestra como "—". Es honesto: Windows
-        // hoy no reporta modo para ese monitor.
+        // Río abajo, el merge del cache le devuelve la última geometría real y el rescate del
+        // attach la completa con el snapshot de después del extend. Si no hay nada de eso, el
+        // 0x0 llega tal cual a la UI, que lo muestra como "—" — que es honesto: Windows hoy no
+        // reporta modo para ese monitor.
         let resolution = Resolution {
             width: 0,
             height: 0,
@@ -226,6 +237,7 @@ fn seed_connected_inactive_displays(snapshot: &mut TopologySnapshot, stats: &mut
         stats
             .seeded
             .push(format!("'{friendly_name}':{}", path.targetInfo.id));
+        seeded_connectors.insert(connector);
         snapshot.layout.outputs.push(OutputConfig {
             display_id: display_id.clone(),
             enabled: false,
@@ -243,9 +255,41 @@ fn seed_connected_inactive_displays(snapshot: &mut TopologySnapshot, stats: &mut
             refresh_rate_mhz,
         });
     }
+
+    // Segunda pasada: guardar TODAS las combinaciones (source, target) de los targets recién
+    // sembrados. No alcanza con una: el source se elige recién en el momento del attach, y
+    // tiene que ser uno que esté **libre** — un source ocupado clonaría la pantalla en vez de
+    // extenderla. Por eso se conservan todas y decide el apply, no la enumeración.
+    for path in &all_paths {
+        let adapter_luid = luid_to_u64(
+            path.targetInfo.adapterId.HighPart,
+            path.targetInfo.adapterId.LowPart,
+        );
+        let connector = (adapter_luid, path.targetInfo.id);
+        if !seeded_connectors.contains(&connector) {
+            continue;
+        }
+        snapshot.attachable.push(AttachablePath {
+            path: *path,
+            adapter_luid,
+            target_id: path.targetInfo.id,
+        });
+    }
 }
 
-fn snapshot_from_raw(raw: RawTopologySnapshot) -> Result<TopologySnapshot, ManagerError> {
+/// Snapshot de solo-lo-activo, **sin** el enriquecimiento por `QDC_DATABASE_CURRENT`.
+///
+/// Es la base de los applies que solo apagan monitores: así ningún path que vino de la base de
+/// datos de Windows termina realimentando a `SetDisplayConfig`. Apagar una pantalla no necesita
+/// saber qué candidatos hay, y enriquecer acá puede reactivar algo que el usuario no pidió.
+pub(super) fn query_active_only_topology() -> Result<TopologySnapshot, ManagerError> {
+    let (paths, modes) = query_raw_active()?;
+    snapshot_from_raw(RawTopologySnapshot { paths, modes })
+}
+
+pub(super) fn snapshot_from_raw(
+    raw: RawTopologySnapshot,
+) -> Result<TopologySnapshot, ManagerError> {
     let mut displays = Vec::<DisplayInfo>::new();
     let mut outputs = Vec::new();
     let mode_map = modes_by_key(&raw.modes);
@@ -336,6 +380,9 @@ fn snapshot_from_raw(raw: RawTopologySnapshot) -> Result<TopologySnapshot, Manag
         raw,
         layout: Layout { outputs },
         displays,
+        // Vacío a propósito: los candidatos de attach solo existen si la enumeración pasó por
+        // `QDC_ALL_PATHS`. El que los llena es `seed_connected_inactive_displays`, después.
+        attachable: Vec::new(),
     })
 }
 

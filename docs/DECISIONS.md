@@ -164,11 +164,22 @@ manifest ni de Kotlin — eso sigue necesitando un build de Android de verdad, a
 
 ---
 
-## Doctrina CCD heredada — **PROHIBIDO simplificar** (para la Fase 2)
+## Doctrina CCD heredada — **PROHIBIDO simplificar**
 
-Esto todavía **no está implementado** acá: la Fase 1 no toca la topología. Queda escrito porque es
-la razón de ser de Monarch, y quien escriba la Fase 2 tiene que traerlo entero. Origen:
-`Monarch/docs/DECISIONS.md`, ADR-003/004/008/009.
+**Estado: IMPLEMENTADA en la Fase 2** (2026-07-20). Los cinco puntos de abajo viven hoy en
+`src/displays/{apply,topology,watchdog}.rs` + la glue de `mod.rs`. Sigue acá, en presente, porque es
+la razón de ser de Monarch y porque cualquiera que toque este módulo tiene que poder leerla sin ir
+al repo donante. Origen: `Monarch/docs/DECISIONS.md`, ADR-003/004/008/009.
+
+Dónde vive cada punto hoy:
+
+| Punto | Implementación |
+|---|---|
+| Attach explícito | `topology::try_batch_explicit_attach` + `apply::build_attach_paths`, alimentados por `TopologySnapshot::attachable` (cosechado de `QDC_ALL_PATHS` en `enumerate.rs`) |
+| Sondar Win32 | `apply::validate_attach_paths` (`SDC_VALIDATE`) antes de cada `apply_attach_paths`, batch creciendo de a uno |
+| Verificar re-enumerando | `topology::settle_poll` + `apply_layout_against_snapshot` (re-enumera post-SDC) + la verificación propia de Millennium en `mod.rs::estado::toggle` |
+| Pre-estado como precondición dura | `topology::capture_pre_recovery_state` (devuelve `Result`, no `Option`) |
+| Watchdog con sus DOS piezas | manager del vendor (pasivo) + `watchdog::correr` (el gatillo) — ver **ADR-009** |
 
 - **Attach explícito, no "extender todo"** (Monarch ADR-003): conservar el `DISPLAYCONFIG_PATH_INFO`
   de los targets conectados-pero-inactivos que devuelve `QDC_ALL_PATHS` y **activar el target
@@ -191,6 +202,117 @@ la razón de ser de Monarch, y quien escriba la Fase 2 tiene que traerlo entero.
   deadline (política) pero es **pasivo**; hace falta además la **glue** que dispare el rollback al
   vencer el timeout. Si la glue no existe, el layout malo queda pegado y nadie revierte — que es
   exactamente el bug de la TV irrecuperable que Monarch nació para matar.
+
+---
+
+## ADR-008 — La Fase 2 trae el motor entero **menos la persistencia binaria del snapshot**
+
+**Decisión**: `topology.rs` se portó completo —cache en `Mutex`, todos los merges, el remapeo de
+`DisplayId` y la escalera de rescate de 4 escalones— **salvo** `PersistedRawSnapshot`,
+`persist_raw_snapshot`, `load_persisted_raw_snapshot`, `persisted_raw_snapshot_path`,
+`struct_to_bytes` y `struct_from_bytes`. O sea: no existe `topology_snapshot.json`.
+
+**Dos motivos, los dos graves**:
+1. `struct_from_bytes` hacía `MaybeUninit::assume_init()` sobre bytes leídos **de un archivo de
+   disco**, validando solo el largo. Los structs que salen de ahí van derecho a `SetDisplayConfig`.
+   Con `panic = "abort"` y una API que reconfigura pantallas, es la bomba más grande del donante —
+   y es exactamente la clase de código que el ADR-002 ya había celebrado no traer.
+2. `persisted_raw_snapshot_path()` resolvía vía `monarch::FileConfigStore::default_config_path()`, o
+   sea escribía en **`%APPDATA%\Monarch\` — la configuración real de Monarch del usuario**. Era el
+   *segundo* camino hacia esa carpeta, además del store del manager (ver ADR-010); el que estaba
+   señalado era el otro.
+
+**Qué se pierde, dicho sin maquillaje**: el recuerdo de un monitor detachado **no sobrevive a
+reiniciar Millennium**. Dentro de la sesión el cache en memoria hace el mismo trabajo, y los
+candidatos de attach salen de `snapshot.attachable`, o sea de la enumeración **viva**
+(`QDC_ALL_PATHS`) y nunca del archivo — el propio donante lo dice en un comentario. Si algún día
+aparece el caso "apagué la TV, cerré la app, la abrí y no la puedo prender", **esto es lo primero a
+mirar**, y la cura correcta sería re-agregar la persistencia con un parseo que valide campo por
+campo, no un `assume_init`.
+
+**Consecuencia manejada**: se eliminó el campo `reseed_persisted` del cache en vez de neutralizarlo
+(sin archivo no hay de dónde re-sembrar; un campo que nadie lee es código muerto disfrazado).
+`invalidate_cache` sigue haciendo lo que importa: vacía el cache en memoria, que es lo que llama el
+resume-listener.
+
+---
+
+## ADR-009 — El watchdog de auto-rollback: por qué **no** es una copia literal del donante
+
+**Decisión**: la lógica del watchdog se reescribió en `displays/watchdog.rs` en vez de copiar
+`Monarch/src-tauri/src/app/events.rs::spawn_confirmation_watchdog`. Tres diferencias, todas a favor
+de que efectivamente dispare:
+
+1. **Margen sobre el plazo.** El donante duerme *exactamente* el timeout y recién ahí pregunta
+   "¿venció?". `thread::sleep` e `Instant::elapsed` usan el mismo reloj monotónico, así que en la
+   práctica da verdadero — pero es una carrera sin red: si alguna vez despierta un microsegundo
+   antes, la respuesta es "todavía no", **el hilo se muere ahí y nadie vuelve a preguntar nunca**.
+   El costo de esa carrera es la máquina inusable; el costo de cubrirla son diez líneas.
+2. **Lazo de reintento acotado** (5 vueltas). Cubre la carrera de arriba *y* el caso feo de verdad:
+   que el rollback **falle**. El manager, cuando eso pasa, **conserva** la confirmación pendiente en
+   vez de tirarla (`manager.rs:185-190`), así que reintentar tiene sentido. El donante se iba en el
+   primer error.
+3. **Decisión separada del efecto.** `decidir()` y `correr()` no mencionan a Tauri ni al crate
+   `windows`; el hilo y los eventos se inyectan. No es purismo: es lo que permite **testear la red
+   de seguridad de verdad** (ver ADR-011). El donante tenía el `AppHandle` adentro, y por eso su
+   watchdog no tenía un solo test.
+
+**Invariante que sostiene todo el diseño, y que hay que respetar al tocar `estado::toggle`**: una vez
+aplicado el cambio, **ninguna salida puede irse sin dejar armado el watchdog** (salvo que ya no
+quede confirmación pendiente). Por eso en ese tramo no hay un solo `?`: un `?` es un `return`
+silencioso que deja el cambio puesto y a nadie persiguiéndolo. Los tres caminos que lo respetan:
+la verificación falla → rollback inmediato; el rollback inmediato falla → watchdog igual;
+**no se pudo ni re-enumerar** → watchdog igual (es lo conservador: si el usuario ve bien su
+pantalla, confirma; si no, vuelve sola).
+
+**Un watchdog viejo no puede pisar un apply nuevo**, y no hace falta un contador de generación para
+eso: el manager solo revierte lo que está **vencido**, y un pendiente recién creado no lo está. Está
+testeado (`un_watchdog_viejo_no_revierte_un_cambio_nuevo`).
+
+---
+
+## ADR-010 — El store apunta al APPDATA de Millennium, y hay un test que lo vigila
+
+**Decisión**: `MillenniumConfigStore` (nuevo, `displays/store.rs`) implementa `monarch::ConfigStore`
+sobre el `JsonStore` atómico de Millennium (tmp + rename, backup-on-corrupt) y escribe en
+`%APPDATA%\com.guidocameraeq.millennium\displays.json`. **`FileConfigStore` no se instancia nunca.**
+
+**Qué evita**: su `default_config_path()` apunta a `%APPDATA%\Monarch\config.json` — los perfiles
+reales que el usuario tiene en la otra app. Y escribe con `fs::write` directo, no atómico: un corte
+a mitad de escritura deja un JSON truncado, la clase de bug que Millennium ya había arreglado.
+
+**El `data_dir` entra desde afuera** (`setup()` lo saca de Tauri) y **no hay** un constructor que lo
+resuelva por su cuenta: cuantas menos formas existan de construir este store, menos formas hay de
+que una termine apuntando a otra carpeta.
+
+**La red**: el test `la_ruta_cae_en_millennium_y_nunca_en_monarch` falla si la ruta llega a contener
+"monarch". No es decorativo — corre en CI (ADR-011).
+
+---
+
+## ADR-011 — Los tests del proyecto no corrían en **ningún** lado; ahora sí
+
+**Hallazgo, medido el 2026-07-20**: los `#[cfg(all(test, not(windows)))]` que el repo venía
+acumulando (los de `json_store.rs`, los 4 de `displays/mod.rs`) **no se ejecutaban ni local ni en
+CI**. Local no, porque para un target no-Windows falta el linker; y en CI tampoco, porque
+`build.yml` **nunca invocó `cargo test`**. Eran decoración: verdes por no existir.
+
+**Decisión**: `src-tauri/displays-tests/` — un crate chico, **fuera del workspace** (`[workspace]`
+vacío, mismo patrón que `vendor/monarch`; verificado con `cargo metadata` que
+`workspace_members = [millennium-clipboard]` y que el `panic = "abort"` no se movió). Incluye por
+`#[path]` los archivos **reales** que son windows-free por diseño (`watchdog.rs`, `store.rs`,
+`ids.rs`) más `json_store.rs`, con dobles de `runtime_log` y `diagnostics`. Sin `windows` ni `tauri`,
+el binario de tests **linkea**. Corre en `.github/workflows/displays-tests.yml`, en `windows-latest`.
+
+**Por qué windows-latest y no ubuntu**: los archivos incluidos llevan `#![cfg(target_os = "windows")]`
+adentro. En Linux se compilarían **vacíos** y el job daría verde sin haber corrido un solo test —
+exactamente el gate decorativo que esto viene a eliminar. Por la misma razón el workflow tiene un
+paso que **exige un mínimo de tests ejecutados** y falla si corrieron menos.
+
+**Consecuencia de diseño, no accidental**: `watchdog.rs`, `store.rs` e `ids.rs` **no pueden** empezar
+a usar el crate `windows` ni `tauri`. Si alguna vez hace falta, la lógica testeable se extrae antes.
+Ese es el precio de tener probada la red de seguridad, y vale la pena: sin esto, la única evidencia
+de que el auto-rollback funciona sería que alguien lo corrió a mano una vez.
 
 ---
 
@@ -218,17 +340,56 @@ y **el toolchain gnu lo chequea sin problema**.
 
 Así que el módulo de displays se puede verificar localmente en un crate scratch con las **mismas
 dependencias reales** (`windows 0.60` con las mismas features + el path-dep real a
-`src-tauri/vendor/monarch` + serde) y un `mod runtime_log` de mentira con `info/warn/err`. Copiando
-ahí `displays/{mod,enumerate,win32_types}.rs` verbatim:
+`src-tauri/vendor/monarch` + serde) y un `mod runtime_log` de mentira con `info/warn/err`.
 
-- `cargo check` ✅ → **type-checkea el módulo entero, las dos ramas de `cfg`**.
-- `cargo test` ❌ → **linkear** el binario de test sí pide `dlltool`. Para correr los tests de lógica
-  pura hay que armar una segunda variante sin la dependencia `windows` (cambiándole el `target_os`
-  del `cfg` para apagar los bloques Win32).
+**Mejora de la Fase 2 — nada de copiar: `#[path]`.** La Fase 1 copiaba los archivos al scratch, que
+es una copia que se desincroniza en cuanto alguien edita el original. Ahora el scratch los **incluye
+en su lugar**:
 
-Con eso, la Fase 1 se verificó ANTES del CI: check verde en ambas ramas, 4 tests de lógica en verde,
-22 tests del vendor en verde. **Usar esta técnica en las Fases 2 y 3** — es mucho más barato que
-gastar una corrida de CI de 11-30 minutos para descubrir un error de tipos.
+```rust
+// scratch/src/lib.rs
+pub mod runtime_log { /* doble con la MISMA firma: info/warn/err, impl Into<String> */ }
+#[path = "<abs>/src-tauri/src/json_store.rs"] pub mod json_store;
+#[path = "<abs>/src-tauri/src/displays/mod.rs"] pub mod displays;
+```
+
+y el `Cargo.toml` del scratch espeja el bloque `[target.'cfg(target_os = "windows")'.dependencies]`
+del proyecto. Con eso, lo que se chequea **es** el código que va al binario.
+
+Las dos ramas de `cfg`, las dos verificables local:
+
+| Comando | Qué prueba |
+|---|---|
+| `cargo check` | rama Windows: el motor CCD entero |
+| `cargo check --target x86_64-unknown-linux-gnu` | **rama no-Windows: caza fugas de `cfg` sin gastar CI** (requiere `rustup target add x86_64-unknown-linux-gnu`; `check` no linkea, así que no hace falta un compilador de C) |
+
+Ese segundo comando es el gate de Android **local**: da la misma respuesta que el workflow de
+`aarch64-linux-android` en 2 segundos en vez de 2 minutos, porque el `cfg` que decide es `target_os`.
+
+`cargo test` en ese scratch **sigue fallando** (linkear con `windows` pide `dlltool`). Para eso está
+`src-tauri/displays-tests/`, que ya vive en el repo y corre en CI — ver **ADR-011**.
+
+Con esta técnica, la Fase 2 se verificó ANTES del CI: check verde en ambas ramas y **sin una sola
+advertencia**, 13 tests de lógica en verde, 22 del vendor en verde, `node --check` OK. **Usar esto en
+la Fase 3** — es mucho más barato que gastar una corrida de CI de 11-30 minutos para descubrir un
+error de tipos.
+
+### Addendum al ADR-003 — endurecimientos que se sumaron en la Fase 2
+
+El ADR-003 decía "dos cambios de código, los únicos". Ya no son dos; quedan anotados acá para que el
+diff contra el donante siga siendo auditable. Ninguno cambia comportamiento observable:
+
+- `apply.rs::gamma_ramp_looks_identity` — `ramp[base + i]` → `.get()`. El índice máximo es 767 sobre
+  un array de 768, o sea era seguro; se cambió por consistencia con la regla de "cero indexing crudo".
+- `enumerate.rs::query_active_topology` — el error de `query_raw_database_current` se registra en
+  `stats.discarded` en vez de descartarse con `.ok()`. Mismo control de flujo, más rastro.
+- `topology.rs::settle_poll` — `missing[0]` → `.first()`, y un `MAX_SETTLE_ATTEMPTS = 64` **además**
+  del plazo por reloj (el peor caso legítimo son 14 vueltas). Regla del proyecto: ningún bucle de
+  reintento sin contador.
+- `topology.rs::choose_remap_candidate` — `candidates[0]`/`enumerated[0]`/`enabled[0]` → `.first()`.
+- `apply.rs` — el mensaje de error de `SetDisplayConfig` dejó de estar escrito a mano en dos archivos.
+  Ahora la constante y el reconocedor del **error 87** viven juntos en `apply.rs` y `topology.rs` los
+  usa. Antes, cambiar ese `format!` apagaba la escalera de rescate **en silencio**.
 
 Arreglo de fondo si alguna vez se quiere el gate local completo: instalar los binutils de mingw-w64
 (para tener `dlltool.exe`) **o** las C++ Build Tools de Visual Studio.

@@ -2,83 +2,112 @@
 
 > Save game del proyecto. `/cierre` lo SOBREESCRIBE ENTERO en cada sesión — acá nunca se apila historia (eso vive en CHANGELOG). El hook SessionStart lo inyecta en cada chat nuevo.
 
-**Cierre**: 2026-07-20 · **Último commit**: `2955104` · **Branch**: `feat/displays` (**pusheado**, origin coincide) · **Working tree**: limpio.
+**Cierre**: 2026-07-20 · **Branch**: `feat/displays` · **Working tree**: limpio.
 
-> Este handoff cubre **DOS sesiones** del mismo día: la Fase 1 de displays, y el gate de Android que vino después. La segunda no llegó a correr su `/cierre`, así que sus docs se escribieron desde la sesión siguiente, **verificando cada claim contra los runs reales del CI** (no contra su reporte).
+## En una línea
 
-## Sesión 2 (última) — **Gate de Android en el CI: HECHO y PROBADO EN FALSO**
+**La Fase 2 del SPEC-displays está escrita y verde, pero NO probada en hardware.** Prender y apagar
+la TV con red de auto-rollback existe en el código, compila en las dos ramas de `cfg` sin una sola
+advertencia y tiene 13 tests propios en verde — pero **nadie prendió una TV todavía**. Eso es lo
+único que falta para darla por hecha.
 
-Cierra el hueco que la Fase 1 dejó declarado. `.github/workflows/android-cfg-gate.yml` (nuevo, archivo aparte — **no se tocó `build.yml`**): corre en `ubuntu-latest` y hace **una sola cosa**, `cargo check --target aarch64-linux-android`. No construye la app: solo type-checkea, que es todo lo que hace falta para cazar una **fuga de `cfg`**.
+## Lo que se hizo
 
-- **Evidencia verificada contra la API de GitHub** (no contra el reporte de la sesión):
-  - `Android cfg gate` @ `2955104` (código sano) → ✅ **success**, 2,1 min.
-  - `Android cfg gate` @ `488b4c4` (rama descartable, **con una fuga plantada a propósito**: se le sacó el `#[cfg]` a `views_from_topology`) → ❌ **failure**. **El gate está probado en falso**: se pone rojo cuando el código está mal. Sin esto sería decoración.
-  - `Build Windows` @ `2955104` → ✅ **success**: no se rompió nada.
-- **Costo real**: 2,1 min y **el NDK NO se descarga** — `ubuntu-latest` lo trae preinstalado en `ANDROID_NDK_ROOT`. Se necesita solo porque `ring` compila C en su `build.rs`. Nunca se acercó al timebox de 15 min, y corre **en paralelo** al job de Windows ⇒ el CI no tarda más en pared.
-- **Se descartó `tauri android build --debug`**: 20-40 min, y depende de `src-tauri/gen/android/`, que es zona de la regla dura "NUNCA correr `tauri android init`". No agrega señal para este propósito: una fuga de `cfg` revienta en el type-check, mucho antes del linker o de Gradle.
-- **Un solo ABI alcanza**: el `cfg` que decide es `target_os`, que vale igual para los cuatro. Chequear los otros tres sería pagar 4× por la misma respuesta.
-- **Limitación honesta**: este gate caza fugas de `cfg` en **Rust**. NO cubre regresiones de Gradle/manifest/Kotlin — eso sigue necesitando un build de Android de verdad, a mano.
-- La rama de prueba con la fuga se borró de local y de GitHub; nunca tocó `feat/displays`.
+- **Motor de apply portado de Monarch** (`apply.rs`, 934 líneas): las 5 llamadas a `SetDisplayConfig`
+  con sus combinaciones exactas de flags, la sonda `SDC_VALIDATE` obligatoria, y el guardado/
+  restauración de gamma, calibración de color y fondos alrededor del cambio. Un verificador comparó
+  función por función contra el donante: cero drift.
+- **Backend con la escalera de rescate** (`topology.rs`, ~1300 líneas): cache en `Mutex`, merges,
+  remapeo de `DisplayId`, y los 4 escalones — attach explícito (batch creciendo de a uno, cada paso
+  sondeado) → `SDC_TOPOLOGY_EXTEND` → `DisplaySwitch /extend` → rollback + error preciso.
+- **El watchdog de auto-rollback** (`watchdog.rs`), que es **la pieza que el crate puro no tiene**.
+  Escrito, no copiado: el del donante tenía una carrera que podía dejar el layout pegado para
+  siempre (ADR-009). 8 tests.
+- **El resume-listener** (`system_events.rs`): ventana oculta que tira el cache al despertar la
+  máquina. Cero CPU en reposo (`GetMessageW` bloquea, no hay poll).
+- **El store apuntado al APPDATA de Millennium** (`store.rs`), sobre el `JsonStore` atómico, con un
+  test que se pone rojo si la ruta llegara a tocar `%APPDATA%\Monarch`.
+- **Frontend**: ATTACH/DETACH por fila + barra de cuenta regresiva con CONFIRMAR / REVERTIR AHORA,
+  que se rehidrata si cerrás y reabrís el modal.
+- **Glue de Tauri**: arranque **no-fatal** (si el motor no levanta, Millennium anda igual) y los
+  comandos toman el estado con `try_state`, nunca con `State<...>` — Tauri **panica** al resolver un
+  State ausente, y con `panic = "abort"` eso mata también el portapapeles.
 
-## Sesión 1 — SPEC-displays: **Fase 1 IMPLEMENTADA y VERIFICADA EN HARDWARE REAL**
+## Tres cosas que aparecieron y valen más que el port
 
-Se migró de Monarch el camino de **lectura** del motor CCD y se expuso en un modal propio. **Cerró también el pendiente físico de la Fase 0** (correr el binario en la máquina de 3 displays), así que no queda nada colgado de la etapa anterior.
+1. **Los tests de este repo no corrían en NINGÚN lado.** Ni local (falta linker para el target
+   no-Windows) ni en CI (`build.yml` nunca invocó `cargo test`). Eran verdes por no existir. Se
+   armó `src-tauri/displays-tests/` + su workflow: 13 tests de la red de seguridad en cada push, con
+   un paso que falla si corrieron menos de los esperados. **ADR-011.**
+2. **Un segundo camino escribía en `%APPDATA%\Monarch`** además del store señalado: la persistencia
+   binaria del snapshot de topología. Y era el mismo código que hacía `assume_init` sobre bytes
+   leídos de disco. No se portó. **ADR-008.**
+3. **Dos agujeros en la propia red**, encontrados trazando el camino del apply: si la
+   re-enumeración de verificación fallaba, o si el rollback inmediato fallaba, el cambio quedaba
+   aplicado y **sin nadie persiguiéndolo** — el bug exacto que la fase viene a matar. Los dos ahora
+   dejan el watchdog armado. La regla quedó escrita en el código: pasado el punto de aplicar, ningún
+   camino puede salir sin watchdog, y por eso ahí no hay un solo `?`.
 
-- **Vendor** (`src-tauri/vendor/monarch/`, 10 archivos): copia del crate puro desde **`guidocameraeq/Monarch` — el fork de Guido, NO el upstream de Nuzair46** — commit `7f9f63b`. LICENSE MIT íntegro con sus dos copyrights. Path-dep bajo el target-table de Windows ⇒ Android no lo ve.
-- **Motor** (`src-tauri/src/displays/`): `enumerate.rs` + `win32_types.rs`, windows-only con doble gate. Solo ejecuta `GetDisplayConfigBufferSizes`, `QueryDisplayConfig` y `DisplayConfigGetDeviceInfo`.
-- **Comando** `displays_get_snapshot`: async + `spawn_blocking`, **sin `cfg` en el `generate_handler!`** (decide el cuerpo; fuera de Windows devuelve `Err`) — patrón de `apply_update`.
-- **Frontend**: botón HUD `DISP` + modal + lista con badges PRIMARY/ACTIVE/DETACHED. Render por diff, molde de `buildPeerItem`.
-- **Reemplazó** el `mod ccd_link_smoke` de la Fase 0 (canario de linkeo, ya no aporta: el motor real llama la misma familia de funciones).
-- **`docs/DECISIONS.md` nuevo** (6 ADRs + la doctrina CCD heredada para la Fase 2 + la nota de verificación).
+## Estado real, sin maquillaje
 
-## 🔑 Las 3 decisiones que se apartaron del SPEC (todas documentadas como ADR)
+| Qué | Estado |
+|---|---|
+| `cargo check` rama Windows (crate scratch, archivos reales por `#[path]`) | ✅ sin advertencias |
+| `cargo check` rama no-Windows (caza fugas de `cfg`) | ✅ sin advertencias |
+| `cargo test` en `src-tauri/displays-tests` | ✅ **13 passed** |
+| `cargo test` en `vendor/monarch` | ✅ **22 passed** |
+| `node --check src/main.js` | ✅ |
+| **CI (Windows + Android + displays-tests)** | ⬜ **pendiente del push de este cierre** |
+| **Hardware: la TV se apaga y se prende** | ⬜ **NO PROBADO** |
+| **Regresión: clipboard / discovery / transferencias** | ⬜ **NO PROBADO** (no se corrió la app) |
+| **CPU en reposo** | ⬜ **NO MEDIDO** (el diseño no agrega poll, pero eso es argumento, no evidencia) |
 
-1. **NO se copió `topology.rs` ni `apply.rs`** (ADR-002). El SPEC pedía `enumerate/topology/win32_types/mod`, pero `topology.rs` importa **12 símbolos de `apply.rs`** y su `new()` llama `capture_sdr_gamma_ramps` ⇒ copiarlo arrastraba el motor de apply entero, con sus 5 `SetDisplayConfig`. Y **no hacía falta**: todo su andamiaje (cache, merges, persistencia) existe para **re-adjuntar**, no para leer — sus propios comentarios lo dicen. Se fueron con él: el `assume_init` sobre bytes de disco, el acople a `%APPDATA%\Monarch\config.json` (¡el config real de Monarch del usuario!) y el único `eprintln!`.
-2. **Vendor por copia, no `git subtree`** (ADR-001): el subtree traía 80 archivos para usar 8, y un `subtree split --prefix=src` no incluye el `Cargo.toml` de la raíz.
-3. **Sin estado ⇒ no se tocó `AppState` ni `setup()`** (ADR-005). Consecuencia del punto 1. Sin cache no hay `Mutex`, así que la regla de "nunca sostener un lock a través de un `.await`" se cumple **por construcción**.
-
-## Evidencia (verificado, no supuesto)
-
-- **CI VERDE**: run [29754851028](https://github.com/guidocameraeq/Millennium-Clipboard/actions/runs/29754851028), **6,5 min**, los 12 pasos `success`, artefacto `.exe` **4,19 MB** (el `Upload` usa `if-no-files-found: error` ⇒ el binario existe).
-- **Prueba física del usuario en el desktop de 3 displays** (2026-07-20): aparecen **los 3 monitores reales**, **incluida la desconectada** (el caso difícil — Windows no la lista por el camino normal). **Regresión OK**: copiar/pegar y envío de archivos siguieron funcionando igual.
-- **Verificación local ANTES del CI** (ver abajo, el hallazgo del harness): `cargo check` verde en **las dos ramas de `cfg`** (0 errores, 0 warnings) · **4 tests** del módulo en verde (ejecutados) · **22 tests** del vendor en verde · `node --check` OK.
-- **Cero `SetDisplayConfig`**: `grep -rn "SetDisplayConfig\|ChangeDisplaySettings" src-tauri/src src-tauri/vendor | grep -v "//"` → **0 líneas**.
-
-## 🔑 Hallazgo que cambia cómo se trabaja de acá en adelante
-
-**El build local NO estaba roto por el crate `windows`.** El que pide `dlltool.exe` es **`parking_lot_core`**, una dependencia transitiva de Tauri. `windows 0.60` usa `windows-link`/raw-dylib y **el toolchain gnu lo chequea sin problema**.
-
-⇒ El módulo de displays **se puede verificar local** en un crate scratch con las mismas dependencias reales (`windows 0.60` + mismas features + path-dep real al vendor + serde) y un `mod runtime_log` de mentira. `cargo check` ✅ type-checkea las dos ramas de `cfg`; `cargo test` ❌ (linkear sí pide `dlltool`) ⇒ para correr tests de lógica pura, segunda variante sin la dep `windows`. **Usar esto en las Fases 2 y 3**: es mucho más barato que quemar una corrida de CI. Receta completa en `docs/DECISIONS.md`.
-
-## Review adversarial (5 lentes, 23 agentes) — 7 hallazgos reales, todos corregidos antes del push
-
-Los dos que importaban:
-- **El botón `DISP` se veía igual en Android**: el atributo `hidden` del HTML se apoya en la regla `[hidden]{display:none}` del navegador, y **cualquier** declaración de `display` del autor le gana. `.hud-btn` declara `display:inline-flex` (y `html.is-mobile .hud-btn` encima usa `!important`). Fix: `.hud-btn[hidden] { display: none !important; }`. **El codebase ya había tropezado con esto** (`.backend-banner[hidden]`, `.qr-pane[hidden]`).
-- **El techo de buffers era demasiado bajo** (1024/2048 → **65 536/131 072**): `QDC_ALL_PATHS` es **combinatorio** (una entrada por cada source×target de cada adaptador). Con placa integrada + dedicada + virtuales se pasa, y el `Err` se lo tragaban el `let ... else` del seeder y el `.ok()` del enriquecimiento ⇒ el modo de falla era **"la TV desconectada no aparece", en silencio**. También se cambió el descarte silencioso por un log en la línea `enum:`.
+**Review adversarial automático: NO CORRIÓ** — los 6 agentes murieron por límite de sesión. Se hizo
+una auditoría a mano que cubrió: cero `unwrap`/`expect`/`panic!` fuera de tests (verificado línea por
+línea), todos los `.lock()` manejan el error, el timer del frontend se limpia en todos los caminos de
+salida, y el único `innerHTML` es un template estático sin datos del backend. **Lo que quedó sin
+auditar a fondo**: deadlocks entre el watchdog y un comando concurrente (el orden de toma de locks es
+siempre manager → cache, revisado a mano, pero no exhaustivamente), y la rama Android de la glue
+nueva de `lib.rs` — esa la cubre el gate de Android del CI.
 
 ## Próximo paso CONCRETO
 
-**Chat nuevo → Fase 2 del SPEC-displays** ("Apply con red de seguridad"). El prerequisito de Android **ya está cerrado**, así que se puede ir directo.
+1. Esperar los 3 workflows del push. Si el de Android o el de tests se pone rojo, arreglar eso primero.
+2. Bajar `millennium-clipboard.exe` del run de `Build Windows`.
+3. **Ensayo sin riesgo**: correrlo con `MONARCH_FORCE_MOCK_BACKEND=1`, abrir DISPLAYS, apretar DETACH
+   en un monitor de mentira y **no confirmar**. Tiene que volver solo. Eso prueba la red completa
+   (watchdog + eventos + UI) sin tocar el hardware.
+4. **La prueba de verdad**, en el desktop de 3 displays, en este orden:
+   - DETACH de la TV → se apaga · **no confirmar** → vuelve sola a los ~10 s.
+   - DETACH de la TV → se apaga · CONFIRMAR → se queda apagada.
+   - ATTACH de la TV → se prende.
+   - Que los otros dos monitores no se hayan movido de lugar.
+5. Con la TV andando: **regresión** — que el clipboard siga sincronizando y una transferencia siga
+   funcionando, y mirar el Task Manager en reposo.
+6. Mirar el modal LOG: `apply:sdc_status:*`, `recover:*` y `watchdog:*` cuentan qué escalón de la
+   escalera se usó. Si tuvo que llegar a `DisplaySwitch`, vale anotarlo.
 
-Traer `apply.rs` **y** la mitad de `topology.rs` que hoy no está (cache + merges + persistencia — es la maquinaria del re-attach). **Re-implementar las DOS piezas de seguridad**: el resume-listener (`invalidate_backend_cache()` al despertar) **y** el watchdog de auto-rollback (el manager del crate puro es **pasivo**: guarda el deadline pero NO dispara; sin la glue, un layout malo queda pegado y nadie revierte = el bug de la TV). Front: countdown Confirmar/Revertir. **Leer `docs/DECISIONS.md` → "Doctrina CCD heredada" ANTES de escribir una línea.** Al instanciar el manager, apuntar su store al APPDATA de **Millennium**: el default escribe sobre el `config.json` real de Monarch del usuario.
+## Bloqueos
 
-## Bloqueos / huecos conocidos
-
-- **CPU en reposo**: NO se verificó explícitamente en Task Manager esta sesión. El diff no agrega poll ni timer (la enumeración corre solo al abrir el modal o apretar REFRESH), así que el riesgo es teórico — pero queda sin evidencia.
-- Los **4 tests** de `displays/mod.rs` están gateados `#[cfg(all(test, not(windows)))]` ⇒ **no corren ni local ni en CI** (el harness de tests del crate se rompe en Windows, pendiente viejo del TODO). Se ejecutaron a mano en el crate scratch. No son decoración, pero hoy nadie los corre automáticamente.
+Ninguno técnico. Lo único que frena declarar la fase hecha es que la prueba de hardware la tiene que
+hacer una persona con la TV enchufada.
 
 ## Archivos tocados
 
-- **Sesión 2**: `.github/workflows/android-cfg-gate.yml` (nuevo) · `.github/workflows/build.yml` (comentario: ya no es el único gate).
-- **Código nuevo**: `src-tauri/src/displays/{mod,enumerate,win32_types}.rs` · `src-tauri/vendor/monarch/` (10 archivos, incluido `PROVENANCE.md`).
-- **Código modificado**: `src-tauri/Cargo.toml` (+path-dep) · `src-tauri/Cargo.lock` (**tenía un agujero de la Fase 0: no reflejaba el `windows 0.60`**) · `src-tauri/src/lib.rs` (+mod, +comando, −smoke) · `src/{index.html,main.js,styles.css}` · `.github/workflows/build.yml` (comentario).
-- **Docs**: `docs/DECISIONS.md` (nuevo) + este HANDOFF, CHANGELOG, TODO, y la línea 3 de `docs/SPEC-displays.md`.
+**Nuevos**: `src-tauri/src/displays/{apply,topology,backend,store,watchdog,system_events,ids}.rs` ·
+`src-tauri/displays-tests/` · `.github/workflows/displays-tests.yml`
+**Modificados**: `src-tauri/src/displays/{mod,enumerate,win32_types}.rs` · `src-tauri/src/lib.rs` ·
+`src/{main.js,index.html,styles.css}` · `docs/{DECISIONS,CHANGELOG,TODO,SPEC-displays}.md`
 
-## Contexto importante para la próxima sesión
+## Contexto que no está en otros docs
 
-- **El donante es el fork de Guido** (`guidocameraeq/Monarch` @ `7f9f63b`), NO el upstream. Él lo remarcó explícitamente: el valor de la migración ES su fork, porque es el que peleó y ganó contra la TV. Receta de re-sincronización en `vendor/monarch/PROVENANCE.md`.
-- **`MonarchDisplayManager::new()` NO es read-only**: sincroniza huellas y puede escribir el store. Con el `FileConfigStore` por default esa escritura va a **`%APPDATA%\Monarch\config.json` — el config real de Monarch del usuario**. La Fase 1 no lo instancia; **cuando la Fase 2 lo haga, apuntarlo al APPDATA de Millennium**.
-- **Convivencia de versiones `windows`**: la 0.60 (nuestra, pineada) y la 0.61.x (transitiva de tauri/wry) conviven, pero son **tipos incompatibles** — nunca cruzar un handle de la API de Tauri a una función del crate 0.60 sin pasar por `isize`/raw.
-- **`runtime_log` expone `err`, NO `error`**, y son funciones que toman `impl Into<String>`, no macros con formato inline.
-- El **centinela `0x0`** de un monitor desconectado no es un bug: Windows no reporta modo para un panel apagado. La UI lo muestra como "—".
-- **En el escritorio del usuario quedó la carpeta `Millennium DISPLAYS - prueba`** (instructivo + `.bat` para abrir con monitores de mentira vía `MONARCH_FORCE_MOCK_BACKEND`). Se puede borrar cuando quiera.
+- **El gate local mejoró y conviene usarlo en la Fase 3**: el crate scratch ya no copia archivos, los
+  incluye con `#[path]`, así que chequea el código que de verdad va al binario. Y
+  `cargo check --target x86_64-unknown-linux-gnu` da la misma respuesta que el workflow de Android
+  en 2 segundos. La receta completa está al final de `docs/DECISIONS.md`.
+- **`watchdog.rs`, `store.rs` e `ids.rs` no pueden empezar a usar `windows` ni `tauri`.** Si lo
+  hacen, salen del crate de tests y la red de seguridad vuelve a quedar sin probar. Es una
+  restricción de diseño, no una casualidad.
+- El scratch de `cargo check` vive fuera del repo (en el temp de la sesión); si hace falta rearmarlo,
+  la receta está en `DECISIONS.md`. El que **sí** está en el repo y es permanente es
+  `src-tauri/displays-tests/`.

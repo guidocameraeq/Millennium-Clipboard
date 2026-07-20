@@ -2792,7 +2792,7 @@ html.fx-off .status-item .status-dot { animation: none !important; }
 
 
 /* ===========================================================================
-   DISPLAYS (SPEC-displays, Fase 1 — solo lectura)
+   DISPLAYS (SPEC-displays, Fase 2 — lectura + attach/detach con red)
    Espeja el molde del modal LOG y la fila de peers. Paleta: las variables de
    :root, sin colores sueltos.
    =========================================================================== */
@@ -2903,14 +2903,80 @@ html.fx-off .status-item .status-dot { animation: none !important; }
   background: transparent;
 }
 
-.displays-empty,
-.displays-readonly-note {
+.displays-empty {
   font-size: 10px;
   letter-spacing: 2px;
   color: var(--text-dim);
 }
 
-.displays-readonly-note { margin-right: auto; }
+/* --- Fase 2: el boton ATTACH/DETACH de cada fila ------------------------- */
+.display-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+}
+
+/* Ancho fijo: ATTACH y DETACH tienen distinto largo y la fila no puede saltar
+   cada vez que un monitor cambia de estado. */
+.display-toggle-btn {
+  min-width: 86px;
+  text-align: center;
+}
+
+/* Un boton apagado tiene que LEERSE apagado: es el unico aviso de que ese
+   monitor no se puede tocar (es el ultimo activo, o hay un cambio pendiente).
+   Scoped al modal de displays para no tocar el resto de la app. */
+.displays-modal .modal-btn:disabled,
+.displays-modal .modal-btn:disabled:hover {
+  opacity: 0.35;
+  cursor: not-allowed;
+  background: transparent;
+  border-color: var(--text-dim);
+  color: var(--text-dim);
+  text-shadow: none;
+  box-shadow: none;
+}
+
+/* --- Fase 2: barra de confirmacion --------------------------------------- */
+/* Ambar y no cian a proposito: esto no es informacion, es una decision que
+   vence sola. Vive entre el body y las acciones, con el mismo borde/fondo que
+   .modal-actions para que se lea como parte del pie del modal. */
+.displays-pending {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 18px;
+  border-top: 1px solid var(--neon-amber);
+  background: rgba(255, 179, 71, 0.08);
+}
+/* SIN ESTO LA BARRA NO SE ESCONDE NUNCA. El `hidden` del HTML se apoya en la
+   regla `[hidden]{display:none}` de la hoja del navegador, y cualquier `display`
+   del autor le gana (origen autor > origen user-agent). Misma piedra que
+   .hud-btn[hidden] y .qr-pane[hidden] mas arriba. */
+.displays-pending[hidden] { display: none !important; }
+
+.displays-pending-glyph {
+  font-size: 16px;
+  line-height: 1;
+  color: var(--neon-amber);
+  flex: 0 0 auto;
+}
+
+.displays-pending-text {
+  flex: 1 1 140px;
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--neon-amber);
+  text-shadow: 0 0 6px rgba(255, 179, 71, 0.35);
+}
+
+/* Ventana angosta: la fila ya no entra en una linea con el boton, asi que el
+   boton baja en vez de aplastar el nombre del monitor. */
+@media (max-width: 560px) {
+  .display-item { flex-wrap: wrap; }
+  .display-actions { margin-left: auto; }
+}
 
 /* Cartel de datos falsos: tiene que gritar, para que nadie confunda una demo
    con la maquina real. */
