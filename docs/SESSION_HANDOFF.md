@@ -87,19 +87,31 @@ Cómo funciona el auto-updater de esta app (verificado leyendo `src-tauri/src/up
   fail-safe a propósito). Y agarra **el primero** que encuentra, así que no puede haber otro hex de
   64 antes que el bueno.
 
-Pasos:
-1. Commit + push de este cierre → esperar los 3 workflows en verde sobre el commit nuevo.
-2. Bajar el artefacto `millennium-clipboard-<sha>` del run de `Build Windows` y sacarle el `.exe`.
-3. Calcular el hash: `Get-FileHash millennium-clipboard.exe -Algorithm SHA256`.
-4. Crear el **prerelease** `v1.1.0` con el `.exe` adjunto y el hash en el cuerpo.
-5. **Probar el updater de verdad**: abrir una copia de la **v1.0.0**, Settings → APP UPDATES →
-   CHECK → DOWNLOAD & RESTART, y confirmar que queda en 1.1.0. Sin esa prueba, el release está
-   publicado pero el camino de actualización sigue sin evidencia.
+**HECHO** — prerelease `v1.1.0` publicado sobre `ee406cf`:
+https://github.com/guidocameraeq/Millennium-Clipboard/releases/tag/v1.1.0
+
+Verificado **contra la API pública, simulando lo que hace el updater** (no contra la web): se queda
+con `v1.1.0` (prerelease, no borrador), encuentra el asset `millennium-clipboard.exe` (9,9 MB), y el
+token de 64 hex que lee del cuerpo **coincide** con el SHA-256 real del archivo
+(`a00be6ee…c179dc60`). El `.exe` reporta `1.1.0` en sus metadatos.
+
+`gh` quedó instalado (v2.96.0) y autenticado como `guidocameraeq`, así que los próximos releases se
+publican desde acá sin trámite.
+
+### Lo único que queda: probar el updater de verdad
+
+Abrir una copia de la **v1.0.0** → Settings → APP UPDATES → CHECK FOR UPDATE → DOWNLOAD & RESTART, y
+confirmar que queda en 1.1.0. **Sin esa prueba, el release está publicado pero el camino de
+actualización no tiene evidencia.**
+
+Dato que hace esta prueba más interesante de lo normal: **el release v1.0.0 NO tiene un hash de 64
+hex en su cuerpo**, y el updater aborta sin hash. O sea que el camino de actualización probablemente
+viene roto desde antes, y esta es la primera versión publicada con el hash como corresponde. Si el
+CHECK desde la 1.0.0 funciona, se arregló solo; si falla, mirar `updater.rs::extract_sha256` primero.
 
 ## Bloqueos
 
-Ninguno técnico. Para publicar hace falta `gh` autenticado (`winget install --id GitHub.cli` +
-`gh auth login`) — la sesión no tiene credenciales de GitHub propias.
+Ninguno.
 
 ## Archivos tocados
 
