@@ -92,22 +92,40 @@ https://github.com/guidocameraeq/Millennium-Clipboard/releases/tag/v1.1.0
 
 Verificado **contra la API pública, simulando lo que hace el updater** (no contra la web): se queda
 con `v1.1.0` (prerelease, no borrador), encuentra el asset `millennium-clipboard.exe` (9,9 MB), y el
-token de 64 hex que lee del cuerpo **coincide** con el SHA-256 real del archivo
-(`a00be6ee…c179dc60`). El `.exe` reporta `1.1.0` en sus metadatos.
+hash coincide con el SHA-256 real del archivo (`a00be6ee…c179dc60`). El `.exe` reporta `1.1.0` en
+sus metadatos.
 
 `gh` quedó instalado (v2.96.0) y autenticado como `guidocameraeq`, así que los próximos releases se
 publican desde acá sin trámite.
+
+### ⚠️ Corrección — de dónde saca el hash el updater (esto estaba mal escrito antes)
+
+`updater.rs:146-150`: **prefiere el campo `digest` que GitHub calcula solo por cada asset**
+(`"sha256:<hex>"`), y **solo si no está** se cae a buscar un token de 64 hex en el cuerpo del
+release. El comentario del código lo dice con todas las letras: el enfoque solo-cuerpo *"abortaba en
+todos los releases actuales"*, y se arregló el 2026-07-13.
+
+Consecuencias, verificadas contra la API:
+- **Todos** los releases del repo tienen `digest` en su asset, incluido `v1.0.0`. O sea que poner el
+  hash en el cuerpo es **cinturón extra, no requisito**. (Vale igual: cuesta cero y cubre un asset
+  sin digest.)
+- Queda **descartada** la sospecha de que el camino de actualización viniera roto por falta de hash.
+  Lo que decida si funciona es la prueba de abajo, no ese detalle.
+
+### 🐛 Bug destapado por publicar como prerelease: la landing sirve la versión vieja
+
+`GET /releases/latest` devuelve **`v1.0.0`**, no la 1.1.0: GitHub **excluye los prereleases** de
+"latest". El botón de descarga del README y de la landing apuntan ahí, así que **quien entre de cero
+se baja la 1.0.0**. Al updater no lo afecta (usa la lista completa, donde los prereleases sí
+cuentan), así que esto golpea solo a usuarios nuevos. Se arregla cuando la 1.1.0 pase de prerelease
+a release final (`gh release edit v1.1.0 --prerelease=false`), que era el plan una vez que se use
+unos días sin sorpresas.
 
 ### Lo único que queda: probar el updater de verdad
 
 Abrir una copia de la **v1.0.0** → Settings → APP UPDATES → CHECK FOR UPDATE → DOWNLOAD & RESTART, y
 confirmar que queda en 1.1.0. **Sin esa prueba, el release está publicado pero el camino de
 actualización no tiene evidencia.**
-
-Dato que hace esta prueba más interesante de lo normal: **el release v1.0.0 NO tiene un hash de 64
-hex en su cuerpo**, y el updater aborta sin hash. O sea que el camino de actualización probablemente
-viene roto desde antes, y esta es la primera versión publicada con el hash como corresponde. Si el
-CHECK desde la 1.0.0 funciona, se arregló solo; si falla, mirar `updater.rs::extract_sha256` primero.
 
 ## Bloqueos
 
