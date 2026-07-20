@@ -132,6 +132,38 @@ colapsar en el mismo id, que es la clave del render por diff.
 
 ---
 
+## ADR-007 — El gate de Android es un `cargo check`, no un build de verdad
+
+**Decisión**: `.github/workflows/android-cfg-gate.yml` corre `cargo check --target aarch64-linux-android`
+en `ubuntu-latest`, **un solo ABI**, y nada más. Archivo aparte de `build.yml`.
+
+**Qué protege**: que código windows-only se escape de su `#[cfg(target_os = "windows")]` y termine
+compilándose en Android. Antes de esto, el único job era `windows-latest` — donde por definición TODO
+el código de Windows compila y **una fuga no se nota**. El aislamiento estaba revisado por lectura y
+nunca probado, justo cuando el árbol se llenaba de código Win32.
+
+**Alternativa descartada — `tauri android build --debug`**: 20-40 min contra 2,1; arrastra JDK +
+Gradle + SDK; y depende de `src-tauri/gen/android/`, que en este repo se edita a mano y es zona de la
+regla dura *"NUNCA correr `tauri android init`"*. Para este propósito **no agrega señal**: una fuga de
+`cfg` revienta en el type-check, mucho antes del linker o de Gradle.
+
+**Un solo ABI alcanza**: el `cfg` que decide es `target_os`, que vale igual para los cuatro.
+Chequear los otros tres es pagar 4× por la misma respuesta.
+
+**El NDK no se descarga**: `ubuntu-latest` lo trae preinstalado en `ANDROID_NDK_ROOT`. Hace falta solo
+porque `ring` (el proveedor cripto de rustls) compila C en su `build.rs` — o sea, `cargo check` **no**
+es NDK-free, contra la intuición de que "check no linkea".
+
+**Probado en falso, y esto es lo que lo separa de la decoración**: en una rama descartable se le sacó
+el `#[cfg]` a `views_from_topology` y el gate se puso **rojo** (`E0433`). Con el código sano, verde.
+**Un gate que nunca se vio fallar no es un gate.** Cualquiera que lo modifique debería repetir esa
+prueba.
+
+**Limitación declarada**: caza fugas de `cfg` en **Rust**. NO cubre regresiones de Gradle, del
+manifest ni de Kotlin — eso sigue necesitando un build de Android de verdad, a mano.
+
+---
+
 ## Doctrina CCD heredada — **PROHIBIDO simplificar** (para la Fase 2)
 
 Esto todavía **no está implementado** acá: la Fase 1 no toca la topología. Queda escrito porque es

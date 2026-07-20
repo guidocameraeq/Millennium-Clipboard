@@ -5,7 +5,8 @@ name: Build Windows (portable .exe)
 #  - bundle.active=false en tauri.conf ⇒ `tauri build` no genera instalador;
 #    el artefacto es el .exe portable directo.
 #  - crt-static ya viene de .cargo/config.toml (VC++ Redist no requerido).
-# SPEC-displays: este workflow es el ÚNICO gate de compilación del proyecto. El
+# SPEC-displays: este workflow es el único gate que COMPILA Y LINKEA de verdad
+# (el de plataforma vive aparte, en `android-cfg-gate.yml`, y solo type-checkea). El
 # build local está roto (el toolchain default es windows-gnu y le falta
 # dlltool.exe; forzar el target MSVC tampoco alcanza porque faltan las C++ Build
 # Tools), así que "compila" solo se puede afirmar desde acá.

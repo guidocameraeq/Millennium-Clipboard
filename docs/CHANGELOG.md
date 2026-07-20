@@ -2,7 +2,22 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
-## 2026-07-20 — SPEC-displays Fase 1 (ver los monitores, read-only) IMPLEMENTADA + VERIFICADA EN HARDWARE REAL
+## 2026-07-20 (b) — Gate de Android en el CI: cierra el hueco que dejó la Fase 1
+
+El aislamiento de plataforma pasa de **revisado por lectura** a **probado**. Hasta acá el único job era `windows-latest`, donde por definición TODO el código windows-only compila y una fuga de `cfg` no se nota; recién se hubiera visto intentando un build de Android a mano, meses después. Verificado **contra la API de GitHub**, no contra el reporte de la sesión que lo construyó.
+
+### Added
+- **`.github/workflows/android-cfg-gate.yml`** (nuevo, archivo aparte — **no se tocó `build.yml`**): corre en `ubuntu-latest` y hace una sola cosa, `cargo check --target aarch64-linux-android`. No construye la app; type-checkea, que es todo lo que hace falta para cazar código windows-only escapado de su `#[cfg(target_os = "windows")]`.
+  - **Probado en falso** (lo que lo separa de la decoración): en una rama descartable se le sacó el `#[cfg]` a `views_from_topology` y el gate se puso **rojo** (`E0433: cannot find module win32_types`); con el código sano, **verde**. Runs: `2955104` ✅ (2,1 min) · `488b4c4` ❌. `Build Windows` @ `2955104` ✅ — no se rompió nada.
+  - **Costo**: 2,1 min, y el **NDK no se descarga** (`ubuntu-latest` lo trae en `ANDROID_NDK_ROOT`; hace falta solo porque `ring` compila C en su `build.rs`). Corre **en paralelo** al job de Windows ⇒ el CI no tarda más en pared.
+  - **Descartado `tauri android build --debug`**: 20-40 min, arrastra JDK + Gradle + SDK, y depende de `src-tauri/gen/android/` — zona de la regla dura "NUNCA correr `tauri android init`". No agrega señal acá: una fuga de `cfg` revienta en el type-check, mucho antes del linker o de Gradle.
+  - **Un solo ABI alcanza**: el `cfg` que decide es `target_os`, idéntico para los cuatro.
+  - **Limitación declarada**: caza fugas de `cfg` en **Rust**. NO cubre regresiones de Gradle/manifest/Kotlin.
+
+### Changed
+- **`.github/workflows/build.yml`** — el comentario decía que era "el ÚNICO gate de compilación del proyecto"; ya no lo es. Ahora aclara que es el único que **compila y linkea de verdad**, y que el de plataforma vive aparte.
+
+## 2026-07-20 (a) — SPEC-displays Fase 1 (ver los monitores, read-only) IMPLEMENTADA + VERIFICADA EN HARDWARE REAL
 
 Se migró de **`guidocameraeq/Monarch` @ `7f9f63b`** (el fork de Guido, NO el upstream) el camino de **lectura** del motor CCD, y se expuso en un modal propio. **Cero `SetDisplayConfig`: el motor de apply no se copió, no existe en el repo** (verificable con grep — los únicos hits del nombre son comentarios). Diff aditivo; núcleo de Millennium (clipboard/discovery/HTTPS/transferencias/pinning) **intacto**. **Cerró también el pendiente físico de la Fase 0.** Verificado con **CI verde** (run [29754851028](https://github.com/guidocameraeq/Millennium-Clipboard/actions/runs/29754851028), 6,5 min, 12/12 pasos `success`, `.exe` 4,19 MB) **y con la prueba física del usuario en el desktop de 3 displays**: aparecen los 3 monitores reales, **incluida la desconectada**, y el uso diario siguió igual. Review adversarial previo al push (5 lentes, 23 agentes) → **7 hallazgos reales, todos corregidos**.
 

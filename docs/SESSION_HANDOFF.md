@@ -2,9 +2,25 @@
 
 > Save game del proyecto. `/cierre` lo SOBREESCRIBE ENTERO en cada sesión — acá nunca se apila historia (eso vive en CHANGELOG). El hook SessionStart lo inyecta en cada chat nuevo.
 
-**Cierre**: 2026-07-20 · **Último commit de código**: `76afb8a` · **Branch**: `feat/displays` (**pusheado**, origin coincide) · **Working tree**: limpio. **Esta sesión SÍ tocó código** (backend + frontend, aditivo).
+**Cierre**: 2026-07-20 · **Último commit**: `2955104` · **Branch**: `feat/displays` (**pusheado**, origin coincide) · **Working tree**: limpio.
 
-## Qué se hizo — SPEC-displays: **Fase 1 IMPLEMENTADA y VERIFICADA EN HARDWARE REAL**
+> Este handoff cubre **DOS sesiones** del mismo día: la Fase 1 de displays, y el gate de Android que vino después. La segunda no llegó a correr su `/cierre`, así que sus docs se escribieron desde la sesión siguiente, **verificando cada claim contra los runs reales del CI** (no contra su reporte).
+
+## Sesión 2 (última) — **Gate de Android en el CI: HECHO y PROBADO EN FALSO**
+
+Cierra el hueco que la Fase 1 dejó declarado. `.github/workflows/android-cfg-gate.yml` (nuevo, archivo aparte — **no se tocó `build.yml`**): corre en `ubuntu-latest` y hace **una sola cosa**, `cargo check --target aarch64-linux-android`. No construye la app: solo type-checkea, que es todo lo que hace falta para cazar una **fuga de `cfg`**.
+
+- **Evidencia verificada contra la API de GitHub** (no contra el reporte de la sesión):
+  - `Android cfg gate` @ `2955104` (código sano) → ✅ **success**, 2,1 min.
+  - `Android cfg gate` @ `488b4c4` (rama descartable, **con una fuga plantada a propósito**: se le sacó el `#[cfg]` a `views_from_topology`) → ❌ **failure**. **El gate está probado en falso**: se pone rojo cuando el código está mal. Sin esto sería decoración.
+  - `Build Windows` @ `2955104` → ✅ **success**: no se rompió nada.
+- **Costo real**: 2,1 min y **el NDK NO se descarga** — `ubuntu-latest` lo trae preinstalado en `ANDROID_NDK_ROOT`. Se necesita solo porque `ring` compila C en su `build.rs`. Nunca se acercó al timebox de 15 min, y corre **en paralelo** al job de Windows ⇒ el CI no tarda más en pared.
+- **Se descartó `tauri android build --debug`**: 20-40 min, y depende de `src-tauri/gen/android/`, que es zona de la regla dura "NUNCA correr `tauri android init`". No agrega señal para este propósito: una fuga de `cfg` revienta en el type-check, mucho antes del linker o de Gradle.
+- **Un solo ABI alcanza**: el `cfg` que decide es `target_os`, que vale igual para los cuatro. Chequear los otros tres sería pagar 4× por la misma respuesta.
+- **Limitación honesta**: este gate caza fugas de `cfg` en **Rust**. NO cubre regresiones de Gradle/manifest/Kotlin — eso sigue necesitando un build de Android de verdad, a mano.
+- La rama de prueba con la fuga se borró de local y de GitHub; nunca tocó `feat/displays`.
+
+## Sesión 1 — SPEC-displays: **Fase 1 IMPLEMENTADA y VERIFICADA EN HARDWARE REAL**
 
 Se migró de Monarch el camino de **lectura** del motor CCD y se expuso en un modal propio. **Cerró también el pendiente físico de la Fase 0** (correr el binario en la máquina de 3 displays), así que no queda nada colgado de la etapa anterior.
 
@@ -42,17 +58,18 @@ Los dos que importaban:
 
 ## Próximo paso CONCRETO
 
-1. **Chat nuevo → Fase 2 del SPEC-displays** ("Apply con red de seguridad"): traer `apply.rs` **y** la mitad de `topology.rs` que hoy no está (cache + merges + persistencia — es la maquinaria del re-attach). **Re-implementar las DOS piezas de seguridad**: el resume-listener (`invalidate_backend_cache()` al despertar) **y** el watchdog de auto-rollback (el manager del crate puro es **pasivo**: guarda el deadline pero NO dispara; sin la glue, un layout malo queda pegado y nadie revierte = el bug de la TV). Front: countdown Confirmar/Revertir. **Leer `docs/DECISIONS.md` → "Doctrina CCD heredada" ANTES de escribir una línea.**
-2. **ANTES de la Fase 2, resolver el hueco de Android** (ver Bloqueos).
+**Chat nuevo → Fase 2 del SPEC-displays** ("Apply con red de seguridad"). El prerequisito de Android **ya está cerrado**, así que se puede ir directo.
+
+Traer `apply.rs` **y** la mitad de `topology.rs` que hoy no está (cache + merges + persistencia — es la maquinaria del re-attach). **Re-implementar las DOS piezas de seguridad**: el resume-listener (`invalidate_backend_cache()` al despertar) **y** el watchdog de auto-rollback (el manager del crate puro es **pasivo**: guarda el deadline pero NO dispara; sin la glue, un layout malo queda pegado y nadie revierte = el bug de la TV). Front: countdown Confirmar/Revertir. **Leer `docs/DECISIONS.md` → "Doctrina CCD heredada" ANTES de escribir una línea.** Al instanciar el manager, apuntar su store al APPDATA de **Millennium**: el default escribe sobre el `config.json` real de Monarch del usuario.
 
 ## Bloqueos / huecos conocidos
 
-- ⚠️ **NADIE COMPILÓ PARA ANDROID.** Toda la disciplina de `cfg` de esta fase está revisada por lectura, **no probada**: el único job del CI es `windows-latest`. No rompió nada hoy (el diff es aditivo y gateado), pero **conviene cerrarlo antes de meter más código Win32 en la Fase 2**. Ojo: `cargo check --target aarch64-linux-android` **no es NDK-free** — `ring` compila C en su `build.rs`. Evaluar costo real antes de prometer que es barato.
 - **CPU en reposo**: NO se verificó explícitamente en Task Manager esta sesión. El diff no agrega poll ni timer (la enumeración corre solo al abrir el modal o apretar REFRESH), así que el riesgo es teórico — pero queda sin evidencia.
 - Los **4 tests** de `displays/mod.rs` están gateados `#[cfg(all(test, not(windows)))]` ⇒ **no corren ni local ni en CI** (el harness de tests del crate se rompe en Windows, pendiente viejo del TODO). Se ejecutaron a mano en el crate scratch. No son decoración, pero hoy nadie los corre automáticamente.
 
 ## Archivos tocados
 
+- **Sesión 2**: `.github/workflows/android-cfg-gate.yml` (nuevo) · `.github/workflows/build.yml` (comentario: ya no es el único gate).
 - **Código nuevo**: `src-tauri/src/displays/{mod,enumerate,win32_types}.rs` · `src-tauri/vendor/monarch/` (10 archivos, incluido `PROVENANCE.md`).
 - **Código modificado**: `src-tauri/Cargo.toml` (+path-dep) · `src-tauri/Cargo.lock` (**tenía un agujero de la Fase 0: no reflejaba el `windows 0.60`**) · `src-tauri/src/lib.rs` (+mod, +comando, −smoke) · `src/{index.html,main.js,styles.css}` · `.github/workflows/build.yml` (comentario).
 - **Docs**: `docs/DECISIONS.md` (nuevo) + este HANDOFF, CHANGELOG, TODO, y la línea 3 de `docs/SPEC-displays.md`.
