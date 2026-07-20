@@ -1,6 +1,6 @@
 # SPEC: Módulo de Displays en Millennium — migración del motor de Monarch
 Sumar a Millennium una sección de manejo de monitores (ver, attach/detach de la Smart TV con red de seguridad, perfiles y acomodar), trayendo el motor CCD ya probado de Monarch como módulo Windows-only. Millennium es el host que crece; Monarch es el donante.
-- Estado: EN CURSO — **Fase 0 ✅** (CI verde, commit `5585175`, run 29650684956); Fases 1-3 pendientes
+- Estado: EN CURSO — **Fase 0 ✅** (CI verde, commit `5585175`) · **Fase 1 ✅ IMPLEMENTADA Y VERIFICADA EN HARDWARE** (commit `76afb8a`, run 29754851028, 3 monitores reales + la detached, regresión OK); **Fases 2-3 pendientes**. ⚠️ La Fase 1 se apartó del plan en 3 puntos, todos justificados en `docs/DECISIONS.md`: **`topology.rs` y `apply.rs` NO se copiaron** (ADR-002 — la Fase 2 los trae), vendor por copia y no `git subtree` (ADR-001), y sin campo en `AppState` (ADR-005).
 - Fecha: 2026-07-18
 - Origen: destilado de la súper-investigación en `../docs/INVESTIGACION-migracion-displays.md` del hub (15 agentes, evidencia file:line, verificación adversarial). Formato: SPEC delta (feature sobre app existente).
 
