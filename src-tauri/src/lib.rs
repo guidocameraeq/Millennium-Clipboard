@@ -13,6 +13,7 @@ use uuid::Uuid;
 mod aliases;
 mod clipboard_sync;
 mod discovery;
+mod displays;
 mod http_client;
 mod http_server;
 mod icon_overrides;
@@ -30,30 +31,11 @@ mod android_fs_bridge;
 #[cfg(target_os = "windows")]
 mod windows_integration;
 
-// Fase 0 (SPEC-displays): smoke de linkeo de `windows = 0.60`. Referencia una
-// función CCD raw-dylib REAL (mismo patrón que Monarch enumerate.rs:473) para
-// que el build del CI PRUEBE en el runner MSVC que el crate `windows` enlaza —
-// un dep sin usar no emite el import raw-dylib y no probaría nada. Se llama una
-// vez al arranque (path alcanzable ⇒ el linker no lo descarta). La Fase 1 lo
-// reemplaza por el backend real migrado de Monarch.
-#[cfg(target_os = "windows")]
-mod ccd_link_smoke {
-    use windows::Win32::Devices::Display::{GetDisplayConfigBufferSizes, QDC_ALL_PATHS};
-
-    pub(crate) fn probe_and_log() {
-        let mut path_count = 0u32;
-        let mut mode_count = 0u32;
-        // SAFETY: consulta CCD read-only; solo cuenta buffers, sin punteros de
-        // salida. Sin unwrap/expect a propósito (panic=abort ⇒ un panic tumba
-        // todo el proceso); el status se loguea, nunca se desenrolla.
-        let status =
-            unsafe { GetDisplayConfigBufferSizes(QDC_ALL_PATHS, &mut path_count, &mut mode_count) };
-        crate::runtime_log::info(format!(
-            "[displays] Fase 0 link smoke: GetDisplayConfigBufferSizes status={} paths={} modes={}",
-            status.0, path_count, mode_count
-        ));
-    }
-}
+// (El `mod ccd_link_smoke` de la Fase 0 vivía acá. Era un canario de linkeo:
+// referenciaba una función CCD raw-dylib real para que el CI probara que el
+// crate `windows` enlaza en el runner MSVC. La Fase 1 lo reemplaza por el motor
+// de verdad — `mod displays`, que llama esa misma familia de funciones —, así
+// que el canario ya no aporta nada y se fue.)
 
 // ---------------------------------------------------------------------------
 // Wire types shared with the frontend
@@ -1154,6 +1136,27 @@ async fn prepare_file_for_send(
     Ok(path)
 }
 
+/// Foto de los monitores conectados (SPEC-displays, Fase 1: **solo lectura**).
+///
+/// El comando NO se gatea por plataforma a propósito: se declara siempre, y el
+/// que decide por plataforma es `displays::snapshot()`, que en no-Windows
+/// devuelve `Err`. Es el mismo patrón que `apply_update`. Si en cambio se gateara
+/// la entrada del `generate_handler!`, en Android el `invoke` fallaría con
+/// "Command not found" — un error de plomería en vez de uno del dominio, y
+/// esconder el botón pasaría a ser load-bearing en vez de cosmético.
+///
+/// Va en `spawn_blocking` porque las llamadas CCD son syscalls bloqueantes que
+/// pueden tardar decenas de milisegundos (mismo criterio que la enumeración de
+/// placas de red en `discovery.rs`). No hay `Mutex` de por medio: el motor de la
+/// Fase 1 no tiene estado, así que la regla de "nunca sostener un lock a través
+/// de un `.await`" se cumple por construcción — no hay nada que sostener.
+#[tauri::command]
+async fn displays_get_snapshot() -> Result<displays::DisplaysSnapshot, String> {
+    tokio::task::spawn_blocking(displays::snapshot)
+        .await
+        .map_err(|e| format!("displays: la tarea de enumeración se cayó: {e}"))?
+}
+
 #[tauri::command]
 fn record_frontend_log(level: String, msg: String) {
     match level.as_str() {
@@ -1189,11 +1192,6 @@ pub fn run() {
     // respond.
     #[cfg(target_os = "windows")]
     windows_integration::kill_other_millennium_processes();
-
-    // Fase 0 (SPEC-displays): fuerza el linkeo de `windows 0.60` (ver mod
-    // ccd_link_smoke). Aditivo y no-fatal; la Fase 1 lo reemplaza.
-    #[cfg(target_os = "windows")]
-    ccd_link_smoke::probe_and_log();
 
     let mut builder = tauri::Builder::default();
 
@@ -1681,6 +1679,7 @@ pub fn run() {
             generate_pair_qr,
             pair_with_qr_payload,
             prepare_file_for_send,
+            displays_get_snapshot,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

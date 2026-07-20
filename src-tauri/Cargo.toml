@@ -78,11 +78,32 @@ arboard = "3"
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.55"
 
+# Crate puro `monarch` vendorizado (SPEC-displays, Fase 1): los tipos del modelo
+# de displays (DisplayId/DisplayInfo/Layout/OutputConfig/Resolution/Position) y
+# ManagerError, que es lo que habla el motor CCD de `src/displays/`. Copia de
+# guidocameraeq/Monarch @ 7f9f63b — ver vendor/monarch/PROVENANCE.md.
+#
+# Va DENTRO del target-table de Windows a propósito: es un path-dep, y si viviera
+# en [dependencies] se compilaría también para Android. Verificado empíricamente
+# que un crate anidado NO se vuelve miembro implícito del workspace (cargo
+# metadata ⇒ workspace_members = [millennium-clipboard] solo), así que NO mueve el
+# [profile.release] panic="abort" de abajo.
+monarch = { path = "vendor/monarch" }
+
 # CCD (Connecting and Configuring Displays) API para el módulo de displays
 # (SPEC-displays, migrado de Monarch). raw-dylib ⇒ no necesita import libs del
-# Windows SDK; el link lo prueba el CI (Fase 0). Features = las que usa el motor
-# de Monarch (enumerate/apply/topology). SOLO bajo cfg(windows): Android NO debe
-# ver este crate. Pin 0.60 (convive con el 0.61.x transitivo de tauri/wry).
+# Windows SDK; el link lo prueba el CI (Fase 0). SOLO bajo cfg(windows): Android
+# NO debe ver este crate. Pin 0.60 (convive con el 0.61.x transitivo de
+# tauri/wry; son tipos INCOMPATIBLES entre sí — nunca cruzar un handle de la API
+# de Tauri a una función de acá sin pasar por isize/raw).
+#
+# De estas 10 features, la Fase 1 (read-only) ejerce solo DOS:
+# Win32_Devices_Display (Query/GetDisplayConfig*) y Win32_Foundation
+# (ERROR_INSUFFICIENT_BUFFER). Las otras 8 quedan declaradas porque el CI de la
+# Fase 0 ya probó que ESTE set linkea, y las consume el resto del motor cuando
+# llegue: Gdi/Com/ColorSystem/Shell → apply + calibración de color (Fase 2);
+# LibraryLoader/WindowsAndMessaging → la ventana oculta del watcher
+# WM_DISPLAYCHANGE (Fase 3); Security/System_Threading → sin uso previsto.
 windows = { version = "0.60", features = [
   "Win32_Foundation",
   "Win32_Security",

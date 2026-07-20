@@ -1750,7 +1750,10 @@ textarea:focus-visible,
   .hud-right {
     width: 100%;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    /* auto-fit, no un numero fijo: el HUD tiene 4 botones en Android (DISP se
+       oculta) y 5 en Windows. Un repeat(4) dejaba a DISP solo en una 2da fila
+       ocupando 1/4 del ancho; un repeat(5) dejaria un hueco en Android. */
+    grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
     gap: 6px;
     justify-content: stretch;
   }
@@ -1947,7 +1950,7 @@ html.is-mobile .hud-center { display: none !important; }
 html.is-mobile .hud-right {
   width: 100% !important;
   display: grid !important;
-  grid-template-columns: repeat(4, 1fr) !important;
+  grid-template-columns: repeat(auto-fit, minmax(64px, 1fr)) !important;
   gap: 6px !important;
 }
 html.is-mobile .hud-btn {
@@ -2787,3 +2790,135 @@ html.fx-off .peer-status.online .status-dot,
 html.fx-off .dropzone-icon,
 html.fx-off .status-item .status-dot { animation: none !important; }
 
+
+/* ===========================================================================
+   DISPLAYS (SPEC-displays, Fase 1 — solo lectura)
+   Espeja el molde del modal LOG y la fila de peers. Paleta: las variables de
+   :root, sin colores sueltos.
+   =========================================================================== */
+/* SIN ESTO EL BOTON DISP NO SE OCULTA EN ANDROID.
+   El `hidden` del HTML se apoya en la regla `[hidden]{display:none}` de la hoja
+   del navegador, y CUALQUIER declaracion de `display` del autor le gana (origen
+   autor > origen user-agent, sin importar especificidad). `.hud-btn` declara
+   `display:inline-flex`, y `html.is-mobile .hud-btn` encima usa `!important` —
+   por eso esta regla tambien lo necesita. Sin ella, main.js revela el boton en
+   Windows pero NUNCA logra esconderlo en Android: se ve, se toca, y el invoke
+   devuelve el error de "solo existe en Windows".
+   El codebase ya tropezo con lo mismo: ver .backend-banner[hidden] y
+   .qr-pane[hidden]. */
+.hud-btn[hidden] { display: none !important; }
+
+.displays-modal {
+  width: min(720px, 94vw);
+  max-height: 86vh;
+}
+
+.displays-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.display-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--neon-cyan-soft);
+}
+
+.display-item.is-detached {
+  opacity: 0.55;
+  border-style: dashed;
+}
+
+.display-glyph {
+  font-size: 20px;
+  line-height: 1;
+  color: var(--neon-cyan);
+  flex: 0 0 auto;
+}
+
+.display-item.is-detached .display-glyph {
+  color: var(--text-dim);
+}
+
+.display-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.display-name {
+  font-family: var(--font-display);
+  font-size: 13px;
+  letter-spacing: 1px;
+  color: var(--text-bright);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.display-meta {
+  font-size: 11px;
+  color: var(--text-mute);
+  display: flex;
+  gap: 6px;
+}
+
+.display-sep { color: var(--text-dim); }
+
+.display-badges {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.display-badge {
+  font-size: 9px;
+  padding: 2px 6px;
+  letter-spacing: 1.5px;
+}
+
+.display-badge.active {
+  border-color: var(--neon-cyan);
+  color: var(--neon-cyan);
+}
+
+.display-badge.primary {
+  border-color: var(--neon-magenta);
+  color: var(--neon-magenta);
+  background: rgba(255, 43, 214, 0.06);
+}
+
+.display-badge.detached {
+  border-color: var(--neon-cyan-soft);
+  color: var(--text-dim);
+  background: transparent;
+}
+
+.displays-empty,
+.displays-readonly-note {
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: var(--text-dim);
+}
+
+.displays-readonly-note { margin-right: auto; }
+
+/* Cartel de datos falsos: tiene que gritar, para que nadie confunda una demo
+   con la maquina real. */
+.displays-mock-warning {
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  color: var(--neon-amber);
+  border: 1px dashed var(--neon-amber);
+  padding: 6px 8px;
+  margin: 0 0 10px 0;
+}

@@ -53,6 +53,14 @@
         <button class="hud-btn" data-action="qr" title="QR pairing">
           <span class="hud-btn-glyph">▣</span>QR
         </button>
+        <!-- Displays (SPEC-displays Fase 1). Arranca hidden y lo revela main.js
+             solo fuera de Android: el modulo de monitores es Windows-only. NO se
+             usa .desktop-only para esto — esa clase depende de html.is-mobile,
+             que pre.js activa tambien por ancho<=900 o pantalla tactil, asi que
+             una ventana angosta en Windows perderia el boton. -->
+        <button class="hud-btn" data-action="displays" title="Connected monitors" id="hud-displays-btn" hidden>
+          <span class="hud-btn-glyph">▤</span>DISP
+        </button>
         <button class="hud-btn" data-action="settings" title="Settings">
           <span class="hud-btn-glyph">⚙</span>CONF
         </button>
@@ -481,6 +489,34 @@
         <button class="modal-btn small" id="log-export">▸ EXPORT .TXT</button>
         <button class="modal-btn small" id="log-clear">⌫ CLEAR</button>
         <button class="modal-btn accept" id="log-close">✓ CLOSE</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Displays modal (SPEC-displays Fase 1 — SOLO LECTURA: lista lo que hay,
+       no cambia nada. Attach/detach es Fase 2). Espeja el molde del modal LOG. -->
+  <div class="modal-backdrop" id="displays-modal" hidden>
+    <div class="modal displays-modal">
+      <div class="card-corners">
+        <span></span><span></span><span></span><span></span>
+      </div>
+      <header class="modal-head">
+        <span class="modal-glyph">▤</span>
+        <span class="modal-title">DISPLAYS</span>
+        <span class="mono" id="displays-count" style="margin-left:auto;font-size:10px;opacity:0.6">—</span>
+      </header>
+      <div class="modal-body">
+        <p class="modal-error" id="displays-error" hidden></p>
+        <p class="mono displays-mock-warning" id="displays-mock-warning" hidden>
+          ⚠ DATOS DE PRUEBA — estos monitores son falsos (MONARCH_FORCE_MOCK_BACKEND)
+        </p>
+        <ul class="displays-list" id="displays-list"></ul>
+        <p class="mono displays-empty" id="displays-empty" hidden>Sin monitores para mostrar.</p>
+      </div>
+      <div class="modal-actions">
+        <span class="mono displays-readonly-note">SOLO LECTURA · FASE 1</span>
+        <button class="modal-btn small" id="displays-refresh">↻ REFRESH</button>
+        <button class="modal-btn accept" id="displays-close">✓ CLOSE</button>
       </div>
     </div>
   </div>

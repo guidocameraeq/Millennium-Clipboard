@@ -5,9 +5,15 @@ name: Build Windows (portable .exe)
 #  - bundle.active=false en tauri.conf ⇒ `tauri build` no genera instalador;
 #    el artefacto es el .exe portable directo.
 #  - crt-static ya viene de .cargo/config.toml (VC++ Redist no requerido).
-# Fase 0 del SPEC-displays: prueba que `windows 0.60` (raw-dylib) ENLAZA en el
-# runner MSVC. El link smoke en lib.rs referencia una función CCD real, así que
-# un build verde = el import raw-dylib se resolvió.
+# SPEC-displays: este workflow es el ÚNICO gate de compilación del proyecto. El
+# build local está roto (el toolchain default es windows-gnu y le falta
+# dlltool.exe; forzar el target MSVC tampoco alcanza porque faltan las C++ Build
+# Tools), así que "compila" solo se puede afirmar desde acá.
+#  - Fase 0: probó que `windows 0.60` (raw-dylib) ENLAZA en el runner MSVC,
+#    mediante un smoke que referenciaba una función CCD real.
+#  - Fase 1: ese smoke lo reemplazó el motor de verdad (`src/displays/`), que
+#    llama esa misma familia de funciones ⇒ un build verde sigue probando el
+#    linkeo, ahora con el código posta.
 
 on:
   workflow_dispatch:

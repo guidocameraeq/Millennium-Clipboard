@@ -200,6 +200,7 @@
     activeTransfer: null, // { sessionId, files: [{ fileId, name, size, bytes }], totalBytes }
     activeReceive: null, // { sessionId } — RX bar keying, independent of TX (2.2.e)
     targetLost: false, // the selected peer vanished from the snapshot (2.2.b)
+    displays: [], // monitores del ultimo snapshot (SPEC-displays Fase 1, read-only)
   };
 
   // ---------- Progress bar segments ----------------------------------------
@@ -1088,6 +1089,8 @@
         openQrModal();
       } else if (action === 'settings') {
         openSettingsModal();
+      } else if (action === 'displays') {
+        openDisplaysModal();
       }
     });
   });
@@ -1591,6 +1594,177 @@
   });
 
 
+  // ---------- Displays modal (SPEC-displays, Fase 1) ------------------------
+  // SOLO LECTURA: lista los monitores que reporta Windows. No cambia nada —
+  // attach/detach con red de seguridad es la Fase 2.
+  const displaysBtn = document.getElementById('hud-displays-btn');
+  const displaysModal = document.getElementById('displays-modal');
+  const displaysList = document.getElementById('displays-list');
+  const displaysCount = document.getElementById('displays-count');
+  const displaysError = document.getElementById('displays-error');
+  const displaysEmpty = document.getElementById('displays-empty');
+  const displaysMockWarning = document.getElementById('displays-mock-warning');
+  const displaysRefreshBtn = document.getElementById('displays-refresh');
+  const displaysCloseBtn = document.getElementById('displays-close');
+
+  // El modulo de monitores es Windows-only. En Android el comando existe igual
+  // (devuelve Err), asi que esconder el boton es cosmetico, no load-bearing.
+  // Se usa el userAgent como el resto del codebase, NO html.is-mobile.
+  if (displaysBtn && !/android/i.test(navigator.userAgent)) {
+    displaysBtn.hidden = false;
+  }
+
+  // La CCD API entrega el refresco en miliherz (60000 = 60 Hz).
+  function formatHz(mhz) {
+    if (!Number.isFinite(mhz) || mhz <= 0) return '—';
+    return `${Math.round((mhz / 1000) * 100) / 100} Hz`;
+  }
+
+  // 0x0 no es un bug: es el centinela de un monitor conectado pero sin modo
+  // activo (Windows no reporta resolucion para el que esta apagado).
+  function formatResolution(d) {
+    if (!d.width || !d.height) return '—';
+    return `${d.width} × ${d.height}`;
+  }
+
+  // El estado activo/detached sale SIEMPRE de d.active, para que el badge no
+  // pueda contradecir al estilo .is-detached de la misma fila.
+  function displayBadges(d) {
+    const badges = [];
+    if (d.primary) badges.push({ text: 'PRIMARY', cls: 'primary' });
+    badges.push(d.active ? { text: 'ACTIVE', cls: 'active' } : { text: 'DETACHED', cls: 'detached' });
+    return badges;
+  }
+
+  function buildDisplayItem(d) {
+    const li = document.createElement('li');
+    li.className = 'display-item';
+    li.dataset.id = d.id;
+    // Template ESTATICO: cero interpolacion de datos del backend. Los valores
+    // entran despues por setText/textContent (mismo patron que buildPeerItem).
+    li.innerHTML = `
+      <div class="display-glyph">▤</div>
+      <div class="display-info">
+        <div class="display-name"></div>
+        <div class="display-meta mono">
+          <span class="display-res"></span>
+          <span class="display-sep">·</span>
+          <span class="display-hz"></span>
+        </div>
+      </div>
+      <div class="display-badges"></div>`;
+    updateDisplayItem(li, d);
+    return li;
+  }
+
+  function updateDisplayItem(li, d) {
+    li.dataset.active = d.active ? 'true' : 'false';
+    li.classList.toggle('is-detached', !d.active);
+    setText(li.querySelector('.display-name'), d.name);
+    setText(li.querySelector('.display-res'), formatResolution(d));
+    setText(li.querySelector('.display-hz'), formatHz(d.refreshMhz));
+
+    const badgeBox = li.querySelector('.display-badges');
+    if (badgeBox) {
+      const nodes = displayBadges(d).map((b) => {
+        const span = document.createElement('span');
+        span.className = `badge display-badge ${b.cls}`;
+        span.textContent = b.text;
+        return span;
+      });
+      badgeBox.replaceChildren(...nodes);
+    }
+  }
+
+  // Render por diff, como renderPeers: se reutiliza el <li> existente por
+  // data-id y se borran los que ya no estan.
+  function renderDisplays() {
+    if (!displaysList) return;
+    const items = state.displays || [];
+    const existing = new Map();
+    Array.from(displaysList.querySelectorAll('li.display-item')).forEach((li) => {
+      if (li.dataset.id) existing.set(li.dataset.id, li);
+    });
+    const seen = new Set();
+    items.forEach((d, idx) => {
+      seen.add(d.id);
+      try {
+        let li = existing.get(d.id);
+        if (li) {
+          updateDisplayItem(li, d);
+        } else {
+          li = buildDisplayItem(d);
+        }
+        if (displaysList.children[idx] !== li) {
+          displaysList.insertBefore(li, displaysList.children[idx] || null);
+        }
+      } catch (err) {
+        console.error('[displays] fila malformada', err);
+      }
+    });
+    existing.forEach((li, id) => {
+      if (!seen.has(id)) li.remove();
+    });
+
+    if (displaysEmpty) displaysEmpty.hidden = items.length > 0;
+    if (displaysCount) {
+      const active = items.filter((d) => d.active).length;
+      displaysCount.textContent = `${items.length} monitor(es) · ${active} activo(s)`;
+    }
+  }
+
+  async function loadDisplays() {
+    if (displaysError) displaysError.hidden = true;
+    try {
+      const snapshot = await invoke('displays_get_snapshot');
+      state.displays = Array.isArray(snapshot?.displays) ? snapshot.displays : [];
+      if (displaysMockWarning) displaysMockWarning.hidden = snapshot?.source !== 'mock';
+      renderDisplays();
+    } catch (err) {
+      state.displays = [];
+      renderDisplays();
+      if (displaysMockWarning) displaysMockWarning.hidden = true;
+      if (displaysError) {
+        // textContent: el mensaje puede venir de Windows, nunca por innerHTML.
+        displaysError.textContent = String(err);
+        displaysError.hidden = false;
+      }
+      setStatus(`ERR displays · ${err}`, { priority: 'err' });
+    }
+  }
+
+  async function openDisplaysModal() {
+    if (!displaysModal) return;
+    // Vaciar antes del await: si no, al reabrir se ven los monitores del
+    // snapshot anterior como si fueran los de ahora.
+    state.displays = [];
+    renderDisplays();
+    if (displaysCount) displaysCount.textContent = 'LEYENDO…';
+    // renderDisplays() con la lista vacia prende el "Sin monitores"; durante la
+    // lectura todavia no sabemos eso.
+    if (displaysEmpty) displaysEmpty.hidden = true;
+    displaysModal.hidden = false;
+    focusFirstControl(displaysModal);
+    await loadDisplays();
+  }
+
+  function closeDisplaysModal() {
+    if (displaysModal) displaysModal.hidden = true;
+  }
+
+  if (displaysCloseBtn) displaysCloseBtn.addEventListener('click', closeDisplaysModal);
+  if (displaysRefreshBtn) {
+    displaysRefreshBtn.addEventListener('click', async () => {
+      blip(880, 0.06);
+      await loadDisplays();
+    });
+  }
+  if (displaysModal) {
+    displaysModal.addEventListener('click', (e) => {
+      if (e.target === displaysModal) closeDisplaysModal();
+    });
+  }
+
   // Close any modal on ESC or click outside the panel (defensive layer
   // in case a stray JS error elsewhere skips listeners).
   document.addEventListener('keydown', (e) => {
@@ -1601,6 +1775,7 @@
       if (!peerDetailsModal.hidden) closePeerDetailsModal();
       if (logModal && !logModal.hidden) closeLogModal();
       if (qrModal && !qrModal.hidden) closeQrModal();
+      if (displaysModal && !displaysModal.hidden) closeDisplaysModal();
     }
   });
 
