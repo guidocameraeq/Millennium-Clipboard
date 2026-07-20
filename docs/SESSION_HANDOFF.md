@@ -6,10 +6,10 @@
 
 ## En una línea
 
-**La Fase 2 del SPEC-displays está escrita y verde, pero NO probada en hardware.** Prender y apagar
-la TV con red de auto-rollback existe en el código, compila en las dos ramas de `cfg` sin una sola
-advertencia y tiene 13 tests propios en verde — pero **nadie prendió una TV todavía**. Eso es lo
-único que falta para darla por hecha.
+**La Fase 2 del SPEC-displays está HECHA y verificada en el hardware real.** En el desktop de 3
+displays: la TV se apaga y se prende, **si no se confirma vuelve sola**, si se confirma se queda, y
+los otros dos monitores no se movieron. Los 3 workflows del CI en verde. Lo que sigue es publicar
+`v1.1.0` como prerelease para que el auto-updater la levante.
 
 ## Lo que se hizo
 
@@ -57,9 +57,12 @@ advertencia y tiene 13 tests propios en verde — pero **nadie prendió una TV t
 | `cargo test` en `src-tauri/displays-tests` | ✅ **13 passed** |
 | `cargo test` en `vendor/monarch` | ✅ **22 passed** |
 | `node --check src/main.js` | ✅ |
-| **CI (Windows + Android + displays-tests)** | ⬜ **pendiente del push de este cierre** |
-| **Hardware: la TV se apaga y se prende** | ⬜ **NO PROBADO** |
-| **Regresión: clipboard / discovery / transferencias** | ⬜ **NO PROBADO** (no se corrió la app) |
+| CI @ `9534822` — Android cfg gate (0,7 min) · Displays logic tests (1,2 min) · Build Windows (6,3 min) | ✅ **los 3 verdes** |
+| **Hardware — la TV se apaga (DETACH) y se prende (ATTACH)** | ✅ **verificado por Guido** |
+| **Hardware — no confirmar ⇒ vuelve sola** (EL criterio de la fase) | ✅ **verificado por Guido** |
+| **Hardware — confirmar ⇒ se queda** | ✅ **verificado por Guido** |
+| **Hardware — los otros 2 monitores no se movieron** | ✅ **verificado por Guido** |
+| **Regresión: clipboard / discovery / transferencias** | ⬜ **NO PROBADO** — la app corrió, pero no se ejerció una transferencia |
 | **CPU en reposo** | ⬜ **NO MEDIDO** (el diseño no agrega poll, pero eso es argumento, no evidencia) |
 
 **Review adversarial automático: NO CORRIÓ** — los 6 agentes murieron por límite de sesión. Se hizo
@@ -70,27 +73,33 @@ auditar a fondo**: deadlocks entre el watchdog y un comando concurrente (el orde
 siempre manager → cache, revisado a mano, pero no exhaustivamente), y la rama Android de la glue
 nueva de `lib.rs` — esa la cubre el gate de Android del CI.
 
-## Próximo paso CONCRETO
+## Próximo paso CONCRETO — publicar `v1.1.0` como prerelease
 
-1. Esperar los 3 workflows del push. Si el de Android o el de tests se pone rojo, arreglar eso primero.
-2. Bajar `millennium-clipboard.exe` del run de `Build Windows`.
-3. **Ensayo sin riesgo**: correrlo con `MONARCH_FORCE_MOCK_BACKEND=1`, abrir DISPLAYS, apretar DETACH
-   en un monitor de mentira y **no confirmar**. Tiene que volver solo. Eso prueba la red completa
-   (watchdog + eventos + UI) sin tocar el hardware.
-4. **La prueba de verdad**, en el desktop de 3 displays, en este orden:
-   - DETACH de la TV → se apaga · **no confirmar** → vuelve sola a los ~10 s.
-   - DETACH de la TV → se apaga · CONFIRMAR → se queda apagada.
-   - ATTACH de la TV → se prende.
-   - Que los otros dos monitores no se hayan movido de lugar.
-5. Con la TV andando: **regresión** — que el clipboard siga sincronizando y una transferencia siga
-   funcionando, y mirar el Task Manager en reposo.
-6. Mirar el modal LOG: `apply:sdc_status:*`, `recover:*` y `watchdog:*` cuentan qué escalón de la
-   escalera se usó. Si tuvo que llegar a `DisplaySwitch`, vale anotarlo.
+La versión ya está subida a **1.1.0** en `Cargo.toml`, `tauri.conf.json` y `Cargo.lock` (el CI corre
+con `--locked`, así que el lock **tiene** que ir en el mismo commit).
+
+Cómo funciona el auto-updater de esta app (verificado leyendo `src-tauri/src/updater.rs`):
+- Consulta `GET /repos/guidocameraeq/Millennium-Clipboard/releases?per_page=30`, descarta los
+  **borradores** y se queda con el primero. **Los prereleases SÍ cuentan** — es el modo normal acá.
+- Compara el `tag_name` contra la versión compilada. Tag esperado: **`v1.1.0`**.
+- Baja el asset `.exe` y **verifica su SHA-256 contra un token de 64 caracteres hexadecimales que
+  busca en el CUERPO del release**. Si el cuerpo no tiene ninguno, **se niega a instalar** (es
+  fail-safe a propósito). Y agarra **el primero** que encuentra, así que no puede haber otro hex de
+  64 antes que el bueno.
+
+Pasos:
+1. Commit + push de este cierre → esperar los 3 workflows en verde sobre el commit nuevo.
+2. Bajar el artefacto `millennium-clipboard-<sha>` del run de `Build Windows` y sacarle el `.exe`.
+3. Calcular el hash: `Get-FileHash millennium-clipboard.exe -Algorithm SHA256`.
+4. Crear el **prerelease** `v1.1.0` con el `.exe` adjunto y el hash en el cuerpo.
+5. **Probar el updater de verdad**: abrir una copia de la **v1.0.0**, Settings → APP UPDATES →
+   CHECK → DOWNLOAD & RESTART, y confirmar que queda en 1.1.0. Sin esa prueba, el release está
+   publicado pero el camino de actualización sigue sin evidencia.
 
 ## Bloqueos
 
-Ninguno técnico. Lo único que frena declarar la fase hecha es que la prueba de hardware la tiene que
-hacer una persona con la TV enchufada.
+Ninguno técnico. Para publicar hace falta `gh` autenticado (`winget install --id GitHub.cli` +
+`gh auth login`) — la sesión no tiene credenciales de GitHub propias.
 
 ## Archivos tocados
 

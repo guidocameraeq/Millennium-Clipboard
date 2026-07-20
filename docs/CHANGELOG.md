@@ -2,11 +2,19 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
-## 2026-07-20 (c) — SPEC-displays Fase 2: attach/detach de la TV **con red de auto-rollback**
+## 2026-07-20 (c) — SPEC-displays Fase 2 **IMPLEMENTADA Y VERIFICADA EN HARDWARE** · v1.1.0
 
 Entra el motor que efectivamente cambia los monitores, con las dos piezas de seguridad puestas.
-**Sin verificar en hardware todavía**: lo de acá abajo está probado por compilación y por tests, no
-por una TV prendiéndose. Ver `SESSION_HANDOFF.md` para qué falta.
+
+**Verificado en el hardware real** (desktop de 3 displays, `.exe` del CI @ `9534822`, los 4 criterios
+de aceptación de la fase): la TV se apaga con DETACH y se prende con ATTACH · **si no se confirma,
+vuelve sola** · si se confirma, se queda · los otros dos monitores no se movieron de lugar.
+
+CI @ `9534822`: `Android cfg gate` ✅ (0,7 min) · `Displays logic tests` ✅ (1,2 min) ·
+`Build Windows` ✅ (6,3 min).
+
+Versión **1.0.0 → 1.1.0** (feature nueva, nada rompe). El `Cargo.lock` va en el mismo commit: el
+gate de Android corre con `--locked` y si no coincide, falla.
 
 ### Added
 - **`src-tauri/src/displays/apply.rs`** (portado de Monarch @ `7f9f63b`) — el motor que llama
