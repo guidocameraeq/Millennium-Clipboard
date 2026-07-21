@@ -2,11 +2,16 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
-## 2026-07-21 — SPEC-displays Fase 3 IMPLEMENTADA (perfiles, ajustes, watcher, lienzo) · falta hardware
+## 2026-07-21 — SPEC-displays Fase 3 IMPLEMENTADA y VERIFICADA en hardware (núcleo) · v1.2.0
 
 Cierra el motor de displays: además de ver y attach/detach, ahora hay perfiles, ajustes, refresco en
-vivo y un lienzo para acomodar los monitores. Verificado LOCAL (scratch + tests + 2 rondas de review);
-**NO probado en hardware** todavía (es el próximo paso).
+vivo y un lienzo para acomodar los monitores. Verificado LOCAL (scratch + tests + 2 rondas de review) y
+**en hardware el núcleo** (desktop de 3 displays, `.exe` del prerelease `v1.2.0-beta.1` instalado por
+el auto-updater desde 1.1.0): guardar/cargar perfil ✅, acomodar en el lienzo y aplicar ✅, y el
+**auto-revert vuelve solo** si no se confirma ✅. De paso quedó probada por primera vez la automatización
+de release (`release.yml`). **Pendientes menores** (anotados en TODO): cambiar el plazo desde AJUSTES, la
+lista refrescándose sola al enchufar/desenchufar, y la regresión (transferencia/clipboard + CPU en reposo).
+Se publica como **v1.2.0** (release final).
 
 ### Added
 - **Perfiles** — comandos `displays_list_profiles` / `save_profile` / `load_profile` / `delete_profile`,
