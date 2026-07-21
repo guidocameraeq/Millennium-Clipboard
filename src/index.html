@@ -559,6 +559,28 @@
               <button class="modal-btn small accept" type="button" id="displays-settings-save">GUARDAR</button>
             </div>
           </div>
+          <!-- Displays v2, Fase 1: aplicar un perfil al encender -->
+          <div class="displays-setting">
+            <label class="displays-setting-label" for="displays-startup-profile">Aplicar un perfil al encender</label>
+            <p class="displays-setting-hint">Al arrancar Windows con Millennium en la bandeja (autostart), aplica este perfil solo. Si el layout ya coincide, no hace nada.</p>
+            <div class="displays-setting-row">
+              <select class="displays-setting-select" id="displays-startup-profile">
+                <option value="">— ninguno —</option>
+              </select>
+            </div>
+          </div>
+          <!-- Displays v2, Fase 1: interruptor general de los atajos de perfil -->
+          <div class="displays-setting">
+            <label class="displays-setting-label">Atajos de teclado por perfil</label>
+            <p class="displays-setting-hint">Interruptor general. Cada atajo se asigna por perfil en la pestaña PERFILES. Apagado, ninguno funciona.</p>
+            <div class="displays-setting-row">
+              <label class="sound-toggle">
+                <input type="checkbox" id="displays-shortcuts-enabled" />
+                <span class="sound-track"><span class="sound-thumb"></span></span>
+                <span class="settings-value mono" id="displays-shortcuts-enabled-label">ON</span>
+              </label>
+            </div>
+          </div>
         </div>
 
         <!-- Pane: LIENZO (Fase 3) -->

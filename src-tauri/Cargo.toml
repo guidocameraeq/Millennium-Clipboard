@@ -78,6 +78,13 @@ arboard = "3"
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.55"
 
+# Atajos de teclado globales por perfil (Displays v2, Fase 1). Va en la tabla
+# windows a propósito: Android NO debe verlo. Consecuencia obligatoria: el
+# registro del plugin en lib.rs también va bajo #[cfg(target_os = "windows")]
+# (no #[cfg(desktop)], que incluiría mac/linux sin la dep). Re-exporta los tipos
+# de `global_hotkey`: Shortcut = HotKey, ShortcutState = HotKeyState.
+tauri-plugin-global-shortcut = "2"
+
 # Crate puro `monarch` vendorizado (SPEC-displays, Fase 1): los tipos del modelo
 # de displays (DisplayId/DisplayInfo/Layout/OutputConfig/Resolution/Position) y
 # ManagerError, que es lo que habla el motor CCD de `src/displays/`. Copia de

@@ -1632,6 +1632,10 @@
   const displaysProfileConfirmNo = document.getElementById('displays-profile-confirm-no');
   const displaysRevertSecsInput = document.getElementById('displays-revert-secs');
   const displaysSettingsSaveBtn = document.getElementById('displays-settings-save');
+  // Displays v2, Fase 1: perfil de arranque + interruptor de atajos.
+  const displaysStartupSelect = document.getElementById('displays-startup-profile');
+  const displaysShortcutsToggle = document.getElementById('displays-shortcuts-enabled');
+  const displaysShortcutsToggleLabel = document.getElementById('displays-shortcuts-enabled-label');
   const displaysCanvas = document.getElementById('displays-canvas');
   const displaysCanvasEmpty = document.getElementById('displays-canvas-empty');
   const displaysCanvasApplyBtn = document.getElementById('displays-canvas-apply');
@@ -1674,6 +1678,13 @@
   let displaysLastShownSec = -1;
   // Fase 3: acción destructiva de perfil esperando el OK del banner de confirmación.
   let pendingProfileAction = null; // { type: 'overwrite'|'delete', name }
+  // Displays v2, Fase 1: captura de un atajo de teclado para un perfil.
+  let shortcutCaptureName = null;  // perfil que está capturando, o null
+  let shortcutKeyHandler = null;   // listener one-shot de keydown mientras se captura
+  // Displays v2, Fase 1: AJUSTES recién es seguro de guardar cuando loadSettings
+  // terminó de poblar los controles. Sin esto, un cambio disparado durante la
+  // carga mandaría los defaults vacíos y borraría el perfil de arranque guardado.
+  let displaysSettingsLoaded = false;
   // Fase 3: estado del lienzo de arrastre.
   let canvasView = null;   // { scale, minX, minY, offsetX, offsetY } del último render
   let canvasDirty = false; // hay un acomodo local sin aplicar (protege de refrescos)
@@ -1764,6 +1775,7 @@
       </div>
       <div class="display-badges"></div>
       <div class="display-actions">
+        <button class="modal-btn small display-primary-btn" type="button">★ primario</button>
         <button class="modal-btn small display-toggle-btn" type="button"></button>
       </div>`;
     updateDisplayItem(li, d);
@@ -1795,6 +1807,22 @@
         btn.title = 'Hay un cambio esperando confirmación.';
       } else {
         btn.title = detaching ? 'Apagar este monitor' : 'Encender este monitor';
+      }
+    }
+
+    // ★ primario: solo tiene sentido en un monitor ACTIVO que no sea ya el
+    // primario. En una fila apagada o ya primaria se esconde (el badge PRIMARY
+    // ya dice cuál es). Se apaga mientras hay un cambio en vuelo o pendiente.
+    const primBtn = li.querySelector('.display-primary-btn');
+    if (primBtn) {
+      const canBePrimary = !!d.active && !d.primary;
+      primBtn.hidden = !canBePrimary;
+      if (canBePrimary) {
+        const waiting = !!state.displaysPending;
+        primBtn.disabled = waiting || state.displaysBusy;
+        primBtn.title = waiting
+          ? 'Hay un cambio esperando confirmación.'
+          : 'Hacer este monitor el primario (pasa por la cuenta regresiva).';
       }
     }
 
@@ -1918,6 +1946,29 @@
     }
   }
 
+  // Hacer primario un monitor (Displays v2, Fase 1). Espejo de toggleDisplay: es
+  // un cambio en vivo, así que vuelve con la MISMA red (cuenta regresiva) y el
+  // backend ya re-enumeró antes de devolver el snapshot.
+  async function setPrimaryDisplay(id) {
+    if (state.displaysBusy || state.displaysPending) return;
+    const target = (state.displays || []).find((d) => d.id === id);
+    if (!target) return;
+    state.displaysBusy = true;
+    if (displaysError) displaysError.hidden = true;
+    refreshDisplaysUi();
+    blip(660, 0.06);
+    setStatus(`DISPLAYS · haciendo primario ${target.name}…`, { force: true });
+    try {
+      applyDisplaysSnapshot(await invoke('displays_set_primary', { displayId: id }));
+    } catch (err) {
+      try { await loadDisplays(); } catch (_) {}
+      showDisplaysError(err);
+    } finally {
+      state.displaysBusy = false;
+      refreshDisplaysUi();
+    }
+  }
+
   // CONFIRMAR / REVERTIR AHORA: los dos hacen lo mismo salvo el comando.
   async function resolveDisplaysPending(command, doneMsg) {
     if (!state.displaysPending || state.displaysBusy) return;
@@ -1953,6 +2004,7 @@
     displaysPanes.forEach((p) => { p.hidden = p.dataset.pane !== tab; });
     if (displaysError) displaysError.hidden = true;
     hideProfileConfirm();
+    cancelShortcutCapture();
     // Los datos de perfiles/ajustes se piden recién al entrar a su pestaña.
     if (tab === 'profiles') loadProfiles();
     else if (tab === 'settings') loadSettings();
@@ -1976,6 +2028,8 @@
       </div>
       <div class="displays-profile-actions">
         <button class="modal-btn small accept displays-profile-load" type="button">CARGAR</button>
+        <button class="modal-btn small displays-profile-update" type="button">↻ actualizar</button>
+        <button class="modal-btn small displays-profile-shortcut" type="button">⌨ atajo</button>
         <button class="modal-btn small reject displays-profile-delete" type="button">BORRAR</button>
       </div>`;
     updateProfileItem(li, p);
@@ -1997,6 +2051,31 @@
         : 'Aplicar este perfil (vuelve solo si no lo confirmás).';
     }
     if (delBtn) delBtn.disabled = busy;
+
+    // Displays v2, Fase 1: botón actualizar (pisa el perfil con el layout actual)
+    // y botón de atajo (muestra la combinación asignada o "atajo").
+    const updateBtn = li.querySelector('.displays-profile-update');
+    if (updateBtn) {
+      updateBtn.disabled = busy || pending;
+      updateBtn.title = pending
+        ? 'Hay un cambio esperando confirmación.'
+        : 'Pisar este perfil con el layout actual (previa confirmación).';
+    }
+    const scBtn = li.querySelector('.displays-profile-shortcut');
+    // Si esta fila está capturando un atajo, no se le pisa el texto (lo maneja
+    // el flujo de captura); si no, refleja el atajo guardado.
+    if (scBtn && shortcutCaptureName !== p.name) {
+      scBtn.disabled = busy;
+      // Esta fila NO está capturando: sacar el latido magenta si venía de una
+      // captura anterior (renderProfiles reusa el <li>, la clase no se limpia sola).
+      scBtn.classList.remove('capturing');
+      const sc = (typeof p.shortcut === 'string' && p.shortcut) ? p.shortcut : '';
+      scBtn.textContent = sc ? `⌨ ${sc}` : '⌨ atajo';
+      scBtn.classList.toggle('has-shortcut', !!sc);
+      scBtn.title = sc
+        ? `Atajo: ${sc}. Clic para cambiarlo (Supr borra · Esc cancela).`
+        : 'Asignar un atajo global para aplicar este perfil.';
+    }
   }
 
   // Render por diff, como renderDisplays: se reusa el <li> por data-name.
@@ -2151,21 +2230,181 @@
     }
   }
 
+  // --- Displays v2, Fase 1: actualizar perfil + atajos ----------------------
+
+  // "↻ actualizar": pisar el perfil con el layout actual. Es tu dato → se pide
+  // OK por el mismo banner que el guardado, y se reusa doSaveProfile (upsert por
+  // nombre exacto).
+  function updateProfileFlow(name) {
+    if (state.displaysBusy || state.displaysPending) return;
+    askProfileConfirm(
+      { type: 'overwrite', name },
+      `Pisar "${name}" con el layout actual (monitores, posiciones y primario de ahora).`
+    );
+  }
+
+  // Captura de un atajo: al clickear el botón se escucha el próximo keydown y se
+  // arma el accelerator ("Ctrl+Shift+1"). Requiere al menos un modificador
+  // (Ctrl/Shift/Alt). Esc cancela; Supr/Backspace borra el atajo del perfil.
+  function startShortcutCapture(name) {
+    if (state.displaysBusy) return;
+    cancelShortcutCapture(); // por si había otra fila capturando
+    shortcutCaptureName = name;
+    if (displaysProfilesList) {
+      // Buscar la fila por dataset.name (no por selector con el valor inyectado).
+      const li = Array.from(displaysProfilesList.querySelectorAll('li.displays-profile-item'))
+        .find((x) => x.dataset && x.dataset.name === name);
+      const btn = li ? li.querySelector('.displays-profile-shortcut') : null;
+      if (btn) { btn.textContent = '⌨ apretá teclas…'; btn.classList.add('capturing'); }
+    }
+    setStatus('DISPLAYS · apretá una combinación con Ctrl/Shift/Alt · Supr borra · Esc cancela', { force: true, ttl: 8000 });
+    shortcutKeyHandler = onShortcutCaptureKey;
+    document.addEventListener('keydown', shortcutKeyHandler, true);
+  }
+
+  function cancelShortcutCapture() {
+    if (shortcutKeyHandler) {
+      document.removeEventListener('keydown', shortcutKeyHandler, true);
+      shortcutKeyHandler = null;
+    }
+    const wasCapturing = shortcutCaptureName !== null;
+    shortcutCaptureName = null;
+    // Restaurar el texto del botón desde el estado (limpia la clase 'capturing').
+    if (wasCapturing) renderProfiles();
+  }
+
+  function onShortcutCaptureKey(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const key = e.key;
+    if (key === 'Escape') {
+      cancelShortcutCapture();
+      setStatus('DISPLAYS · captura cancelada', { ttl: 2500 });
+      return;
+    }
+    if (key === 'Delete' || key === 'Backspace') {
+      const name = shortcutCaptureName;
+      cancelShortcutCapture();
+      if (name) clearShortcut(name);
+      return;
+    }
+    // Un modificador suelto no cierra la captura: se espera una tecla real.
+    if (key === 'Control' || key === 'Shift' || key === 'Alt' || key === 'Meta') return;
+    const mods = [];
+    if (e.ctrlKey) mods.push('Ctrl');
+    if (e.shiftKey) mods.push('Shift');
+    if (e.altKey) mods.push('Alt');
+    if (mods.length === 0) {
+      setStatus('DISPLAYS · usá al menos Ctrl, Shift o Alt', { priority: 'warn', ttl: 3000 });
+      return; // se sigue capturando
+    }
+    const token = accelKeyToken(e);
+    if (!token) {
+      setStatus('DISPLAYS · esa tecla no sirve (usá letras, números o F1–F24)', { priority: 'warn', ttl: 3500 });
+      return; // se sigue capturando
+    }
+    const accelerator = mods.concat(token).join('+');
+    const name = shortcutCaptureName;
+    cancelShortcutCapture();
+    if (name) assignShortcut(name, accelerator);
+  }
+
+  // Traduce el keydown a un token que el parser de Tauri acepta ("A","1","F1"…).
+  // Se usa e.code (físico) para no depender del layout de teclado.
+  function accelKeyToken(e) {
+    const code = e.code || '';
+    if (/^Key[A-Z]$/.test(code)) return code.slice(3);       // KeyA -> A
+    if (/^Digit[0-9]$/.test(code)) return code.slice(5);     // Digit1 -> 1
+    if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;  // F1..F24
+    return null;
+  }
+
+  async function assignShortcut(name, accelerator) {
+    if (state.displaysBusy) return;
+    state.displaysBusy = true;
+    renderProfiles();
+    try {
+      const profiles = await invoke('displays_set_profile_shortcut', { name, accelerator });
+      state.displaysProfiles = Array.isArray(profiles) ? profiles : [];
+      setStatus(`DISPLAYS · atajo ${accelerator} → "${name}"`, { force: true });
+    } catch (err) {
+      // Conflicto (la combinación la usa otro programa) o inválida: el backend
+      // ya deshizo el guardado; acá solo se avisa.
+      showDisplaysError(err);
+    } finally {
+      state.displaysBusy = false;
+      renderProfiles();
+    }
+  }
+
+  async function clearShortcut(name) {
+    if (state.displaysBusy) return;
+    state.displaysBusy = true;
+    renderProfiles();
+    try {
+      const profiles = await invoke('displays_clear_profile_shortcut', { name });
+      state.displaysProfiles = Array.isArray(profiles) ? profiles : [];
+      setStatus(`DISPLAYS · atajo de "${name}" borrado`, { force: true });
+    } catch (err) {
+      showDisplaysError(err);
+    } finally {
+      state.displaysBusy = false;
+      renderProfiles();
+    }
+  }
+
   // --- Fase 3: ajustes ------------------------------------------------------
+
+  // Rellena el <select> del perfil de arranque desde la lista de perfiles, sin
+  // innerHTML (createElement + textContent). Preserva la selección si el perfil
+  // sigue existiendo; si no, cae a "ninguno".
+  function populateStartupOptions() {
+    if (!displaysStartupSelect) return;
+    const current = displaysStartupSelect.value;
+    const profiles = Array.isArray(state.displaysProfiles) ? state.displaysProfiles : [];
+    displaysStartupSelect.replaceChildren();
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = '— ninguno —';
+    displaysStartupSelect.appendChild(none);
+    profiles.forEach((p) => {
+      const opt = document.createElement('option');
+      opt.value = p.name;
+      opt.textContent = p.name;
+      displaysStartupSelect.appendChild(opt);
+    });
+    displaysStartupSelect.value = profiles.some((p) => p.name === current) ? current : '';
+  }
 
   async function loadSettings() {
     if (displaysError) displaysError.hidden = true;
+    displaysSettingsLoaded = false; // hasta poblar, saveSettings NO debe correr
+    // El selector de startup necesita la lista de perfiles: se pide si no está.
+    if (state.displaysProfiles === null) { try { await loadProfiles(); } catch (_) {} }
+    populateStartupOptions();
     try {
       const settings = await invoke('displays_get_settings');
       const secs = Number(settings && settings.revertTimeoutSecs);
       if (displaysRevertSecsInput && Number.isFinite(secs)) displaysRevertSecsInput.value = String(secs);
+      const startup = settings && settings.startupProfileName;
+      if (displaysStartupSelect) displaysStartupSelect.value = (typeof startup === 'string') ? startup : '';
+      const shortcutsOn = !!(settings && settings.globalShortcutsEnabled);
+      if (displaysShortcutsToggle) displaysShortcutsToggle.checked = shortcutsOn;
+      if (displaysShortcutsToggleLabel) displaysShortcutsToggleLabel.textContent = shortcutsOn ? 'ON' : 'OFF';
+      displaysSettingsLoaded = true; // ahora sí: los controles reflejan el backend
     } catch (err) {
       showDisplaysError(err);
     }
   }
 
+  // Guarda LOS TRES ajustes juntos (plazo + perfil de arranque + interruptor de
+  // atajos). Se manda siempre el objeto completo para no pisar dato del usuario
+  // con un default; el backend preserva el resto (mapa de atajos, bases, etc.).
   async function saveSettings() {
-    if (state.displaysBusy) return;
+    // No guardar hasta que loadSettings haya poblado los controles: si no, se
+    // mandarían los defaults vacíos y se borraría el perfil de arranque (dato del
+    // usuario). Y no reentrar mientras hay un guardado en vuelo.
+    if (state.displaysBusy || !displaysSettingsLoaded) return;
     const raw = Number(displaysRevertSecsInput && displaysRevertSecsInput.value);
     if (!Number.isFinite(raw)) {
       setStatus('DISPLAYS · el plazo tiene que ser un número', { priority: 'warn', ttl: 4000 });
@@ -2173,19 +2412,38 @@
     }
     // El backend igual pone un piso de 1s; acá se acota a un rango con sentido.
     const secs = Math.min(120, Math.max(3, Math.round(raw)));
+    const startupProfileName = (displaysStartupSelect && displaysStartupSelect.value) || null;
+    const globalShortcutsEnabled = !!(displaysShortcutsToggle && displaysShortcutsToggle.checked);
     state.displaysBusy = true;
+    // Desactivar los tres controles durante el round-trip: cierra la carrera de
+    // tocar otro control (o el mismo dos veces) antes de que el guardado vuelva.
     if (displaysSettingsSaveBtn) displaysSettingsSaveBtn.disabled = true;
+    if (displaysStartupSelect) displaysStartupSelect.disabled = true;
+    if (displaysShortcutsToggle) displaysShortcutsToggle.disabled = true;
     try {
-      const settings = await invoke('displays_update_settings', { settings: { revertTimeoutSecs: secs } });
+      const settings = await invoke('displays_update_settings', {
+        settings: { revertTimeoutSecs: secs, startupProfileName, globalShortcutsEnabled },
+      });
       const saved = Number(settings && settings.revertTimeoutSecs);
       const shown = Number.isFinite(saved) ? saved : secs;
       if (displaysRevertSecsInput) displaysRevertSecsInput.value = String(shown);
-      setStatus(`DISPLAYS · auto-revert en ${shown}s`, { force: true });
+      // Reflejar lo que quedó (el backend normaliza startup vacío → null).
+      const savedStartup = settings && settings.startupProfileName;
+      if (displaysStartupSelect) displaysStartupSelect.value = (typeof savedStartup === 'string') ? savedStartup : '';
+      const savedShortcuts = !!(settings && settings.globalShortcutsEnabled);
+      if (displaysShortcutsToggle) displaysShortcutsToggle.checked = savedShortcuts;
+      if (displaysShortcutsToggleLabel) displaysShortcutsToggleLabel.textContent = savedShortcuts ? 'ON' : 'OFF';
+      setStatus('DISPLAYS · ajustes guardados', { force: true });
     } catch (err) {
       showDisplaysError(err);
+      // Falló el guardado: recargar la verdad para que los controles (y el label
+      // ON/OFF) no queden divergentes de lo que quedó en disco.
+      try { await loadSettings(); } catch (_) {}
     } finally {
       state.displaysBusy = false;
       if (displaysSettingsSaveBtn) displaysSettingsSaveBtn.disabled = false;
+      if (displaysStartupSelect) displaysStartupSelect.disabled = false;
+      if (displaysShortcutsToggle) displaysShortcutsToggle.disabled = false;
     }
   }
 
@@ -2390,6 +2648,7 @@
     state.displaysProfiles = null;
     if (displaysProfilesList) displaysProfilesList.replaceChildren();
     if (displaysProfileName) displaysProfileName.value = '';
+    displaysSettingsLoaded = false; // AJUSTES se re-carga al entrar a su pestaña
     hideProfileConfirm();
     // Lienzo: sin borrador ni arrastre a medias de una apertura anterior.
     state.displaysDraft = [];
@@ -2418,6 +2677,8 @@
 
   function closeDisplaysModal() {
     if (displaysModal) displaysModal.hidden = true;
+    // Si quedó una captura de atajo abierta, cortar su listener global de teclado.
+    cancelShortcutCapture();
     // El timer no sobrevive al modal. state.displaysPending SI: guarda el
     // deadline para poder rehidratar al reabrir.
     stopDisplaysCountdown();
@@ -2447,11 +2708,15 @@
   // acumular listeners o perderlos.
   if (displaysList) {
     displaysList.addEventListener('click', (e) => {
-      const btn = e.target && e.target.closest ? e.target.closest('.display-toggle-btn') : null;
-      if (!btn || btn.disabled) return;
-      const li = btn.closest('.display-item');
+      const el = e.target;
+      if (!el || !el.closest) return;
+      const li = el.closest('.display-item');
       const id = li && li.dataset ? li.dataset.id : null;
-      if (id) toggleDisplay(id);
+      if (!id) return;
+      const toggleBtn = el.closest('.display-toggle-btn');
+      const primBtn = el.closest('.display-primary-btn');
+      if (toggleBtn && !toggleBtn.disabled) toggleDisplay(id);
+      else if (primBtn && !primBtn.disabled) setPrimaryDisplay(id);
     });
   }
 
@@ -2488,8 +2753,12 @@
       if (!name) return;
       const loadBtn = el.closest('.displays-profile-load');
       const delBtn = el.closest('.displays-profile-delete');
+      const updateBtn = el.closest('.displays-profile-update');
+      const scBtn = el.closest('.displays-profile-shortcut');
       if (loadBtn && !loadBtn.disabled) loadProfileFlow(name);
       else if (delBtn && !delBtn.disabled) deleteProfileFlow(name);
+      else if (updateBtn && !updateBtn.disabled) updateProfileFlow(name);
+      else if (scBtn && !scBtn.disabled) startShortcutCapture(name);
     });
   }
   if (displaysSettingsSaveBtn) {
@@ -2498,6 +2767,23 @@
   if (displaysRevertSecsInput) {
     displaysRevertSecsInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); saveSettings(); }
+    });
+  }
+  // Displays v2, Fase 1: el selector de startup y el interruptor de atajos
+  // guardan al cambiar (no tienen botón GUARDAR propio).
+  if (displaysStartupSelect) {
+    displaysStartupSelect.addEventListener('change', () => { blip(720, 0.04); saveSettings(); });
+  }
+  if (displaysShortcutsToggle) {
+    displaysShortcutsToggle.addEventListener('change', () => {
+      blip(720, 0.04);
+      // Reflejar el ON/OFF ya mismo, así el label y el checkbox nunca se
+      // contradicen aunque saveSettings se descarte; saveSettings lo re-confirma
+      // con lo que devuelve el backend.
+      if (displaysShortcutsToggleLabel) {
+        displaysShortcutsToggleLabel.textContent = displaysShortcutsToggle.checked ? 'ON' : 'OFF';
+      }
+      saveSettings();
     });
   }
   // Lienzo: arrastre (delegado en el contenedor) + APLICAR / DESHACER.

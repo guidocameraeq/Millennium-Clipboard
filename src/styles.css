@@ -2914,6 +2914,9 @@ html.fx-off .status-item .status-dot { animation: none !important; }
   flex: 0 0 auto;
   display: flex;
   align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 /* Ancho fijo: ATTACH y DETACH tienen distinto largo y la fila no puede saltar
@@ -2921,6 +2924,21 @@ html.fx-off .status-item .status-dot { animation: none !important; }
 .display-toggle-btn {
   min-width: 86px;
   text-align: center;
+}
+
+/* ★ primario (Displays v2, Fase 1): magenta como el badge PRIMARY, para que se
+   lea "esto lo hace primario". Se esconde en la fila apagada o ya primaria. */
+.display-primary-btn {
+  min-width: 92px;
+  text-align: center;
+  border-color: var(--neon-magenta);
+  color: var(--neon-magenta);
+}
+.display-primary-btn:hover {
+  background: rgba(255, 43, 214, 0.08);
+}
+.display-primary-btn[hidden] {
+  display: none !important;
 }
 
 /* Un boton apagado tiene que LEERSE apagado: es el unico aviso de que ese
@@ -3094,6 +3112,29 @@ html.fx-off .status-item .status-dot { animation: none !important; }
   flex: 0 0 auto;
   display: flex;
   gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* Displays v2, Fase 1: botón de atajo por perfil. Neutro sin asignar; cyan con
+   una combinación puesta; magenta y latiendo mientras se está capturando. */
+.displays-profile-shortcut {
+  min-width: 96px;
+  text-align: center;
+  font-family: var(--font-mono);
+}
+.displays-profile-shortcut.has-shortcut {
+  border-color: var(--neon-cyan);
+  color: var(--neon-cyan);
+}
+.displays-profile-shortcut.capturing {
+  border-color: var(--neon-magenta);
+  color: var(--neon-magenta);
+  animation: displays-shortcut-pulse 1s ease-in-out infinite;
+}
+@keyframes displays-shortcut-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
 }
 
 /* --- Banner de confirmación (pisar / borrar un perfil) ------------------- */
@@ -3166,6 +3207,23 @@ html.fx-off .status-item .status-dot { animation: none !important; }
 }
 
 .displays-setting-input:focus {
+  outline: none;
+  border-color: var(--neon-cyan);
+}
+
+/* Displays v2, Fase 1: el <select> del perfil de arranque, mismo lenguaje que el
+   input del plazo. */
+.displays-setting-select {
+  min-width: 180px;
+  max-width: 100%;
+  background: var(--bg-deep, var(--bg-card));
+  border: 1px solid var(--neon-cyan-soft);
+  color: var(--text-bright);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 6px 8px;
+}
+.displays-setting-select:focus {
   outline: none;
   border-color: var(--neon-cyan);
 }

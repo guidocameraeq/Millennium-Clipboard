@@ -147,19 +147,37 @@ pub struct ProfileView {
     pub active_count: usize,
     /// Resumen legible ya formateado (ej. `"2 monitores · 1920×1080, 2560×1440"`).
     pub summary: String,
+    /// El atajo global asignado a este perfil (Displays v2, Fase 1), o `None` si
+    /// no tiene. Se guarda en `profile_shortcuts` por **nombre** de perfil.
+    pub shortcut: Option<String>,
 }
 
-/// Los ajustes de displays que el frontend puede editar (SPEC-displays, Fase 3).
+/// Los ajustes de displays que el frontend puede editar.
 ///
-/// Millennium solo expone el **plazo del auto-revert**. El resto de `AppSettings`
-/// (atajos globales, perfil de arranque, etc.) son features de Monarch que
-/// Millennium no cablea; al guardar se **preservan intactos** (ver
-/// `guardar_ajustes`). Viaja en los dos sentidos: sale en `leer` y entra en
-/// `guardar`.
+/// Fase 3 exponía solo el **plazo del auto-revert**. Displays v2 (Fase 1) suma
+/// dos: el **perfil de arranque** (`startup_profile_name`) y el **interruptor
+/// general de atajos** (`global_shortcuts_enabled`). El resto de `AppSettings`
+/// (bases de atajos, el mapa `profile_shortcuts`, `start_with_windows`…) NO
+/// viaja por acá: al guardar se **preserva intacto** (ver `guardar_ajustes`).
+/// Viaja en los dos sentidos: sale en `leer` y entra en `guardar`.
+///
+/// Los dos campos nuevos llevan `serde(default)` para que un `displays.json`
+/// viejo (o un payload parcial) deserialice sin romper; el frontend igual manda
+/// **siempre los tres** para no pisar dato del usuario con un default.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsView {
     pub revert_timeout_secs: u64,
+    #[serde(default)]
+    pub startup_profile_name: Option<String>,
+    #[serde(default = "default_shortcuts_enabled")]
+    pub global_shortcuts_enabled: bool,
+}
+
+/// Default del interruptor de atajos: `true`, igual que `AppSettings` en el
+/// vendor. Sin esto, un payload sin el campo lo apagaría en silencio.
+fn default_shortcuts_enabled() -> bool {
+    true
 }
 
 /// Una posición nueva para un monitor, tal como la manda el lienzo de arrastre
@@ -416,6 +434,7 @@ pub type Emisor = Box<dyn Fn(&str, serde_json::Value) + Send + Sync + 'static>;
 
 #[cfg(target_os = "windows")]
 mod estado {
+    use std::collections::BTreeMap;
     use std::path::Path;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -698,14 +717,82 @@ mod estado {
             self.snapshot()
         }
 
+        /// Hace primario un monitor **activo**, con la red puesta (es un
+        /// `SetDisplayConfig`, igual que el detach o el lienzo).
+        ///
+        /// El monitor se ubica por `(placa, target)`, NO por el id con EDID (que
+        /// a veces se lee `None`) — mismo criterio que el lienzo. Solo se marca
+        /// `primary=true` en ese output y `false` en los demás; **el reanclado
+        /// del primario en (0,0) lo hace `apply_layout` por su cuenta**
+        /// (`normalize_primary` en el vendor). Sigue el patrón de `aplicar_layout`:
+        /// si nada cambia (ya era primario), es no-op sin cuenta regresiva.
+        pub fn hacer_primario(&self, display_id: &str) -> Result<DisplaysSnapshot, String> {
+            let id = parse_display_id(display_id)?;
+
+            let plazo = {
+                let mut guard = self.0.manager.lock().map_err(|_| envenenado())?;
+                let mut layout = guard.get_layout().map_err(|e| e.to_string())?;
+
+                let idx = layout
+                    .outputs
+                    .iter()
+                    .position(|o| {
+                        o.display_id.adapter_luid == id.adapter_luid
+                            && o.display_id.target_id == id.target_id
+                    })
+                    .ok_or_else(|| {
+                        format!("ese monitor ya no está en la lista (id {display_id}) — refrescá")
+                    })?;
+
+                // Un monitor apagado no puede ser primario. La guarda existe por
+                // duplicado a propósito: acá y en la UI (que no ofrece el botón
+                // en una fila detachada), como con `can_detach`.
+                if !layout.outputs[idx].enabled {
+                    return Err(
+                        "ese monitor está apagado; prendelo antes de hacerlo primario".to_string(),
+                    );
+                }
+
+                if layout.outputs[idx].primary {
+                    // Ya es primario: no gastar un apply ni una cuenta regresiva.
+                    None
+                } else {
+                    for (i, output) in layout.outputs.iter_mut().enumerate() {
+                        output.primary = i == idx;
+                    }
+                    guard.apply_layout(layout).map_err(|e| e.to_string())?;
+                    // A partir de acá el cambio está aplicado: como en el toggle y
+                    // el lienzo, el plazo siempre queda Some para que el watchdog
+                    // SÍ arranque.
+                    Some(
+                        guard
+                            .pending_confirmation_remaining()
+                            .unwrap_or(PLAZO_DE_EMERGENCIA),
+                    )
+                }
+            };
+
+            match plazo {
+                None => {
+                    diagnostics::log("primario:sin_cambios");
+                    self.avisar_cambio();
+                    self.snapshot()
+                }
+                Some(plazo) => self.aplicar_con_red(plazo),
+            }
+        }
+
         // --- perfiles --------------------------------------------------------
 
-        /// Lista los perfiles guardados (nombre + un resumen legible).
+        /// Lista los perfiles guardados (nombre + resumen legible + su atajo).
         pub fn listar_perfiles(&self) -> Result<Vec<ProfileView>, String> {
             let guard = self.0.manager.lock().map_err(|_| envenenado())?;
             let perfiles = guard.list_profiles();
+            // El atajo de cada perfil vive en `profile_shortcuts` (por nombre),
+            // no en el `Profile`; se cruza acá para que la fila lo muestre.
+            let atajos = guard.settings().profile_shortcuts.clone();
             drop(guard);
-            Ok(perfiles.iter().map(vista_de_perfil).collect())
+            Ok(perfiles.iter().map(|p| vista_de_perfil(p, &atajos)).collect())
         }
 
         /// Guarda el layout actual con un nombre. Si el nombre ya existe, el
@@ -721,12 +808,75 @@ mod estado {
         }
 
         /// Borra un perfil por nombre. La confirmación es del frontend.
+        ///
+        /// Al borrar se limpia también **su atajo** de `profile_shortcuts` (si no,
+        /// queda un hotkey global apuntando a un perfil que ya no existe) y, si el
+        /// perfil borrado era el de arranque, se limpia `startup_profile_name`
+        /// (si no, el startup quedaría apuntando a la nada). Esto NO desregistra
+        /// el hotkey del sistema operativo: eso lo hace `lib.rs` re-sincronizando
+        /// tras el borrado (acá no se conoce a Tauri ni al plugin).
         pub fn borrar_perfil(&self, nombre: &str) -> Result<Vec<ProfileView>, String> {
             {
                 let mut guard = self.0.manager.lock().map_err(|_| envenenado())?;
                 guard.delete_profile(nombre).map_err(|e| e.to_string())?;
+                let mut ajustes = guard.settings().clone();
+                let mut cambio = ajustes.profile_shortcuts.remove(nombre).is_some();
+                if ajustes.startup_profile_name.as_deref() == Some(nombre) {
+                    ajustes.startup_profile_name = None;
+                    cambio = true;
+                }
+                if cambio {
+                    guard.update_settings(ajustes).map_err(|e| e.to_string())?;
+                }
             }
             diagnostics::log("perfil:borrado");
+            self.listar_perfiles()
+        }
+
+        /// Asigna (o reemplaza) el atajo global de un perfil, persistiéndolo en
+        /// `profile_shortcuts`. Devuelve la lista al día (con el atajo nuevo).
+        ///
+        /// Acá SOLO se persiste; el registro del hotkey en el sistema operativo
+        /// lo hace `lib.rs` re-sincronizando después (el estado no toca Tauri).
+        /// `update_settings` del vendor descarta entradas con nombre o atajo
+        /// vacío, así que un `accel` en blanco no se guarda.
+        pub fn asignar_atajo(&self, nombre: &str, accel: &str) -> Result<Vec<ProfileView>, String> {
+            {
+                let mut guard = self.0.manager.lock().map_err(|_| envenenado())?;
+                // Rechazar una combinación ya asignada a OTRO perfil: un mismo
+                // hotkey no puede aplicar dos perfiles. Se decide acá (dato puro)
+                // para dar un mensaje claro, en vez del genérico "la usa otro
+                // programa" que daría el rollback por conflicto del sistema.
+                let accel_norm = accel.trim();
+                if let Some(otro) = guard
+                    .settings()
+                    .profile_shortcuts
+                    .iter()
+                    .find(|(n, a)| n.as_str() != nombre && a.trim().eq_ignore_ascii_case(accel_norm))
+                    .map(|(n, _)| n.clone())
+                {
+                    return Err(format!("esa combinación ya está asignada al perfil «{otro}»"));
+                }
+                let mut ajustes = guard.settings().clone();
+                ajustes
+                    .profile_shortcuts
+                    .insert(nombre.to_string(), accel.to_string());
+                guard.update_settings(ajustes).map_err(|e| e.to_string())?;
+            }
+            diagnostics::log("atajo:asignado");
+            self.listar_perfiles()
+        }
+
+        /// Quita el atajo global de un perfil (si tenía). Devuelve la lista al
+        /// día. Ídem `asignar_atajo`: la desregistración en el SO la hace `lib.rs`.
+        pub fn limpiar_atajo(&self, nombre: &str) -> Result<Vec<ProfileView>, String> {
+            {
+                let mut guard = self.0.manager.lock().map_err(|_| envenenado())?;
+                let mut ajustes = guard.settings().clone();
+                ajustes.profile_shortcuts.remove(nombre);
+                guard.update_settings(ajustes).map_err(|e| e.to_string())?;
+            }
+            diagnostics::log("atajo:limpiado");
             self.listar_perfiles()
         }
 
@@ -756,31 +906,106 @@ mod estado {
             }
         }
 
+        /// Aplica un perfil **directo, sin la red** (Displays v2, Fase 1).
+        ///
+        /// Es la vía del **perfil de arranque** y de los **atajos**: se aplicó a
+        /// propósito, sin nadie mirando, así que no hay cuenta regresiva ni
+        /// auto-revert — un commit inmediato. Si el perfil ya es el layout actual,
+        /// `apply_profile` es no-op y no queda nada que confirmar (criterio 3: "si
+        /// ya coincide, no hace nada"); por eso el `confirm_current_layout` va
+        /// **solo si quedó algo pendiente** (si no, tiraría `NoPendingConfirmation`).
+        ///
+        /// El lock se sostiene a través del apply + confirm, que son CCD
+        /// bloqueantes SIN `.await` (esta función corre en `spawn_blocking`): la
+        /// regla de "nunca un lock a través de un `.await`" se cumple por
+        /// construcción, igual que en `toggle`.
+        pub fn aplicar_perfil_directo(&self, nombre: &str) -> Result<(), String> {
+            // `Some(plazo)` = el apply se hizo pero el commit inmediato falló. En
+            // ese caso NO se puede dejar el pending colgado: `confirm_current_layout`
+            // lo deja Some si `get_layout` rebota, y un pending sin watchdog congela
+            // TODO apply futuro (ensure_no_pending_confirmation). Se cae a la red
+            // como último recurso para que el pending se resuelva.
+            let red_de_emergencia = {
+                let mut guard = self.0.manager.lock().map_err(|_| envenenado())?;
+                guard.apply_profile(nombre).map_err(|e| e.to_string())?;
+                if !guard.has_pending_confirmation() {
+                    // No-op: el perfil ya era el layout actual. Nada que commitear.
+                    None
+                } else {
+                    // Commit inmediato (sin red). `confirm_current_layout` re-lee el
+                    // layout, que puede rebotar justo después de un SetDisplayConfig.
+                    match guard.confirm_current_layout() {
+                        Ok(()) => None,
+                        Err(e) => {
+                            let plazo = guard
+                                .pending_confirmation_remaining()
+                                .unwrap_or(PLAZO_DE_EMERGENCIA);
+                            crate::runtime_log::warn(format!(
+                                "[displays] perfil «{nombre}» aplicado pero no se pudo commitear ({e}); queda la red persiguiéndolo"
+                            ));
+                            Some(plazo)
+                        }
+                    }
+                }
+            };
+
+            match red_de_emergencia {
+                None => {
+                    diagnostics::log("perfil:aplicado_directo");
+                    self.avisar_cambio();
+                    Ok(())
+                }
+                // El apply SÍ ocurrió pero no se pudo commitear: se arma la red para
+                // que el pending se resuelva (si nadie confirma, el watchdog revierte)
+                // en vez de dejar el subsistema congelado en silencio.
+                Some(plazo) => self.aplicar_con_red(plazo).map(|_| ()),
+            }
+        }
+
         // --- ajustes ---------------------------------------------------------
 
-        /// Lee los ajustes que el frontend puede editar (hoy: el plazo del
-        /// auto-revert).
+        /// Lee los ajustes que el frontend puede editar: el plazo del
+        /// auto-revert, el perfil de arranque y el interruptor de atajos.
         pub fn leer_ajustes(&self) -> Result<SettingsView, String> {
             let guard = self.0.manager.lock().map_err(|_| envenenado())?;
             let ajustes = guard.settings();
             Ok(SettingsView {
                 revert_timeout_secs: ajustes.revert_timeout_secs,
+                startup_profile_name: ajustes.startup_profile_name.clone(),
+                global_shortcuts_enabled: ajustes.global_shortcuts_enabled,
             })
         }
 
-        /// Guarda los ajustes. Solo se toca el plazo del auto-revert; el resto de
-        /// la config (atajos, perfil de arranque… features de Monarch que
-        /// Millennium no usa) se **preserva intacta** leyendo lo actual y
-        /// cambiando solo ese campo. El nuevo plazo rige desde el próximo apply.
+        /// Guarda los ajustes. Se tocan SOLO los tres campos de `SettingsView`
+        /// (plazo, perfil de arranque, interruptor de atajos); el resto de la
+        /// config (el mapa `profile_shortcuts`, las bases, `start_with_windows`…)
+        /// se **preserva intacto** leyendo lo actual y cambiando solo lo mío.
+        /// El nuevo plazo rige desde el próximo apply. `update_settings` del
+        /// vendor recorta el `startup_profile_name` (vacío → `None`).
         pub fn guardar_ajustes(&self, nuevos: SettingsView) -> Result<SettingsView, String> {
             {
                 let mut guard = self.0.manager.lock().map_err(|_| envenenado())?;
                 let mut ajustes = guard.settings().clone();
                 ajustes.revert_timeout_secs = nuevos.revert_timeout_secs;
+                ajustes.startup_profile_name = nuevos.startup_profile_name;
+                ajustes.global_shortcuts_enabled = nuevos.global_shortcuts_enabled;
                 guard.update_settings(ajustes).map_err(|e| e.to_string())?;
             }
             diagnostics::log("ajustes:guardados");
             self.leer_ajustes()
+        }
+
+        /// El interruptor general + el mapa (nombre de perfil → accelerator),
+        /// para que `lib.rs` registre los hotkeys globales al arrancar y los
+        /// re-sincronice tras cada cambio. No hay nada de Tauri acá: es un
+        /// getter de datos puros.
+        pub fn atajos_de_perfil(&self) -> Result<(bool, BTreeMap<String, String>), String> {
+            let guard = self.0.manager.lock().map_err(|_| envenenado())?;
+            let ajustes = guard.settings();
+            Ok((
+                ajustes.global_shortcuts_enabled,
+                ajustes.profile_shortcuts.clone(),
+            ))
         }
 
         // --- lienzo ----------------------------------------------------------
@@ -1009,11 +1234,12 @@ mod estado {
         "el estado de monitores quedó inconsistente; reiniciá Millennium".to_string()
     }
 
-    /// Arma la vista de un perfil: nombre + un resumen legible del layout.
+    /// Arma la vista de un perfil: nombre + un resumen legible del layout + su
+    /// atajo global asignado (si hay).
     ///
     /// El resumen cuenta los monitores prendidos y lista sus resoluciones, para
     /// que el usuario reconozca qué perfil es sin cargarlo.
-    fn vista_de_perfil(perfil: &Profile) -> ProfileView {
+    fn vista_de_perfil(perfil: &Profile, atajos: &BTreeMap<String, String>) -> ProfileView {
         let activos: Vec<_> = perfil.layout.outputs.iter().filter(|o| o.enabled).collect();
         let summary = if activos.is_empty() {
             "sin monitores".to_string()
@@ -1033,6 +1259,7 @@ mod estado {
             name: perfil.name.clone(),
             active_count: activos.len(),
             summary,
+            shortcut: atajos.get(&perfil.name).cloned(),
         }
     }
 

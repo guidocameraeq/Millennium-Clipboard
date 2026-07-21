@@ -1192,6 +1192,93 @@ fn displays_no_disponible() -> String {
     "la sección de monitores no está disponible en esta sesión (solo Windows; si estás en Windows, mirá el LOG: el motor no arrancó)".to_string()
 }
 
+/// Re-sincroniza los atajos globales de perfil con el sistema operativo, según
+/// los ajustes actuales (Displays v2, Fase 1).
+///
+/// Borra TODO lo registrado y vuelve a registrar el mapa `profile_shortcuts` —
+/// pero SOLO si el interruptor general (`global_shortcuts_enabled`) está
+/// prendido; apagado, deja todo desregistrado (criterio 5). Devuelve los accel
+/// que **no** se pudieron registrar (combinación inválida o en uso por otro
+/// programa): el que llama decide si avisa. Nunca hace panic ni rompe: un
+/// registro que falla se loguea y se sigue.
+///
+/// Corre trabajo del SO (RegisterHotKey); llamarla desde un hilo bloqueante
+/// (`spawn_blocking`) o desde `setup`. Solo Windows: el plugin no existe fuera.
+#[cfg(target_os = "windows")]
+fn resync_profile_shortcuts(app: &tauri::AppHandle) -> Vec<String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    let gs = app.global_shortcut();
+    // Partir de cero: así un atajo borrado/cambiado no queda pegado.
+    let _ = gs.unregister_all();
+
+    let mut fallidos = Vec::new();
+    let Some(estado) = estado_displays(app) else {
+        return fallidos;
+    };
+    let (habilitados, atajos) = match estado.atajos_de_perfil() {
+        Ok(v) => v,
+        Err(e) => {
+            runtime_log::warn(format!("[hotkey] no se pudieron leer los atajos: {e}"));
+            return fallidos;
+        }
+    };
+    if !habilitados {
+        runtime_log::info("[hotkey] atajos globales apagados; ninguno registrado");
+        return fallidos;
+    }
+    for (nombre, accel) in &atajos {
+        match gs.register(accel.as_str()) {
+            Ok(()) => runtime_log::info(format!("[hotkey] «{nombre}» → {accel}: registrado")),
+            Err(e) => {
+                runtime_log::warn(format!(
+                    "[hotkey] «{nombre}» → {accel}: no se pudo registrar ({e})"
+                ));
+                fallidos.push(accel.clone());
+            }
+        }
+    }
+    fallidos
+}
+
+/// Aplica el perfil cuyo atajo se disparó (Displays v2, Fase 1). Corre en un
+/// hilo bloqueante (lo lanza el handler del plugin). Aplica **directo, sin la
+/// red** — se pidió a propósito.
+///
+/// Compara el `Shortcut` disparado contra cada accel guardado **parseado a
+/// `Shortcut`**, no por string crudo (que puede diferir en formato). Chequea el
+/// interruptor general por defensa en profundidad (criterio 5): si está apagado
+/// no debería haber ninguno registrado, pero si igual llegara acá, no dispara.
+#[cfg(target_os = "windows")]
+fn aplicar_atajo_de_perfil(app: &tauri::AppHandle, disparado: &tauri_plugin_global_shortcut::Shortcut) {
+    use std::str::FromStr;
+    use tauri_plugin_global_shortcut::Shortcut;
+
+    let Some(estado) = estado_displays(app) else {
+        return;
+    };
+    let (habilitados, atajos) = match estado.atajos_de_perfil() {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    if !habilitados {
+        return;
+    }
+    let objetivo = atajos.iter().find_map(|(nombre, accel)| {
+        match Shortcut::from_str(accel.as_str()) {
+            Ok(sc) if &sc == disparado => Some(nombre.clone()),
+            _ => None,
+        }
+    });
+    let Some(nombre) = objetivo else {
+        return;
+    };
+    match estado.aplicar_perfil_directo(&nombre) {
+        Ok(()) => runtime_log::info(format!("[hotkey] perfil «{nombre}» aplicado por atajo")),
+        Err(e) => runtime_log::warn(format!("[hotkey] no se pudo aplicar «{nombre}» por atajo: {e}")),
+    }
+}
+
 /// Prende o apaga un monitor. La red de auto-rollback la arma el módulo.
 #[tauri::command]
 async fn displays_toggle(
@@ -1317,9 +1404,16 @@ async fn displays_delete_profile(
     #[cfg(target_os = "windows")]
     {
         let estado = estado_displays(&app).ok_or_else(displays_no_disponible)?;
-        return tokio::task::spawn_blocking(move || estado.borrar_perfil(&name))
-            .await
-            .map_err(|e| format!("displays: la tarea de borrar perfil se cayó: {e}"))?;
+        let app2 = app.clone();
+        return tokio::task::spawn_blocking(move || {
+            // `borrar_perfil` ya limpió el atajo (y el startup) de los ajustes;
+            // el resync lo saca también del sistema operativo (Displays v2).
+            let perfiles = estado.borrar_perfil(&name)?;
+            resync_profile_shortcuts(&app2);
+            Ok(perfiles)
+        })
+        .await
+        .map_err(|e| format!("displays: la tarea de borrar perfil se cayó: {e}"))?;
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -1354,9 +1448,16 @@ async fn displays_update_settings(
     #[cfg(target_os = "windows")]
     {
         let estado = estado_displays(&app).ok_or_else(displays_no_disponible)?;
-        return tokio::task::spawn_blocking(move || estado.guardar_ajustes(settings))
-            .await
-            .map_err(|e| format!("displays: la tarea de guardar ajustes se cayó: {e}"))?;
+        let app2 = app.clone();
+        return tokio::task::spawn_blocking(move || {
+            // Guardar pudo prender/apagar el interruptor general de atajos: hay
+            // que registrar o limpiar los hotkeys en consecuencia (Displays v2).
+            let guardados = estado.guardar_ajustes(settings)?;
+            resync_profile_shortcuts(&app2);
+            Ok(guardados)
+        })
+        .await
+        .map_err(|e| format!("displays: la tarea de guardar ajustes se cayó: {e}"))?;
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -1382,6 +1483,98 @@ async fn displays_apply_layout(
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (&app, &positions);
+        Err(displays_no_disponible())
+    }
+}
+
+// --- Displays v2, Fase 1 -------------------------------------------------------
+
+/// Hace primario un monitor activo. Es un SetDisplayConfig en vivo: vuelve con la
+/// cuenta regresiva puesta, igual que el toggle o el lienzo.
+#[tauri::command]
+async fn displays_set_primary(
+    app: tauri::AppHandle,
+    display_id: String,
+) -> Result<displays::DisplaysSnapshot, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let estado = estado_displays(&app).ok_or_else(displays_no_disponible)?;
+        return tokio::task::spawn_blocking(move || estado.hacer_primario(&display_id))
+            .await
+            .map_err(|e| format!("displays: la tarea de primario se cayó: {e}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (&app, &display_id);
+        Err(displays_no_disponible())
+    }
+}
+
+/// Asigna un atajo global a un perfil y lo registra. Devuelve la lista al día.
+///
+/// Si la combinación no se puede tomar (inválida o en uso por otro programa), se
+/// **deshace** lo guardado y se devuelve `Err` para que la UI avise (criterio 7):
+/// no queda un atajo muerto persistido. Con el interruptor general apagado se
+/// guarda igual sin registrar (no es un fallo, es el estado elegido).
+#[tauri::command]
+async fn displays_set_profile_shortcut(
+    app: tauri::AppHandle,
+    name: String,
+    accelerator: String,
+) -> Result<Vec<displays::ProfileView>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let estado = estado_displays(&app).ok_or_else(displays_no_disponible)?;
+        let app2 = app.clone();
+        return tokio::task::spawn_blocking(move || {
+            // 1. Persistir (rechaza una combinación ya asignada a otro perfil).
+            let perfiles = estado.asignar_atajo(&name, &accelerator)?;
+            // 2. Registrar el mapa actualizado en el sistema operativo.
+            let fallidos = resync_profile_shortcuts(&app2);
+            // 3. ¿Este accel quedó sin registrar? (conflicto externo real; con el
+            //    interruptor apagado `fallidos` viene vacío, así que no es fallo.)
+            if fallidos.iter().any(|a| a == &accelerator) {
+                // Deshacer: no dejar un atajo que no se puede activar.
+                let _ = estado.limpiar_atajo(&name);
+                resync_profile_shortcuts(&app2);
+                return Err(
+                    "no se pudo activar esa combinación (¿la usa otro programa?). Probá con otra."
+                        .to_string(),
+                );
+            }
+            Ok(perfiles)
+        })
+        .await
+        .map_err(|e| format!("displays: la tarea de atajo se cayó: {e}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (&app, &name, &accelerator);
+        Err(displays_no_disponible())
+    }
+}
+
+/// Quita el atajo global de un perfil y lo desregistra. Devuelve la lista al día.
+#[tauri::command]
+async fn displays_clear_profile_shortcut(
+    app: tauri::AppHandle,
+    name: String,
+) -> Result<Vec<displays::ProfileView>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let estado = estado_displays(&app).ok_or_else(displays_no_disponible)?;
+        let app2 = app.clone();
+        return tokio::task::spawn_blocking(move || {
+            let perfiles = estado.limpiar_atajo(&name)?;
+            resync_profile_shortcuts(&app2);
+            Ok(perfiles)
+        })
+        .await
+        .map_err(|e| format!("displays: la tarea de atajo se cayó: {e}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (&app, &name);
         Err(displays_no_disponible())
     }
 }
@@ -1443,6 +1636,36 @@ pub fn run() {
                 tauri_plugin_autostart::MacosLauncher::LaunchAgent,
                 Some(vec!["--autostart"]),
             ));
+    }
+
+    // Atajos de teclado globales por perfil (Displays v2, Fase 1). Windows-only a
+    // propósito: el plugin vive en la tabla windows del Cargo.toml, así que su
+    // registro va bajo `#[cfg(target_os = "windows")]`, NO `#[cfg(desktop)]` (que
+    // incluiría mac/linux sin la dep y rompería el build ahí). Los atajos se
+    // registran/limpian después (setup + comandos) vía `resync_profile_shortcuts`;
+    // acá solo se cablea el handler que aplica el perfil al dispararse uno.
+    #[cfg(target_os = "windows")]
+    {
+        use tauri_plugin_global_shortcut::ShortcutState;
+        builder = builder.plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, shortcut, event| {
+                    // El handler se dispara en Pressed Y Released; actuar solo al
+                    // apretar, si no el perfil se aplicaría dos veces.
+                    if event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    // Corre en el hilo de eventos del plugin: mantenerlo liviano.
+                    // El trabajo real (Mutex + syscalls CCD) va a un hilo propio,
+                    // como el watchdog — nada de bloquear el hilo del plugin.
+                    let app = app.clone();
+                    let disparado = shortcut.clone();
+                    std::thread::spawn(move || {
+                        aplicar_atajo_de_perfil(&app, &disparado);
+                    });
+                })
+                .build(),
+        );
     }
 
     // Mobile-only plugins. barcode-scanner requires a camera and Android
@@ -1894,8 +2117,40 @@ pub fn run() {
                             });
                         match displays::init(&data_dir, emisor) {
                             Ok(estado) => {
-                                app.manage(estado);
+                                app.manage(estado.clone());
                                 runtime_log::info("[displays] motor de monitores listo");
+
+                                // Displays v2, Fase 1: registrar los atajos
+                                // globales de perfil (si el interruptor general
+                                // está prendido). Necesita el estado ya `manage`ado.
+                                resync_profile_shortcuts(app.handle());
+
+                                // Aplicar el perfil de arranque SOLO si se lanzó
+                                // con --autostart (caso de Guido: dejó la TV
+                                // prendida). Directo, sin la red, en un hilo propio
+                                // y **no-fatal**: si falla, se loguea y la app sigue.
+                                if launched_hidden {
+                                    match estado.leer_ajustes() {
+                                        Ok(ajustes) => {
+                                            if let Some(nombre) = ajustes.startup_profile_name {
+                                                let estado_startup = estado.clone();
+                                                std::thread::spawn(move || {
+                                                    match estado_startup.aplicar_perfil_directo(&nombre) {
+                                                        Ok(()) => runtime_log::info(format!(
+                                                            "[displays] perfil de arranque «{nombre}» aplicado"
+                                                        )),
+                                                        Err(e) => runtime_log::warn(format!(
+                                                            "[displays] no se pudo aplicar el perfil de arranque «{nombre}»: {e}"
+                                                        )),
+                                                    }
+                                                });
+                                            }
+                                        }
+                                        Err(e) => runtime_log::warn(format!(
+                                            "[displays] no se pudieron leer los ajustes para el perfil de arranque: {e}"
+                                        )),
+                                    }
+                                }
                             }
                             Err(e) => runtime_log::warn(format!(
                                 "[displays] el motor de monitores no arrancó: {e} — el resto de Millennium anda igual"
@@ -1952,6 +2207,9 @@ pub fn run() {
             displays_get_settings,
             displays_update_settings,
             displays_apply_layout,
+            displays_set_primary,
+            displays_set_profile_shortcut,
+            displays_clear_profile_shortcut,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
