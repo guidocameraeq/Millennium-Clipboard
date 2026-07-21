@@ -2,82 +2,61 @@
 
 > Save game del proyecto. `/cierre` lo SOBREESCRIBE ENTERO en cada sesión — acá nunca se apila historia (eso vive en CHANGELOG). El hook SessionStart lo inyecta en cada chat nuevo.
 
-**Cierre**: 2026-07-21 · **Branch**: `feat/displays` · **Working tree**: limpio (tras el commit de cierre).
+**Cierre**: 2026-07-21 · **Branch**: `main` · **Working tree**: limpio (tras el commit de cierre).
 
 ## En una línea
 
-**La Fase 3 del SPEC-displays está IMPLEMENTADA y verificada LOCAL, pero NO probada en hardware todavía.**
-Entraron las cuatro cosas de la fase: **perfiles** guardados (guardar/cargar/borrar), **ajustes**
-(plazo del auto-revert), **watcher en vivo** (`WM_DISPLAYCHANGE` refresca la lista sola sin apretar
-REFRESH) y el **lienzo de arrastre** (opción A, espejo de Windows: se pegan al borde, APLICAR es un
-`SetDisplayConfig` por la red de auto-rollback). Todo pasó el gate local y **dos rondas de revisión
-adversarial** (5 hallazgos, los 5 corregidos). Falta lo que no puedo hacer yo: **Guido probándolo en
-el desktop de 3 pantallas** (ver "Próximo paso").
+**La Fase 3 del SPEC-displays está HECHA, verificada en hardware (núcleo) y RELEASEADA como v1.2.0
+(release final).** Todo el trabajo de displays (Fases 1–3) quedó en `main` por fast-forward. La próxima
+misión ya está definida y con backlog escrito: **"Displays v2"** — las features que Guido esperaba y no
+estaban + algunas nuevas (ver `docs/TODO.md`, sección 🟣). **Esa es una misión NUEVA: chat nuevo +
+Arquitecto.**
 
-## Lo que se hizo
+## Lo que se hizo esta sesión
 
-- **Perfiles** (`displays/mod.rs` + 4 comandos en `lib.rs`): cablea el motor del crate puro que ya
-  existía (`save_profile`/`apply_profile`/`list_profiles`/`delete_profile`) sobre el store atómico de
-  la Fase 2. **Cargar un perfil pasa por la MISMA red que el detach** (watchdog + auto-revert). **No
-  hubo migración**: el JSON ya tenía el campo `profiles` (vacío) desde la Fase 2.
-- **Ajustes** (2 comandos): editar el plazo del auto-revert. Al guardar se cambia SOLO ese campo y se
-  preserva el resto de `AppSettings` intacto (atajos, etc. — features de Monarch que Millennium no usa).
-- **Watcher `WM_DISPLAYCHANGE`** (`displays/system_events.rs`): la ventana oculta de la Fase 2 ahora
-  atiende también el cambio de topología, por un **canal SEPARADO** del resume. **Refresca la vista
-  pero NO invalida el cache** (invalidar borraría el recuerdo del monitor detachado — solo el resume
-  invalida). Por evento, sin poll → CPU en reposo intacto por construcción.
-- **Lienzo de arrastre** (`aplicar_layout` en `mod.rs` + comando `displays_apply_layout` + ~250 líneas
-  de canvas en `main.js`): arrastrás rectángulos a escala, se **pegan al borde** (snap), y APLICAR
-  manda las posiciones. El backend matchea por `(adapterLuid, targetId)` —no por EDID—, ancla el
-  primario en `(0,0)`, y aplica por la red compartida. Staged: nada se toca hasta APLICAR.
-- **La red compartida `aplicar_con_red`**: la usan cargar-perfil y el lienzo. **No compara ids a ese
-  nivel a propósito** (ADR-012): la verificación por re-enumeración la hace el backend (`settle_poll`);
-  el auto-revert real es el watchdog.
-- **2 rondas de revisión adversarial** (workflows). A/B/C: 3 hallazgos (mi verificación al cargar
-  perfil comparaba ids de dos enumeraciones distintas → falsos positivos y negativos; y un detalle de
-  mayúsculas al pisar). Lienzo: 2 hallazgos (el borrador se pisaba con lo viejo durante la cuenta
-  regresiva; y al re-entrar a la pestaña se perdía un acomodo sin aplicar). **Los 5 corregidos.**
+- **Fase 3 completa** (perfiles, ajustes, watcher `WM_DISPLAYCHANGE`, lienzo de arrastre opción A):
+  ver la entrada del CHANGELOG del 2026-07-21. Gate local verde + 2 rondas de review adversarial (5
+  hallazgos, los 5 corregidos).
+- **Prerelease `v1.2.0-beta.1`** (primera corrida real de `release.yml`) → Guido lo instaló por el
+  **auto-updater** desde 1.1.0 y probó en hardware: perfiles, lienzo y **auto-revert** OK.
+- **Release final `v1.2.0`**: bump de versión, fast-forward de `main` (5ffdfca..fbaedb4), tag `v1.2.0`
+  pusheado → `release.yml` publica el final (la landing empieza a servir 1.2.0).
+- **Backlog de "Displays v2" capturado** en el TODO con triage (ver Próximo paso).
 
 ## En qué estado quedó
 
-- **Build local (scratch de displays)**: verde en las DOS ramas (Windows + no-Windows/gate Android),
-  sin advertencias. `displays-tests` 13/13, `vendor/monarch` 22/22, `node --check` OK.
-- **CI**: NO corrido — **no se pusheó** (regla del proyecto: push solo si Guido lo pide). El `.exe`
-  para probar sale del CI, así que el push es el que lo genera.
-- **Hardware**: NO verificado. Es el corazón del próximo paso.
-- **Whole-crate `cargo check`**: sigue roto local (dlltool, documentado). "Compila" el binario entero
-  solo lo afirma el CI; el módulo displays se verifica con el scratch (ver DECISIONS).
+- **main** = todo displays (Fases 0–3). `feat/displays` == `main` (mismo commit).
+- **v1.2.0**: el tag está pusheado; el `release.yml` del final estaba corriendo al cierre. **Verificar
+  que salió verde** y que la landing sirve 1.2.0 (si no aparece, el CI se puso rojo).
+- **Hardware**: núcleo verificado (perfiles, lienzo, auto-revert, updater). **Sub-checks menores
+  pendientes** (en TODO, sin urgencia): plazo desde AJUSTES, watcher en vivo al enchufar/desenchufar, y
+  la regresión (transferencia/clipboard + CPU en reposo en el Task Manager).
 
 ## Próximo paso CONCRETO (al retomar)
 
-1. **Pushear `feat/displays`** (dispara el CI que produce el `.exe`). Ojo: hoy el CI corre incluso en
-   pushes de solo-docs (tarea abierta en TODO).
-2. **Smoke en el desktop de 3 pantallas** con ese `.exe` — la lista de evidencia que pidió Guido:
-   - guardar un perfil y volver a cargarlo;
-   - cambiar el plazo del auto-revert desde AJUSTES y ver que el próximo cambio use el nuevo;
-   - enchufar/desenchufar algo y ver la LISTA actualizarse sola **sin apretar REFRESH**;
-   - acomodar los monitores en el LIENZO, APLICAR, confirmar, y que quede persistido (sobrevive
-     reiniciar);
-   - que un layout malo del lienzo **vuelva solo** si no confirmás (igual que el detach de la TV).
-3. **Regresión** (criterio #1): transferencia/clipboard/discovery siguen igual; **CPU en reposo ~0%
-   en el Task Manager** (el watcher es por evento, pero es argumento hasta verlo).
+**Misión nueva "Displays v2" → chat NUEVO → `/inicio` → Arquitecto (Modo B: feature grande sobre app
+que ya anda).** El Arquitecto explora el código real, entrevista, y saca un **SPEC delta** con su "qué
+NO se toca". El backlog crudo está en `docs/TODO.md` → **🟣 Displays v2**. Orden que pidió Guido:
+resolver primero lo que ya funciona; la resolución-por-perfil es "para más adelante".
+
+**Insight que ahorra trabajo**: 3 de los "faltantes" (elegir primario, shortcuts de perfil, aplicar-al-
+iniciar) **el motor de Monarch YA los soporta** (`OutputConfig.primary`, `AppSettings.profile_shortcuts`,
+`startup_profile_name`) — la Fase 3 no los cableó a la UI, nada más. Baratos. Lo caro y net-new: el
+**cambio de audio por perfil** (investigar la API de Windows, no está en Monarch) y el **rediseño**
+(displays full-screen, dos secciones grandes, deja de ser pop-up).
+
+De paso, en el próximo uso, cerrar los 3 sub-checks físicos menores → con eso el SPEC-displays queda
+COMPLETO y se archiva a `docs/archive/`.
 
 ## Bloqueos
 
-Ninguno técnico. Lo único pendiente es la verificación física, que depende de Guido + el `.exe` del CI.
-
-## Archivos tocados
-
-`src-tauri/src/displays/mod.rs` (DTOs + métodos perfiles/ajustes/lienzo + `aplicar_con_red`),
-`src-tauri/src/displays/system_events.rs` (WM_DISPLAYCHANGE, 2º canal), `src-tauri/src/lib.rs`
-(7 comandos nuevos + registro), `src/index.html` (pestañas + panes + lienzo), `src/main.js`
-(pestañas, perfiles, ajustes, canvas), `src/styles.css` (estilos de todo lo nuevo).
+Ninguno.
 
 ## Contexto que no está en otros docs
 
-- **El crate scratch para verificar displays local** (receta en DECISIONS): al reconstruirlo, **sacar
-  `winreg`** de las deps windows — arrastra `windows-sys → windows_x86_64_gnu`, cuyo build-script pide
-  `dlltool` (ausente acá). displays no usa winreg; `windows 0.60` es raw-dylib y `cargo check` no lo
-  pide. Anotado en DECISIONS (Nota de verificación).
-- Decisiones técnicas nuevas: **ADR-012** (por qué el apply de layout completo no compara ids en la
-  glue) y **ADR-013** (el watcher de dos canales: refresca sin invalidar).
+- **Verificación local de displays**: crate scratch (receta en DECISIONS, Nota de verificación) — al
+  reconstruirlo, sacar `winreg` (arrastra `dlltool`) y agregar `anyhow`. Las 2 ramas de `cfg`
+  (Windows + linux-gnu) son el gate local; `displays-tests` + `vendor/monarch` corren `cargo test`.
+- **El overwrite de perfiles YA funciona** (guardar con el mismo nombre → banner → reemplaza); Guido no
+  lo descubrió. En Displays v2 sumar un botón "actualizar perfil" más obvio.
+- **El CI corre en cada push, incluidos los de solo-docs** (tarea abierta: `paths-ignore` en build.yml).
