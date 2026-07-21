@@ -68,3 +68,9 @@ La Fase 3 dejó displays andando (ver/attach-detach, perfiles, ajustes, watcher,
 - **Fase 2** — Rediseño: sacar displays del pop-up a full-screen, app en dos secciones (archivos/clipboard vs displays). Toca el shell compartido con el clipboard → su propio spec con NO SE TOCA cuidado.
 - **Fase 3** — Audio por perfil: al aplicar un perfil, cambiar el output de audio por default de Windows. Net-new, requiere **investigación** (API tipo `IPolicyConfig`) + extender qué guarda el perfil (dato del usuario → migración). Su propio spec, arrancando por un spike de investigación.
 - **Más adelante** — Resolución/refresh por perfil (el `OutputConfig` ya lo guarda; falta capturarlo/editarlo en la UI).
+
+### Cómo sigue después de esta fase (para el `/cierre` del que la implemente)
+Cuando la Fase 1 esté implementada y verificada, el `/cierre`:
+1. **Archiva este spec** (`docs/archive/` + marca "✅ IMPLEMENTADO <fecha>" en la línea 1) y saca la Fase 1 del TODO.
+2. **Deja el handoff apuntando al próximo paso: "diseñar la Fase 2 (rediseño) con el Arquitecto"**, cuyo backlog crudo sigue en `docs/TODO.md` → 🟣 Displays v2. El diseño de cada fase se hace **justo antes de construirla** (llamando al Arquitecto), con el aprendizaje de la anterior — nunca todas de una.
+El backlog de las fases 2+ NO se archiva con este spec: vive en el TODO, que sobrevive entre sesiones.
