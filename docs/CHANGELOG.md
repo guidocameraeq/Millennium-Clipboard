@@ -2,6 +2,36 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
+## 2026-07-20 (d) — Release automático por tag (deja de ser un trámite a mano)
+
+Publicar una versión pasa de 9 pasos manuales a uno: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+
+### Added
+- **`.github/workflows/release.yml`** — dispara SOLO ante un tag `v*` (no por push a rama, así no
+  duplica el build). Compila el `.exe` en el CI (del commit exacto del tag), lo publica con el asset
+  adjunto, y tiene tres redes de seguridad mecánicas, cada una tapando una trampa que un humano
+  olvida en silencio:
+  1. **El tag tiene que coincidir con la versión del código** (`Cargo.toml` + `tauri.conf.json` +
+     `Cargo.lock`). Si no, falla ANTES de compilar. Tapa el error de taguear `v1.2.0` y olvidarse de
+     subir la versión → el `.exe` reportaría la versión vieja y el auto-updater **nunca lo
+     ofrecería**. Probado en falso local: el guard pasa con el tag correcto y falla con un tag
+     adelantado, uno viejo, o un `Cargo.lock` desactualizado.
+  2. **El `.exe` tiene que existir** tras compilar, o no se crea ningún release a medias.
+  3. **Se relee el release publicado como lo ve el updater** (asset `.exe` + `digest sha256`); si no,
+     falla. El updater aborta sin digest, así que mejor enterarse en el CI.
+- Prerelease vs final por el **sufijo del tag**: `v1.2.0` → release final (la landing, que sirve
+  `/releases/latest`, lo empieza a ofrecer); `v1.2.0-beta.1` → prerelease (el updater lo ve, la
+  landing no).
+
+### Por qué NO se escribió una skill de release
+Se corrió la prueba que exige `writing-skills` (ver a un agente fallar sin la guía): **5 agentes en
+una sesión limpia, sin el handoff, publicaron el plan correcto los 5**, sacando todo del código, los
+workflows y git — incluido de dónde sale el `.exe`, cómo verifica el hash el updater (por `digest`,
+no por el cuerpo), el `Cargo.lock` por el `--locked`, y que ningún workflow escuchaba tags. Una skill
+habría sido una fuente de verdad duplicada que puede envejecer mal (de hecho el handoff de esta misma
+sesión ya tenía mal el detalle del hash, y un agente lo cazó leyendo el código). Se automatizó en vez
+de documentar.
+
 ## 2026-07-20 (c) — SPEC-displays Fase 2 **IMPLEMENTADA Y VERIFICADA EN HARDWARE** · v1.1.0
 
 Entra el motor que efectivamente cambia los monitores, con las dos piezas de seguridad puestas.

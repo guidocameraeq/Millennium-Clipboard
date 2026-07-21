@@ -1,0 +1,192 @@
+name: Release (tag v*)
+
+# Publica un release de GitHub SOLO a partir de un tag `vX.Y.Z`, sin pasos a mano.
+#
+# # Por qué existe
+#
+# Publicar a mano tiene cuatro trampas, y las cuatro son silenciosas:
+#  1. Compilar el .exe en la máquina del dueño — que NO puede (toolchain roto,
+#     ver build.yml). El binario tiene que salir del CI, del MISMO commit taggeado.
+#  2. Taguear `v1.2.0` pero olvidarse de subir la versión en Cargo.toml → el .exe
+#     reporta la versión vieja y el auto-updater NUNCA lo ofrece. Nadie se entera.
+#  3. Que el Cargo.lock no coincida con la versión → el gate de Android
+#     (`cargo check --locked`) se pone rojo.
+#  4. Publicar sin verificar que el asset quedó adjunto → el updater ve un release
+#     sin .exe y aborta.
+# Un workflow no se olvida de ninguna. El humano hace UNA cosa: `git tag` + push.
+#
+# # Cómo se usa
+#
+#   1. Subir la versión en src-tauri/Cargo.toml, tauri.conf.json y Cargo.lock
+#      (los tres; el lock va sí o sí por el --locked del gate de Android).
+#   2. Commit + push a la rama.
+#   3. git tag v1.2.0 && git push origin v1.2.0
+#   4. Este workflow compila, verifica que el tag == la versión del código,
+#      y publica el release con el .exe adjunto.
+#
+# Prerelease vs release final: lo decide el SUFIJO del tag.
+#   - `v1.2.0`        → release FINAL (la landing/README, que sirve
+#                       /releases/latest, empieza a ofrecerlo).
+#   - `v1.2.0-beta.1` → PRERELEASE (el auto-updater lo ve; la landing NO —
+#                       /releases/latest excluye prereleases).
+#
+# # Sobre el hash
+#
+# El auto-updater verifica el .exe con el campo `digest` que GitHub calcula solo
+# por cada asset (updater.rs:146-150). O sea que NO hay que calcular ni pegar
+# ningún hash: pasa automático. Igual se escribe el SHA-256 en el cuerpo como
+# cinturón extra (fallback para un asset que no tuviera digest); cuesta cero.
+#
+# # Este workflow NO reemplaza a build.yml
+#
+# build.yml sigue corriendo en cada push a las ramas (el gate que compila de
+# verdad). Éste corre SOLO ante un tag `v*`, así que no hay doble build por push.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Necesario para crear el release y subirle el asset.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Compilar y publicar el release del tag
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout (el commit exacto que apunta el tag)
+        uses: actions/checkout@v4
+
+      # --- LA RED DE SEGURIDAD: el tag tiene que coincidir con el código ---
+      # Antes de gastar 30 min compilando, se falla rápido si el tag y la versión
+      # del código no son la misma. Es la trampa #2/#3 de la cabecera.
+      - name: Verificar que el tag coincide con la versión del código
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"   # v1.2.0 -> 1.2.0
+          echo "Tag: $TAG"
+
+          CARGO_VER=$(awk '
+            /^\[package\]/{p=1; next}
+            /^\[/{p=0}
+            p && /^version[[:space:]]*=/{
+              gsub(/.*=[[:space:]]*"|".*/, ""); print; exit
+            }' src-tauri/Cargo.toml)
+          echo "Cargo.toml: $CARGO_VER"
+
+          TAURI_VER=$(grep -m1 '"version"' src-tauri/tauri.conf.json \
+            | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+          echo "tauri.conf.json: $TAURI_VER"
+
+          fail=0
+          if [ "$TAG" != "$CARGO_VER" ]; then
+            echo "::error::El tag ($TAG) no coincide con src-tauri/Cargo.toml ($CARGO_VER). El .exe reportaría la versión equivocada y el auto-updater no lo ofrecería. Subí la versión y re-tageá."
+            fail=1
+          fi
+          if [ "$TAG" != "$TAURI_VER" ]; then
+            echo "::error::El tag ($TAG) no coincide con src-tauri/tauri.conf.json ($TAURI_VER)."
+            fail=1
+          fi
+          # Cargo.lock: el gate de Android corre con --locked, así que el lock
+          # tiene que tener la versión nueva o el CI de las ramas se rompe.
+          if ! grep -q "^version = \"$TAG\"$" src-tauri/Cargo.lock; then
+            echo "::error::src-tauri/Cargo.lock no tiene la versión $TAG. Actualizalo (queda en el mismo commit) o el gate --locked falla."
+            fail=1
+          fi
+          [ "$fail" = "0" ] || exit 1
+          echo "OK: tag y código coinciden en $TAG"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust (MSVC target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install JS dependencies (Tauri CLI)
+        run: npm ci
+
+      - name: Build portable .exe
+        run: npm run tauri build
+
+      # Confirma que el binario existe y reporta la versión del tag ANTES de
+      # publicar. Si esto falla, no se crea ningún release a medio armar.
+      - name: Verificar el .exe compilado
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXE="src-tauri/target/release/millennium-clipboard.exe"
+          test -f "$EXE" || { echo "::error::No se generó $EXE"; exit 1; }
+          HASH=$(sha256sum "$EXE" | cut -d' ' -f1)
+          echo "SHA256=$HASH" >> "$GITHUB_ENV"
+          echo "SHA-256 del .exe: $HASH"
+
+      - name: Publicar el release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="$GITHUB_REF_NAME"
+          EXE="src-tauri/target/release/millennium-clipboard.exe"
+
+          # Prerelease si el tag tiene sufijo (v1.2.0-beta.1); final si no (v1.2.0).
+          PRERELEASE=""
+          case "$TAG" in
+            *-*) PRERELEASE="--prerelease"
+                 echo "Tag con sufijo → PRERELEASE (la landing seguirá en la versión final anterior)";;
+            *)   echo "Tag limpio → release FINAL (la landing empezará a servir $TAG)";;
+          esac
+
+          cat > notes.md <<EOF
+          Release automática desde el tag \`$TAG\`.
+
+          El auto-updater de la app ya la ofrece a quien tenga una versión anterior
+          (Settings → APP UPDATES → CHECK).
+
+          Verificación de integridad — SHA-256 de \`millennium-clipboard.exe\`:
+          $SHA256
+
+          Cambios: ver [docs/CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/$TAG/docs/CHANGELOG.md).
+          EOF
+
+          gh release create "$TAG" "$EXE" \
+            --title "Millennium Clipboard $TAG" \
+            --notes-file notes.md \
+            $PRERELEASE
+
+          echo "Publicado: https://github.com/${GITHUB_REPOSITORY}/releases/tag/$TAG"
+
+      # Última red: leer el release recién creado COMO LO VE EL UPDATER y confirmar
+      # que tiene el asset .exe con su digest. Si no, el release existe pero el
+      # updater no podría instalarlo — y mejor enterarse acá.
+      - name: Verificar el release como lo ve el updater
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="$GITHUB_REF_NAME"
+          NAME=$(gh release view "$TAG" --json assets --jq '.assets[].name' | grep -c '\.exe$' || true)
+          DIGEST=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$TAG" \
+            --jq '.assets[] | select(.name|endswith(".exe")) | .digest')
+          echo "assets .exe: $NAME | digest: $DIGEST"
+          test "$NAME" -ge 1 || { echo "::error::El release quedó sin asset .exe"; exit 1; }
+          case "$DIGEST" in
+            sha256:*) echo "OK: el updater puede verificar este release";;
+            *) echo "::error::El asset no tiene digest sha256 — el updater abortaría";  exit 1;;
+          esac

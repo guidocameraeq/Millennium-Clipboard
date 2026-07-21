@@ -121,7 +121,21 @@ cuentan), así que esto golpea solo a usuarios nuevos. Se arregla cuando la 1.1.
 a release final (`gh release edit v1.1.0 --prerelease=false`), que era el plan una vez que se use
 unos días sin sorpresas.
 
-### Lo único que queda: probar el updater de verdad
+### Releases de acá en adelante: automáticos por tag
+
+`.github/workflows/release.yml` (nuevo) publica el release solo. El flujo completo es:
+1. Subir la versión en `src-tauri/Cargo.toml`, `tauri.conf.json` y `Cargo.lock` (los tres).
+2. Commit + push a la rama.
+3. `git tag v1.2.0 && git push origin v1.2.0`.
+
+El workflow compila el `.exe`, **verifica que el tag coincida con la versión del código** (si no,
+falla antes de compilar), publica con el asset adjunto y **relee el release como lo ve el updater**.
+Tag limpio (`v1.2.0`) → release final; con sufijo (`v1.2.0-beta.1`) → prerelease. **Aún no tuvo su
+primera corrida real** — el guard está probado en falso local (pasa con el tag correcto, falla con
+uno adelantado/viejo/lock desfasado), y los pasos de build son copia verbatim de `build.yml` (verde),
+pero el publish end-to-end se ejerce recién en la próxima versión.
+
+### Lo único que queda de la 1.1.0: probar el updater de verdad
 
 Abrir una copia de la **v1.0.0** → Settings → APP UPDATES → CHECK FOR UPDATE → DOWNLOAD & RESTART, y
 confirmar que queda en 1.1.0. **Sin esa prueba, el release está publicado pero el camino de
