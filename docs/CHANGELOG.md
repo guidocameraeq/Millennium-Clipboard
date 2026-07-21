@@ -2,6 +2,49 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
+## 2026-07-21 — Displays v2 Fase 1 IMPLEMENTADA (local + review) · pre-release v1.3.0-beta.1 · Fase 2 spec READY
+
+Segunda misión del día (chat aparte). "Perfiles con superpoderes": se cableó a la UI lo que el motor de
+Monarch ya soportaba, sin tocar el vendor. Verificado LOCAL (scratch 2 ramas + vendor 22 + displays-tests
+13 + `node --check` + `cargo metadata`) y por un review adversarial multi-agente (4 hallazgos reales,
+todos corregidos). Pre-releaseado como **`v1.3.0-beta.1`** para probar por el updater — **NO verificado
+en hardware todavía**. Además: mockups de la Fase 2 (Guido eligió la Opción A) y su spec quedó READY
+(red-team incorporado).
+
+### Added
+- **★ primario** — comando `displays_set_primary(display_id)`: marca el output elegido como primario y
+  aplica **con la red** (`apply_layout` normaliza + reancla el primario en (0,0) por su cuenta). Botón por
+  monitor activo en LISTA.
+- **Perfil de arranque** — `SettingsView.startupProfileName`; al bootear con `--autostart` aplica ese
+  perfil **directo, sin red** (`apply_profile` + `confirm_current_layout` solo si quedó pending). Selector
+  en AJUSTES.
+- **Atajos globales por perfil** — `tauri-plugin-global-shortcut` 2.3.2 (en la tabla windows del
+  `Cargo.toml`; registro bajo `#[cfg(target_os="windows")]`, NO `desktop`). Comandos
+  `displays_set_profile_shortcut` / `displays_clear_profile_shortcut`, interruptor general
+  `globalShortcutsEnabled`, `resync_profile_shortcuts` re-registra el mapa tras cada cambio; el handler
+  aplica el perfil directo. Rust-only → sin cambios en `capabilities/`. Captura de la combinación en el
+  frontend (keydown → accelerator).
+- **Botón "↻ actualizar"** por perfil (reusa `save_profile` + el banner de confirmación).
+- `borrar_perfil` limpia el atajo y el startup huérfanos; `delete`/`update_settings` re-sincronizan los
+  hotkeys del SO.
+
+### Changed
+- `SettingsView` suma `startupProfileName` + `globalShortcutsEnabled` (serde default); `ProfileView` suma
+  `shortcut`. `guardar_ajustes` toca solo esos 3 campos y **preserva** el resto de `AppSettings`.
+- `aplicar_perfil_directo`: si el commit inmediato falla (la CCD rebota), NO deja el pending colgado — cae
+  a la red como último recurso (si no, congelaría todo apply futuro).
+
+### Fixed (review adversarial, corregidos antes de commitear)
+- **Freeze del subsistema de displays** si `confirm_current_layout` rebotaba tras un apply directo
+  (pending colgado sin watchdog) → se arma la red de emergencia.
+- Frontend: la clase `capturing` del botón de atajo **no se limpiaba** (latía magenta para siempre); una
+  **carrera en `saveSettings`** podía mandar los defaults vacíos y **borrar el perfil de arranque** (flag
+  `settingsLoaded` + controles desactivados durante el guardado); el label ON/OFF se desincronizaba.
+
+### Diseño (Fase 2, para la próxima misión)
+- Mockups de 3 opciones de navegación → **Opción A (pestañas CLIPBOARD | DISPLAYS)** elegida por Guido.
+- `docs/SPEC-displays-v2-fase2.md` **READY** (rediseño estructural, red-team incorporado).
+
 ## 2026-07-21 — SPEC-displays Fase 3 IMPLEMENTADA y VERIFICADA en hardware (núcleo) · v1.2.0
 
 Cierra el motor de displays: además de ver y attach/detach, ahora hay perfiles, ajustes, refresco en

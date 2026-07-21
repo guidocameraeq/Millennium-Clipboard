@@ -10,47 +10,27 @@
 - [ ] **El CI corre ante cualquier push a `feat/displays`, incluidos los de solo documentación** (6,5 min desperdiciados por cada `/cierre`). Agregar `paths-ignore: ['docs/**', '**.md']` al trigger de `.github/workflows/build.yml`. Chico; hacerlo de paso en la próxima sesión.
 - [ ] **CPU en reposo tras la Fase 1**: no se verificó en Task Manager. El diff no agrega poll ni timer (la enumeración corre solo al abrir el modal o apretar REFRESH) ⇒ riesgo teórico, pero sin evidencia. Chequear de paso en la próxima corrida de la app.
 
-## 🟣 Displays v2 — PRÓXIMA MISIÓN (backlog para el Arquitecto, 2026-07-21)
+## 🟣 Displays v2 — misión en curso (2026-07-21)
 
-> Lo que Guido esperaba de la Fase 3 y no estaba, + features nuevas. **La FASE 1 ya está diseñada por el
-> Arquitecto**: spec READY en `docs/SPEC-displays-v2.md` — ejecutarlo en un chat nuevo con
-> `inicio — ejecutá el spec docs/SPEC-displays-v2.md (está READY)`. Las fases de abajo siguen como
-> backlog crudo (cada una su spec cuando toque). Orden pedido: primero lo que ya funciona; la
-> resolución-por-perfil es "para más adelante".
+> Fase 1 ("perfiles con superpoderes") IMPLEMENTADA y pre-releaseada como beta; Fase 2 (rediseño) con spec
+> READY. Ver SESSION_HANDOFF.md.
 
-**Grupo 1 — el motor de Monarch YA lo soporta; falta cablearlo a la UI (barato):**
-- [ ] **Elegir el monitor primario** al armar/editar un perfil. `OutputConfig.primary` ya existe en el
-  modelo; falta UI (marcar primario en la lista o el lienzo) y que `save_profile` lo capture.
-- [ ] **Shortcuts para aplicar un perfil** (importante para Guido). `AppSettings.profile_shortcuts` +
-  `profile_shortcut_base` + `global_shortcuts_enabled` ya están en el modelo; falta registrar los
-  hotkeys globales (Tauri: `tauri-plugin-global-shortcut`) + UI para asignarlos. El
-  `global_shortcuts_enabled` NO es decoración: es el interruptor general de ese sistema — es la infra
-  que los shortcuts necesitan, no algo a "sacar".
-- [ ] **Aplicar un perfil al iniciar** (startup profile): al encender la PC aplica cierto perfil (caso de
-  uso de Guido: dejó la TV prendida). Si ya está aplicado, no-op. `AppSettings.startup_profile_name` ya
-  existe; falta wire (aplicar al arranque, no-op si coincide) + UI para elegirlo. (La app ya tiene
-  `tauri-plugin-autostart`.)
+- [ ] **Fase 1 — verificar la beta `v1.3.0-beta.1` en hardware** (★ primario / startup profile / atajos
+  globales / botón actualizar, + regresión clipboard/transferencias + **CPU en reposo ~0% en el Task
+  Manager**). Cuando ande: sacar el **release final** (tag `v1.3.0` sin sufijo), **FF `main`** a
+  `feat/displays-v2`, y **archivar** `docs/SPEC-displays-v2.md` (Fase 1) a `docs/archive/`. Si aparece un
+  bug, arreglarlo antes del final.
+- [ ] **Fase 2 — rediseño (displays como sección propia, Opción A elegida por Guido).** Spec **READY**:
+  `docs/SPEC-displays-v2-fase2.md`. Ejecutar en chat nuevo: `inicio — ejecutá el spec
+  docs/SPEC-displays-v2-fase2.md (está READY)`. **Decisión de secuencia (en el spec):** verificar la Fase
+  1 en hardware ANTES de arrancar la 2 (si la beta tiene un bug latente, la 2 lo heredaría).
+- [ ] **Fase 3 — cambio de audio por perfil** (net-new, requiere INVESTIGACIÓN). Al aplicar un perfil,
+  cambiar el output de audio por default de Windows (ej. salida por la TV). **NO está en Monarch.** API
+  tipo IMMDevice/`IPolicyConfig` (semi-documentada). Extender el perfil para guardar el "audio deseado"
+  (dato del usuario → cuidado con la migración del schema). Su propio spec, arrancando por un spike.
 - [ ] **[Más adelante] Resolución/refresh por perfil** (un perfil pone la TV en 1080p, otro en 4K).
   `OutputConfig.resolution`/`refresh_rate_mhz` ya se guardan y aplican; falta capturar/editar la
   resolución por perfil en la UI. No urgente (Guido lo dijo explícito).
-
-**Grupo 2 — net-new, requiere INVESTIGACIÓN:**
-- [ ] **Cambio de audio por perfil** (importante). Al aplicar un perfil, cambiar también el output de
-  audio por default de Windows (ej. salida por la TV). **NO está en Monarch.** Investigar la API de
-  Windows para setear el default audio device (IMMDevice/IPolicyConfig — ojo, `IPolicyConfig` es
-  semi-documentada). Extender el perfil para guardar el "audio deseado" (es dato del usuario → cuidado
-  con la migración del schema).
-
-**Grupo 3 — rework de UI grande:**
-- [ ] **Rediseño: displays deja de ser pop-up y pasa a módulo full-screen.** La app dividida en DOS
-  grandes secciones/pestañas: (a) archivos + clipboard (lo actual), (b) displays con su propia pantalla
-  completa. Toca el shell del frontend (`index.html`/`main.js`); **NO** el motor de transferencias ni el
-  de displays. Es lo más caro; el Arquitecto tiene que scopear bien el "qué NO se toca".
-
-**Grupo 4 — UX polish:**
-- [ ] **Editar/actualizar un perfil sin borrar+recargar.** El overwrite YA existe (guardar con el mismo
-  nombre → banner → reemplaza), pero no se descubre. Sumar un botón "actualizar este perfil con el
-  layout actual" por fila, y quizás renombrar. Chico.
 
 ## 🔴 Crítico
 - [ ] **Fase 2 — verificación física Bloque B (UI): faltan 4** (necesitan 2 PCs). Bloque A (datos) ✅ verificado 2026-07-15 (ver CHANGELOG). Faltan: **TARGET LOST**, **error que no se pisa a los 5 s**, **barras TX/RX independientes**, **rename que sobrevive un `peers-changed`**. Notas: en una misma PC NO corren 2 instancias (single-instance por identifier) → 2 PCs, o cerrar la real + 1 instancia aislada (`MILLENNIUM_INSTANCE`+`MILLENNIUM_PORT`). Para TARGET LOST hace falta un peer **NO favorito** (`DRACOSSSLAPTOP` es favorito; `PEER_TTL=15 s`).
