@@ -12,10 +12,11 @@
 
 ## 🟣 Displays v2 — PRÓXIMA MISIÓN (backlog para el Arquitecto, 2026-07-21)
 
-> Lo que Guido esperaba de la Fase 3 y no estaba, + features nuevas. **NO es un spec todavía**: es la
-> materia prima. Arrancar la misión con el **Arquitecto (Modo B: feature grande sobre app que anda)** →
-> explora el código real + entrevista → **SPEC delta** con su "qué NO se toca" antes de tocar una línea.
-> Guido pidió resolver primero lo que ya funciona; la resolución-por-perfil es "para más adelante".
+> Lo que Guido esperaba de la Fase 3 y no estaba, + features nuevas. **La FASE 1 ya está diseñada por el
+> Arquitecto**: spec READY en `docs/SPEC-displays-v2.md` — ejecutarlo en un chat nuevo con
+> `inicio — ejecutá el spec docs/SPEC-displays-v2.md (está READY)`. Las fases de abajo siguen como
+> backlog crudo (cada una su spec cuando toque). Orden pedido: primero lo que ya funciona; la
+> resolución-por-perfil es "para más adelante".
 
 **Grupo 1 — el motor de Monarch YA lo soporta; falta cablearlo a la UI (barato):**
 - [ ] **Elegir el monitor primario** al armar/editar un perfil. `OutputConfig.primary` ya existe en el

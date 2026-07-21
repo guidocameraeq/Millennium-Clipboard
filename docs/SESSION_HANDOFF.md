@@ -34,10 +34,13 @@ Arquitecto.**
 
 ## Próximo paso CONCRETO (al retomar)
 
-**Misión nueva "Displays v2" → chat NUEVO → `/inicio` → Arquitecto (Modo B: feature grande sobre app
-que ya anda).** El Arquitecto explora el código real, entrevista, y saca un **SPEC delta** con su "qué
-NO se toca". El backlog crudo está en `docs/TODO.md` → **🟣 Displays v2**. Orden que pidió Guido:
-resolver primero lo que ya funciona; la resolución-por-perfil es "para más adelante".
+**Ejecutar la Fase 1 de "Displays v2" → chat NUEVO → `inicio — ejecutá el spec
+docs/SPEC-displays-v2.md (está READY)`.** El Arquitecto ya diseñó y blindó la Fase 1 (2026-07-21): el
+spec está **READY** en `docs/SPEC-displays-v2.md` — "Perfiles con superpoderes" (primario elegible,
+aplicar-perfil-al-iniciar, atajos de teclado, botón actualizar). Decisiones tomadas con Guido: los
+aplicados sin mirar (startup/atajos) van **directo, sin la red**; el detach manual y el lienzo la
+conservan. Las fases 2 (rediseño), 3 (audio por perfil) y "resolución por perfil" siguen en el backlog
+(`docs/TODO.md` → 🟣 Displays v2) y llevan su propio spec cuando toque.
 
 **Insight que ahorra trabajo**: 3 de los "faltantes" (elegir primario, shortcuts de perfil, aplicar-al-
 iniciar) **el motor de Monarch YA los soporta** (`OutputConfig.primary`, `AppSettings.profile_shortcuts`,
