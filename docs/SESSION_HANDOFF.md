@@ -6,10 +6,13 @@
 
 ## En una línea
 
-**La Fase 2 del SPEC-displays está HECHA y verificada en el hardware real.** En el desktop de 3
-displays: la TV se apaga y se prende, **si no se confirma vuelve sola**, si se confirma se queda, y
-los otros dos monitores no se movieron. Los 3 workflows del CI en verde. Lo que sigue es publicar
-`v1.1.0` como prerelease para que el auto-updater la levante.
+**La Fase 2 del SPEC-displays está HECHA, verificada en hardware y RELEASEADA.** En el desktop de 3
+displays: la TV se apaga y se prende, si no se confirma vuelve sola, si se confirma se queda, y los
+otros dos monitores no se movieron. Se publicó como **v1.1.0** (prerelease) y **el auto-updater
+1.0.0 → 1.1.0 se probó de punta a punta y funciona**. De yapa quedó `release.yml`: los próximos
+releases salen con un solo `git tag`. **No queda nada pendiente de esta misión** — lo abierto son
+cosas menores para otra sesión (ver TODO: pasar la 1.1.0 a release final, regresión de transferencia,
+estrenar `release.yml`, y la Fase 3).
 
 ## Lo que se hizo
 
@@ -62,6 +65,7 @@ los otros dos monitores no se movieron. Los 3 workflows del CI en verde. Lo que 
 | **Hardware — no confirmar ⇒ vuelve sola** (EL criterio de la fase) | ✅ **verificado por Guido** |
 | **Hardware — confirmar ⇒ se queda** | ✅ **verificado por Guido** |
 | **Hardware — los otros 2 monitores no se movieron** | ✅ **verificado por Guido** |
+| **Auto-updater 1.0.0 → 1.1.0** (CHECK → DOWNLOAD & RESTART) | ✅ **verificado por Guido** |
 | **Regresión: clipboard / discovery / transferencias** | ⬜ **NO PROBADO** — la app corrió, pero no se ejerció una transferencia |
 | **CPU en reposo** | ⬜ **NO MEDIDO** (el diseño no agrega poll, pero eso es argumento, no evidencia) |
 
@@ -135,11 +139,11 @@ primera corrida real** — el guard está probado en falso local (pasa con el ta
 uno adelantado/viejo/lock desfasado), y los pasos de build son copia verbatim de `build.yml` (verde),
 pero el publish end-to-end se ejerce recién en la próxima versión.
 
-### Lo único que queda de la 1.1.0: probar el updater de verdad
+### Auto-updater 1.0.0 → 1.1.0: ✅ PROBADO por Guido
 
-Abrir una copia de la **v1.0.0** → Settings → APP UPDATES → CHECK FOR UPDATE → DOWNLOAD & RESTART, y
-confirmar que queda en 1.1.0. **Sin esa prueba, el release está publicado pero el camino de
-actualización no tiene evidencia.**
+CHECK FOR UPDATE ofreció la 1.1.0 y DOWNLOAD & RESTART dejó la app en la versión nueva. El camino de
+actualización de punta a punta **funciona** — era lo último que faltaba de la 1.1.0, ya no queda
+nada pendiente de esa versión.
 
 ## Bloqueos
 
