@@ -2,6 +2,51 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
+## 2026-07-21 — SPEC-displays Fase 3 IMPLEMENTADA (perfiles, ajustes, watcher, lienzo) · falta hardware
+
+Cierra el motor de displays: además de ver y attach/detach, ahora hay perfiles, ajustes, refresco en
+vivo y un lienzo para acomodar los monitores. Verificado LOCAL (scratch + tests + 2 rondas de review);
+**NO probado en hardware** todavía (es el próximo paso).
+
+### Added
+- **Perfiles** — comandos `displays_list_profiles` / `save_profile` / `load_profile` / `delete_profile`,
+  cableados al motor del crate puro (`MonarchDisplayManager`) que ya estaba desde la Fase 2, sobre el
+  store atómico apuntado al APPDATA de Millennium. **Cargar un perfil es un `SetDisplayConfig`** y pasa
+  por la red de auto-rollback. **Sin migración**: el campo `profiles` del JSON ya existía vacío.
+- **Ajustes** — comandos `displays_get_settings` / `update_settings`. Millennium expone SOLO el plazo
+  del auto-revert; al guardar se cambia ese campo y se **preserva** el resto de `AppSettings`.
+- **Watcher en vivo `WM_DISPLAYCHANGE`** (`system_events.rs`) — segundo canal en la ventana oculta,
+  aparte del resume. **Refresca la lista sin invalidar el cache** (invalidar borra el monitor
+  detachado; solo el resume invalida — ADR-013). Por evento, sin poll.
+- **Lienzo de arrastre** (opción A, espejo de Windows) — comando `displays_apply_layout` +
+  `PosicionView`. Se arrastran rectángulos a escala, se **pegan al borde** (snap edge-to-edge, sin
+  huecos ni superposición); APLICAR manda las posiciones. El backend matchea por `(adapterLuid,
+  targetId)`, ancla el primario en `(0,0)` y aplica por la red compartida.
+- Frontend: tira de pestañas **LISTA · PERFILES · AJUSTES · LIENZO** en el modal de DISPLAYS, con el
+  banner de confirmación (pisar/borrar perfil) y el lienzo, reusando la barra de cuenta regresiva de
+  la Fase 2 para todo apply. Render por diff + escaping por `textContent` como el resto.
+
+### Changed
+- `aplicar_con_red` (glue compartida por cargar-perfil y lienzo) **no compara ids** a nivel glue: la
+  verificación por re-enumeración la hace el backend (`settle_poll`), el auto-revert es el watchdog
+  (ADR-012). Antes intentaba una comparación de ids que era no fiable (ver Fixed).
+
+### Fixed (hallazgos de las 2 rondas de revisión adversarial, todos corregidos antes de commitear)
+- **Cargar perfil comparaba ids de dos enumeraciones distintas** (`get_layout` rellena el EDID del
+  cache, `foto_cruda` no) + carrera de asentado → podía revertir un apply BUENO y no cazar uno que NO
+  tomó. Se sacó esa comparación (ADR-012).
+- **Pisar un perfil con otra capitalización** creaba un duplicado en vez de reemplazar (el chequeo era
+  case-insensitive, el backend guarda case-sensitive). Ahora se pisa el nombre canónico guardado. Y se
+  bloquea GUARDAR si la lista de perfiles todavía no cargó (no pisar a ciegas).
+- **Lienzo: tras APLICAR mostraba el layout viejo** toda la cuenta regresiva (un refresh intermedio
+  re-sincronizaba contra el `state.displays` viejo). La re-sync ahora no corre con un apply en vuelo.
+- **Lienzo: salir y volver a la pestaña descartaba un acomodo sin aplicar.** Ahora se preserva.
+
+### Doc
+- **ADR-012** (apply de layout completo no compara ids en la glue) y **ADR-013** (watcher de dos
+  canales: refresca sin invalidar) en `docs/DECISIONS.md`. Nota del scratch: excluir `winreg` de las
+  deps windows (arrastra `dlltool`; displays no lo usa).
+
 ## 2026-07-20 (d) — Release automático por tag (deja de ser un trámite a mano)
 
 Publicar una versión pasa de 9 pasos manuales a uno: `git tag vX.Y.Z && git push origin vX.Y.Z`.

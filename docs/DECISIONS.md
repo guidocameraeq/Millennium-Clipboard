@@ -316,6 +316,61 @@ de que el auto-rollback funciona sería que alguien lo corrió a mano una vez.
 
 ---
 
+## ADR-012 — El apply de **layout completo** (perfil y lienzo) NO compara ids a nivel glue
+
+**Estado: Fase 3.** `aplicar_con_red` (la red compartida por `cargar_perfil` y el lienzo) **no hace
+una comparación de ids** para decidir si el cambio "tomó": arma el watchdog, emite el evento y
+devuelve la foto fresca, y listo. La verificación por re-enumeración queda en manos del backend
+(`settle_poll`, que corre dentro del apply y conoce el remapeo por EDID) y el auto-revert real es el
+watchdog (si el usuario no confirma, vuelve solo).
+
+**La alternativa que se probó y se descartó** (la cazó la revisión adversarial antes de commitear): que
+`cargar_perfil` leyera los ids que "tienen que quedar activos" y `aplicar_con_red` los verificara
+re-enumerando, en paralelo a lo que hace `toggle`. Dos bugs, opuestos, los dos reales:
+
+1. **Falso negativo.** Los ids "esperados" se leían de `guard.get_layout()` *después* del apply, que
+   re-enumera el estado REAL, no el target. Un monitor que el perfil pidió prender y que NO prendió
+   simplemente no aparecía en "esperados", así que el chequeo "¿están todos los esperados activos?"
+   pasaba siempre: incapaz de cazar el no-op-que-devuelve-éxito que dice cazar.
+2. **Falso positivo.** "Esperados" salía de `get_layout()` (que pasa por `merge_layout_with_fresh`,
+   que **rellena el EDID desde el cache** → id `luid:target:HASH`) y se comparaba contra `foto_cruda`
+   (que usa el EDID **crudo** de la enumeración → si leyó `None`, id `luid:target:none`). Los ids de la
+   misma pantalla no matcheaban → se revertía un apply que SÍ había andado. Sumado a la carrera de
+   asentado en un detach (un monitor apagándose enumera "prendido" un instante y "ausente" el
+   siguiente), el rollback espurio era probable justo en la ventana post-cambio.
+
+**Por qué `toggle` sí puede comparar ids y esto no**: el target de `toggle` es UN monitor conocido,
+leído del estado **pre-apply** por la MISMA ruta de enumeración en ambos lados (`foto_cruda` antes y
+después). Un layout completo con remapeo por EDID no tiene ese lujo: cualquier comparación de ids a
+nivel glue cruza rutas distintas. La lección: **no re-verificar arriba lo que el backend ya verifica
+bien abajo.** `aplicar_con_red` es un paralelo del bloque post-apply de `toggle` en lo único que
+importa (el invariante "ninguna salida sin dejar el watchdog armado"), no en la parte de la
+comparación.
+
+---
+
+## ADR-013 — El watcher en vivo usa **dos canales**: `WM_DISPLAYCHANGE` refresca, solo el resume invalida
+
+**Estado: Fase 3.** La ventana oculta de `system_events.rs` (que la Fase 2 usaba solo para el resume)
+ahora atiende también `WM_DISPLAYCHANGE`, pero por un **canal propio** (`canal_cambio`), con su propio
+hilo consumidor y su propio callback. El callback del cambio solo emite `displays-changed` (el frontend
+re-consulta y re-enumera fresco); el callback del resume, aparte, es el único que llama
+`invalidate_backend_cache`.
+
+**Por qué separados y no un solo camino**: invalidar el cache ante `WM_DISPLAYCHANGE` es la cicatriz
+que Monarch dejó anotada. El cache es lo que mantiene vivo el recuerdo de un monitor **detachado**, y
+un apply propio dispara `WM_DISPLAYCHANGE` — invalidar ahí borraría el monitor que se acaba de apagar y
+con él la posibilidad de volver a prenderlo. Un solo camino compartido tarde o temprano invalidaría de
+más. Con dos canales, "refrescar la vista" y "tirar el cache" no se pueden cruzar por accidente.
+
+**Alternativa descartada** — un canal con un enum de razón (`Resume` | `Cambio`) y un solo consumidor:
+funciona, pero el resume y el cambio quieren *debounces distintos* (2000 ms el resume, para absorber la
+ráfaga de despertar; ~400 ms el cambio, para reaccionar rápido al enchufe), y mezclarlos en un
+consumidor es más frágil que dos hilos cortos que bloquean en su `recv`. **CPU en reposo intacto**: los
+dos consumidores bloquean en `recv_timeout` y la ventana en `GetMessageW`; cero poll.
+
+---
+
 ## Nota de verificación — este proyecto **no tiene gate de compilación local**
 
 Medido el 2026-07-20, no supuesto:
@@ -355,6 +410,13 @@ pub mod runtime_log { /* doble con la MISMA firma: info/warn/err, impl Into<Stri
 
 y el `Cargo.toml` del scratch espeja el bloque `[target.'cfg(target_os = "windows")'.dependencies]`
 del proyecto. Con eso, lo que se chequea **es** el código que va al binario.
+
+**Dos ajustes al espejar, verificados en la Fase 3 (2026-07-21):** (1) **sacar `winreg`** del bloque
+windows — displays no lo usa, y `winreg` arrastra `windows-sys → windows_x86_64_gnu`, cuyo
+build-script **pide `dlltool`** (ausente acá); con winreg adentro la rama Windows del scratch muere en
+ese build-script antes de tocar el código de displays. (`windows 0.60` es raw-dylib/`windows-link` y
+`cargo check` no linkea, así que ese sí pasa sin `dlltool`.) (2) **agregar `anyhow`** a
+`[dependencies]`: lo usa `json_store.rs`, que entra por `#[path]`.
 
 Las dos ramas de `cfg`, las dos verificables local:
 

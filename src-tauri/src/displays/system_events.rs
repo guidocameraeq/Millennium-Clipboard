@@ -1,6 +1,11 @@
-// El resume-listener — SPEC-displays, Fase 2.
+// El listener de eventos del sistema — SPEC-displays, Fase 2 (resume) + Fase 3
+// (cambio de topología).
 //
-// La segunda pieza de la red de seguridad (la primera es `watchdog.rs`).
+// La ventana oculta reacciona a DOS mensajes de Windows, por CANALES SEPARADOS:
+//  - `WM_POWERBROADCAST` (resume): segunda pieza de la red de seguridad (la
+//    primera es `watchdog.rs`). Al despertar, tira el cache.
+//  - `WM_DISPLAYCHANGE` (Fase 3): enchufaste/desenchufaste un monitor, o un apply
+//    propio cambió la topología. **Refresca la vista sin tocar el cache.**
 //
 // # Qué problema resuelve
 //
@@ -17,17 +22,18 @@
 // La cura es simple y es la del donante: al despertar, **tirar el cache** y que
 // la próxima consulta reconstruya todo desde una enumeración fresca.
 //
-// # Por qué WM_DISPLAYCHANGE NO está acá
+// # WM_DISPLAYCHANGE refresca, pero NO invalida el cache (la cicatriz)
 //
-// Esta ventana recibe también `WM_DISPLAYCHANGE` (enchufaste/desenchufaste algo),
-// y la tentación es invalidar el cache ahí también. **Es un error**, y el donante
-// lo dejó anotado con la cicatriz: el cache es justamente lo que mantiene vivo
-// el recuerdo de un monitor *detachado*, y un apply propio dispara
-// `WM_DISPLAYCHANGE` — invalidar ahí borraría el monitor que acabamos de apagar
-// y con él la posibilidad de volver a prenderlo.
+// La tentación al recibir `WM_DISPLAYCHANGE` es invalidar el cache, como hace el
+// resume. **Es un error**, y el donante lo dejó anotado: el cache es justamente
+// lo que mantiene vivo el recuerdo de un monitor *detachado*, y un apply propio
+// dispara `WM_DISPLAYCHANGE` — invalidar ahí borraría el monitor que acabamos de
+// apagar y con él la posibilidad de volver a prenderlo.
 //
-// El refresco en vivo de la lista ante `WM_DISPLAYCHANGE` es la Fase 3, y cuando
-// llegue tiene que refrescar la vista **sin** invalidar el cache.
+// Por eso el cambio de topología va por un canal PROPIO (`canal_cambio`), con su
+// propio callback, que solo refresca la vista (el frontend re-consulta y
+// re-enumera fresco). El cache se tira **solo** en el resume (`canal`). Los dos
+// caminos no se cruzan.
 //
 // # Costo en reposo
 //
@@ -44,8 +50,8 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, RegisterClassW,
-    TranslateMessage, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, WM_POWERBROADCAST,
-    WNDCLASSW,
+    TranslateMessage, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, WM_DISPLAYCHANGE,
+    WM_POWERBROADCAST, WNDCLASSW,
 };
 
 use super::diagnostics;
@@ -54,32 +60,67 @@ use super::diagnostics;
 /// en asentarse. Se absorbe la ráfaga y se actúa una sola vez, al final.
 const ESPERA_DE_ASENTADO: Duration = Duration::from_millis(2000);
 
-/// Canal hacia el hilo que reacciona. Es un `OnceLock` para que `spawn` sea
-/// idempotente: registrar dos veces la misma clase de ventana falla, y dos
-/// listeners duplicarían el trabajo.
+/// Un cambio de topología también llega en ráfaga (una TV negociando modo dispara
+/// varios `WM_DISPLAYCHANGE`). Se coalescen, pero con una espera mucho más corta
+/// que el resume: acá se quiere que la lista reaccione rápido al enchufe.
+const ESPERA_DE_CAMBIO: Duration = Duration::from_millis(400);
+
+/// Canal del resume. Es un `OnceLock` para que `spawn` sea idempotente: registrar
+/// dos veces la misma clase de ventana falla, y dos listeners duplicarían el
+/// trabajo.
 fn canal() -> &'static OnceLock<Mutex<Sender<()>>> {
     static EMISOR: OnceLock<Mutex<Sender<()>>> = OnceLock::new();
     &EMISOR
 }
 
-/// Arranca el listener. `al_despertar` se ejecuta en un hilo propio, una vez por
-/// ráfaga de resume, **nunca** en el hilo de la ventana (bloquear el bombeo de
-/// mensajes de Windows es una forma conocida de colgar el escritorio).
-pub(super) fn spawn(al_despertar: Box<dyn Fn() + Send + 'static>) {
-    let (emisor, receptor) = mpsc::channel::<()>();
-    if canal().set(Mutex::new(emisor)).is_err() {
+/// Canal del cambio de topología (`WM_DISPLAYCHANGE`). Separado del resume a
+/// propósito: este NO invalida el cache (ver cabecera).
+fn canal_cambio() -> &'static OnceLock<Mutex<Sender<()>>> {
+    static EMISOR: OnceLock<Mutex<Sender<()>>> = OnceLock::new();
+    &EMISOR
+}
+
+/// Arranca el listener. `al_despertar` y `al_cambiar` se ejecutan en hilos
+/// propios, una vez por ráfaga, **nunca** en el hilo de la ventana (bloquear el
+/// bombeo de mensajes de Windows es una forma conocida de colgar el escritorio).
+pub(super) fn spawn(
+    al_despertar: Box<dyn Fn() + Send + 'static>,
+    al_cambiar: Box<dyn Fn() + Send + 'static>,
+) {
+    let (emisor_resume, receptor_resume) = mpsc::channel::<()>();
+    if canal().set(Mutex::new(emisor_resume)).is_err() {
         diagnostics::log("system_events:ya_estaba_arrancado");
+        return;
+    }
+    let (emisor_cambio, receptor_cambio) = mpsc::channel::<()>();
+    if canal_cambio().set(Mutex::new(emisor_cambio)).is_err() {
+        // El canal del resume ya se seteó bien arriba, así que llegar acá con este
+        // ocupado no debería pasar; se anota y no se arranca el consumidor.
+        diagnostics::log("system_events:canal_cambio_ya_estaba");
         return;
     }
 
     std::thread::spawn(bombear_mensajes);
-    std::thread::spawn(move || consumir(receptor, al_despertar));
+    std::thread::spawn(move || consumir(receptor_resume, al_despertar));
+    std::thread::spawn(move || consumir_cambio(receptor_cambio, al_cambiar));
 }
 
-/// Llamado desde el wndproc. No toma ningún lock del resto de la app: solo
-/// empuja al canal.
+/// Llamado desde el wndproc ante un resume. No toma ningún lock del resto de la
+/// app: solo empuja al canal.
 fn notificar() {
     let Some(emisor) = canal().get() else {
+        return;
+    };
+    let Ok(emisor) = emisor.lock() else {
+        return;
+    };
+    let _ = emisor.send(());
+}
+
+/// Llamado desde el wndproc ante un `WM_DISPLAYCHANGE`. Igual que `notificar`
+/// pero por el canal del cambio de topología.
+fn notificar_cambio() {
+    let Some(emisor) = canal_cambio().get() else {
         return;
     };
     let Ok(emisor) = emisor.lock() else {
@@ -107,6 +148,28 @@ fn consumir(receptor: mpsc::Receiver<()>, al_despertar: Box<dyn Fn() + Send + 's
 
         diagnostics::log("system_events:resume:invalidando_cache");
         al_despertar();
+    }
+}
+
+/// Igual que `consumir` pero para el cambio de topología: absorbe la ráfaga con
+/// una espera más corta y refresca la vista. **No invalida el cache** — eso lo
+/// decide el callback (`al_cambiar`), que solo avisa el cambio.
+fn consumir_cambio(receptor: mpsc::Receiver<()>, al_cambiar: Box<dyn Fn() + Send + 'static>) {
+    loop {
+        if receptor.recv().is_err() {
+            return;
+        }
+
+        loop {
+            match receptor.recv_timeout(ESPERA_DE_CAMBIO) {
+                Ok(()) => continue,
+                Err(RecvTimeoutError::Timeout) => break,
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+        }
+
+        diagnostics::log("system_events:displaychange:refrescando_vista");
+        al_cambiar();
     }
 }
 
@@ -189,6 +252,11 @@ unsafe extern "system" fn wndproc(
         // Windows espera TRUE para los mensajes de energía que uno maneja.
         return LRESULT(1);
     }
-    // Todo lo demás —incluido WM_DISPLAYCHANGE, ver la cabecera— al default.
+    if msg == WM_DISPLAYCHANGE {
+        // Fase 3: refrescar la vista SIN invalidar el cache (canal aparte del
+        // resume, ver cabecera). Es solo una notificación; se avisa y se cae al
+        // default igual (no se consume el mensaje).
+        notificar_cambio();
+    }
     DefWindowProcW(hwnd, msg, wparam, lparam)
 }

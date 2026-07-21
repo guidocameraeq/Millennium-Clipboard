@@ -36,7 +36,7 @@
 //! El motor viene de Monarch @ `7f9f63b` — ver `docs/DECISIONS.md` (ADR-002) y
 //! `vendor/monarch/PROVENANCE.md`.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "windows")]
 #[allow(dead_code)] // helpers de color/wallpaper que solo usa una rama del apply
@@ -132,6 +132,48 @@ pub struct DisplaysSnapshot {
     pub displays: Vec<DisplayView>,
     /// `None` = no hay nada esperando confirmación.
     pub pending: Option<PendingView>,
+}
+
+/// Un perfil guardado, tal como lo ve el frontend (SPEC-displays, Fase 3).
+///
+/// El perfil real guarda un `Layout` entero; acá solo viaja lo que la lista
+/// necesita mostrar. El resumen se arma en el backend para que el frontend no
+/// tenga que entender la topología.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileView {
+    pub name: String,
+    /// Cuántos monitores quedan prendidos en este perfil.
+    pub active_count: usize,
+    /// Resumen legible ya formateado (ej. `"2 monitores · 1920×1080, 2560×1440"`).
+    pub summary: String,
+}
+
+/// Los ajustes de displays que el frontend puede editar (SPEC-displays, Fase 3).
+///
+/// Millennium solo expone el **plazo del auto-revert**. El resto de `AppSettings`
+/// (atajos globales, perfil de arranque, etc.) son features de Monarch que
+/// Millennium no cablea; al guardar se **preservan intactos** (ver
+/// `guardar_ajustes`). Viaja en los dos sentidos: sale en `leer` y entra en
+/// `guardar`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsView {
+    pub revert_timeout_secs: u64,
+}
+
+/// Una posición nueva para un monitor, tal como la manda el lienzo de arrastre
+/// (SPEC-displays, Fase 3). Se identifica el monitor por **placa + target**, NO
+/// por el id completo con EDID: el EDID puede leerse distinto entre
+/// enumeraciones (a veces `None`), y `(adapterLuid, targetId)` alcanza para
+/// ubicar un monitor activo sin ese riesgo.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PosicionView {
+    pub adapter_luid: String,
+    pub target_id: u32,
+    pub x: i32,
+    pub y: i32,
 }
 
 /// Marca qué monitores se pueden apagar: solo los activos, y solo si no son el
@@ -378,7 +420,7 @@ mod estado {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    use monarch::{Layout, MonarchDisplayManager};
+    use monarch::{Layout, MonarchDisplayManager, Profile};
 
     use super::backend::SystemDisplayBackend;
     use super::ids::{format_display_id, parse_display_id};
@@ -386,7 +428,7 @@ mod estado {
     use super::watchdog::{self, Desenlace};
     use super::{
         diagnostics, mark_can_detach, DisplayView, DisplaysSnapshot, Emisor, PendingView,
-        EVENTO_CAMBIO, EVENTO_CONFIRMACION, FORCE_MOCK_ENV,
+        PosicionView, ProfileView, SettingsView, EVENTO_CAMBIO, EVENTO_CONFIRMACION, FORCE_MOCK_ENV,
     };
 
     type Manager = MonarchDisplayManager<SystemDisplayBackend, MillenniumConfigStore>;
@@ -431,9 +473,17 @@ mod estado {
             mock,
         }));
 
-        // Segunda pieza de la red: al despertar la máquina, tirar el cache.
+        // La ventana oculta cablea DOS reacciones distintas:
+        //  - resume: al despertar la máquina, tirar el cache (los LUID cambian).
+        //  - cambio de topología (WM_DISPLAYCHANGE): refrescar la vista SIN tocar
+        //    el cache. Son canales separados a propósito: invalidar ante un cambio
+        //    borraría el recuerdo del monitor detachado. Solo el resume invalida.
         let para_el_resume = estado.clone();
-        super::system_events::spawn(Box::new(move || para_el_resume.al_despertar()));
+        let para_el_cambio = estado.clone();
+        super::system_events::spawn(
+            Box::new(move || para_el_resume.al_despertar()),
+            Box::new(move || para_el_cambio.al_cambiar_displays()),
+        );
 
         Ok(estado)
     }
@@ -648,7 +698,226 @@ mod estado {
             self.snapshot()
         }
 
+        // --- perfiles --------------------------------------------------------
+
+        /// Lista los perfiles guardados (nombre + un resumen legible).
+        pub fn listar_perfiles(&self) -> Result<Vec<ProfileView>, String> {
+            let guard = self.0.manager.lock().map_err(|_| envenenado())?;
+            let perfiles = guard.list_profiles();
+            drop(guard);
+            Ok(perfiles.iter().map(vista_de_perfil).collect())
+        }
+
+        /// Guarda el layout actual con un nombre. Si el nombre ya existe, el
+        /// manager lo pisa; la confirmación de "vas a pisar 'X'" es del frontend,
+        /// que es donde el usuario ve la lista. Devuelve la lista actualizada.
+        pub fn guardar_perfil(&self, nombre: &str) -> Result<Vec<ProfileView>, String> {
+            {
+                let mut guard = self.0.manager.lock().map_err(|_| envenenado())?;
+                guard.save_profile(nombre).map_err(|e| e.to_string())?;
+            }
+            diagnostics::log("perfil:guardado");
+            self.listar_perfiles()
+        }
+
+        /// Borra un perfil por nombre. La confirmación es del frontend.
+        pub fn borrar_perfil(&self, nombre: &str) -> Result<Vec<ProfileView>, String> {
+            {
+                let mut guard = self.0.manager.lock().map_err(|_| envenenado())?;
+                guard.delete_profile(nombre).map_err(|e| e.to_string())?;
+            }
+            diagnostics::log("perfil:borrado");
+            self.listar_perfiles()
+        }
+
+        /// Carga un perfil: aplica su layout **con la red puesta**.
+        ///
+        /// Cargar es un `SetDisplayConfig`, así que pasa por la MISMA red que el
+        /// detach de la TV. `apply_profile` puede ser un no-op (si el perfil ya es
+        /// el layout actual): en ese caso no hay confirmación pendiente y no hay
+        /// nada que revertir ni perseguir.
+        pub fn cargar_perfil(&self, nombre: &str) -> Result<DisplaysSnapshot, String> {
+            let plazo = {
+                let mut guard = self.0.manager.lock().map_err(|_| envenenado())?;
+                guard.apply_profile(nombre).map_err(|e| e.to_string())?;
+                // Si `apply_profile` aplicó de verdad, dejó una confirmación
+                // pendiente; si el perfil ya era el layout actual, no.
+                guard.pending_confirmation_remaining()
+            };
+
+            match plazo {
+                // No-op: el perfil ya era el layout actual. Nada que perseguir.
+                None => {
+                    diagnostics::log("perfil:cargado:sin_cambios");
+                    self.avisar_cambio();
+                    self.snapshot()
+                }
+                Some(plazo) => self.aplicar_con_red(plazo),
+            }
+        }
+
+        // --- ajustes ---------------------------------------------------------
+
+        /// Lee los ajustes que el frontend puede editar (hoy: el plazo del
+        /// auto-revert).
+        pub fn leer_ajustes(&self) -> Result<SettingsView, String> {
+            let guard = self.0.manager.lock().map_err(|_| envenenado())?;
+            let ajustes = guard.settings();
+            Ok(SettingsView {
+                revert_timeout_secs: ajustes.revert_timeout_secs,
+            })
+        }
+
+        /// Guarda los ajustes. Solo se toca el plazo del auto-revert; el resto de
+        /// la config (atajos, perfil de arranque… features de Monarch que
+        /// Millennium no usa) se **preserva intacta** leyendo lo actual y
+        /// cambiando solo ese campo. El nuevo plazo rige desde el próximo apply.
+        pub fn guardar_ajustes(&self, nuevos: SettingsView) -> Result<SettingsView, String> {
+            {
+                let mut guard = self.0.manager.lock().map_err(|_| envenenado())?;
+                let mut ajustes = guard.settings().clone();
+                ajustes.revert_timeout_secs = nuevos.revert_timeout_secs;
+                guard.update_settings(ajustes).map_err(|e| e.to_string())?;
+            }
+            diagnostics::log("ajustes:guardados");
+            self.leer_ajustes()
+        }
+
+        // --- lienzo ----------------------------------------------------------
+
+        /// Aplica las posiciones que armó el lienzo de arrastre, **con la red
+        /// puesta** (es un `SetDisplayConfig`, igual que el detach de la TV).
+        ///
+        /// Solo mueve monitores; no prende ni apaga ninguno (eso es la LISTA). Las
+        /// posiciones se cruzan por `(adapterLuid, targetId)`, no por el id con
+        /// EDID (que puede leerse `None` a veces). Windows exige el primario en
+        /// `(0,0)`, así que después de mover se corre todo para que el primario
+        /// quede en el origen (los demás pueden tener coordenadas negativas, que
+        /// es válido).
+        pub fn aplicar_layout(&self, posiciones: Vec<PosicionView>) -> Result<DisplaysSnapshot, String> {
+            if posiciones.is_empty() {
+                return Err("no llegó ninguna posición para aplicar".to_string());
+            }
+
+            let plazo = {
+                let mut guard = self.0.manager.lock().map_err(|_| envenenado())?;
+                let mut layout = guard.get_layout().map_err(|e| e.to_string())?;
+
+                // Mover cada monitor a su posición nueva. `cambio` distingue un
+                // arrastre real de "lo soltaste donde estaba" (no gastar un apply
+                // ni una cuenta regresiva si nada se movió).
+                let mut cambio = false;
+                for output in layout.outputs.iter_mut() {
+                    let luid = output.display_id.adapter_luid.to_string();
+                    if let Some(pos) = posiciones
+                        .iter()
+                        .find(|p| p.adapter_luid == luid && p.target_id == output.display_id.target_id)
+                    {
+                        if output.position.x != pos.x || output.position.y != pos.y {
+                            output.position.x = pos.x;
+                            output.position.y = pos.y;
+                            cambio = true;
+                        }
+                    }
+                }
+
+                if !cambio {
+                    None
+                } else {
+                    // Anclar el primario en (0,0).
+                    if let Some((px, py)) = layout
+                        .outputs
+                        .iter()
+                        .find(|o| o.primary)
+                        .map(|o| (o.position.x, o.position.y))
+                    {
+                        if px != 0 || py != 0 {
+                            for output in layout.outputs.iter_mut() {
+                                output.position.x -= px;
+                                output.position.y -= py;
+                            }
+                        }
+                    }
+                    guard.apply_layout(layout).map_err(|e| e.to_string())?;
+                    // A partir de acá el cambio está aplicado: como en el toggle,
+                    // el plazo siempre queda Some para que el watchdog SÍ arranque.
+                    Some(
+                        guard
+                            .pending_confirmation_remaining()
+                            .unwrap_or(PLAZO_DE_EMERGENCIA),
+                    )
+                }
+            };
+
+            match plazo {
+                // Nada se movió: no se aplicó, no hay nada que confirmar.
+                None => {
+                    diagnostics::log("lienzo:sin_cambios");
+                    self.avisar_cambio();
+                    self.snapshot()
+                }
+                Some(plazo) => self.aplicar_con_red(plazo),
+            }
+        }
+
         // --- la red ----------------------------------------------------------
+
+        /// La red compartida por los apply de **layout completo**: hoy cargar un
+        /// perfil, y en el lienzo (Fase 3) el arrastre. **Precondición**: ya se
+        /// aplicó un cambio y hay una confirmación pendiente con `plazo` restante.
+        ///
+        /// Arma el watchdog —que es el auto-revert de verdad: si el usuario no
+        /// confirma, vuelve solo— y devuelve la foto fresca. Misma regla dura que
+        /// el bloque post-apply de `toggle` (con el que es un paralelo deliberado,
+        /// NO compartido, para no tocar el camino de la Fase 2): de acá abajo
+        /// **ningún `?`** — ninguna salida se va sin dejar el watchdog armado.
+        ///
+        /// **A propósito NO compara ids a este nivel.** La verificación por
+        /// re-enumeración de un layout completo ya la hace el backend adentro del
+        /// apply (`settle_poll`, que conoce el remapeo por EDID). Re-verificar acá
+        /// comparando ids es poco fiable y contraproducente: las dos lecturas
+        /// frescas usan rutas de enumeración distintas (`get_layout` rellena el
+        /// EDID desde el cache, `foto_cruda` usa el crudo) y hay una carrera de
+        /// asentado, así que una comparación así daría tanto **falsos negativos**
+        /// (un no-op se reporta como éxito) como **falsos positivos** (revertir un
+        /// apply que sí anduvo). `toggle` sí compara ids porque su target es UN
+        /// monitor conocido del estado pre-apply, leído por la MISMA ruta en ambos
+        /// lados; un layout completo no tiene ese lujo. Ante un layout malo, el que
+        /// avisa es el usuario (no confirma) y el que revierte es el watchdog.
+        fn aplicar_con_red(&self, plazo: Duration) -> Result<DisplaysSnapshot, String> {
+            let despues = match self.foto_cruda() {
+                Ok(foto) => foto,
+                Err(err) => {
+                    // No se pudo leer cómo quedó (la CCD API rebota mientras el
+                    // stack de video se asienta). Lo conservador: dejar la red
+                    // puesta. Si el usuario ve su pantalla bien, confirma; si no,
+                    // vuelve sola.
+                    crate::runtime_log::warn(format!(
+                        "[displays] no se pudo leer cómo quedó ({err}); el watchdog queda armado, así que si no confirmás vuelve solo"
+                    ));
+                    self.armar_watchdog(plazo);
+                    self.avisar_confirmacion(serde_json::json!({
+                        "kind": "applied",
+                        "timeoutMs": plazo.as_millis() as u64,
+                    }));
+                    self.avisar_cambio();
+                    return Err(format!(
+                        "el cambio se aplicó pero no se pudo leer cómo quedó ({err}). Si la pantalla está bien, confirmá; si no, esperá y vuelve sola."
+                    ));
+                }
+            };
+
+            self.armar_watchdog(plazo);
+            self.avisar_confirmacion(serde_json::json!({
+                "kind": "applied",
+                "timeoutMs": plazo.as_millis() as u64,
+            }));
+            self.avisar_cambio();
+
+            let mut foto = despues;
+            foto.pending = self.pendiente();
+            Ok(foto)
+        }
 
         /// Lanza el gatillo del auto-rollback.
         ///
@@ -713,6 +982,18 @@ mod estado {
             self.avisar_cambio();
         }
 
+        /// Cambió la topología (enchufaste/desenchufaste algo, o un apply propio):
+        /// refresca la vista **sin** invalidar el cache.
+        ///
+        /// Invalidar acá borraría el recuerdo del monitor detachado —y un apply
+        /// propio dispara este mismo mensaje—, que es justo lo que hay que
+        /// preservar. **Solo el resume invalida.** El frontend, al recibir el
+        /// aviso, re-consulta el snapshot, que en Windows sale de una enumeración
+        /// CCD fresca (no del cache), así que la lista se actualiza sola.
+        fn al_cambiar_displays(&self) {
+            self.avisar_cambio();
+        }
+
         // --- avisos ----------------------------------------------------------
 
         fn avisar_cambio(&self) {
@@ -726,6 +1007,33 @@ mod estado {
 
     fn envenenado() -> String {
         "el estado de monitores quedó inconsistente; reiniciá Millennium".to_string()
+    }
+
+    /// Arma la vista de un perfil: nombre + un resumen legible del layout.
+    ///
+    /// El resumen cuenta los monitores prendidos y lista sus resoluciones, para
+    /// que el usuario reconozca qué perfil es sin cargarlo.
+    fn vista_de_perfil(perfil: &Profile) -> ProfileView {
+        let activos: Vec<_> = perfil.layout.outputs.iter().filter(|o| o.enabled).collect();
+        let summary = if activos.is_empty() {
+            "sin monitores".to_string()
+        } else {
+            let resoluciones: Vec<String> = activos
+                .iter()
+                .map(|o| format!("{}×{}", o.resolution.width, o.resolution.height))
+                .collect();
+            format!(
+                "{} {} · {}",
+                activos.len(),
+                if activos.len() == 1 { "monitor" } else { "monitores" },
+                resoluciones.join(", ")
+            )
+        };
+        ProfileView {
+            name: perfil.name.clone(),
+            active_count: activos.len(),
+            summary,
+        }
     }
 
     /// Arma las vistas desde el modelo de Monarch (no desde los tipos Win32).

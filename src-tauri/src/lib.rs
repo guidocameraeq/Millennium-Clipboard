@@ -1249,6 +1249,143 @@ async fn displays_revert(app: tauri::AppHandle) -> Result<displays::DisplaysSnap
     }
 }
 
+/// Lista los perfiles guardados (SPEC-displays, Fase 3).
+#[tauri::command]
+async fn displays_list_profiles(
+    app: tauri::AppHandle,
+) -> Result<Vec<displays::ProfileView>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let estado = estado_displays(&app).ok_or_else(displays_no_disponible)?;
+        return tokio::task::spawn_blocking(move || estado.listar_perfiles())
+            .await
+            .map_err(|e| format!("displays: la tarea de perfiles se cayó: {e}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = &app;
+        Err(displays_no_disponible())
+    }
+}
+
+/// Guarda el layout actual como un perfil con nombre. Devuelve la lista al día.
+#[tauri::command]
+async fn displays_save_profile(
+    app: tauri::AppHandle,
+    name: String,
+) -> Result<Vec<displays::ProfileView>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let estado = estado_displays(&app).ok_or_else(displays_no_disponible)?;
+        return tokio::task::spawn_blocking(move || estado.guardar_perfil(&name))
+            .await
+            .map_err(|e| format!("displays: la tarea de guardar perfil se cayó: {e}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (&app, &name);
+        Err(displays_no_disponible())
+    }
+}
+
+/// Carga un perfil: aplica su layout con la red de auto-rollback puesta.
+#[tauri::command]
+async fn displays_load_profile(
+    app: tauri::AppHandle,
+    name: String,
+) -> Result<displays::DisplaysSnapshot, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let estado = estado_displays(&app).ok_or_else(displays_no_disponible)?;
+        return tokio::task::spawn_blocking(move || estado.cargar_perfil(&name))
+            .await
+            .map_err(|e| format!("displays: la tarea de cargar perfil se cayó: {e}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (&app, &name);
+        Err(displays_no_disponible())
+    }
+}
+
+/// Borra un perfil por nombre. Devuelve la lista al día.
+#[tauri::command]
+async fn displays_delete_profile(
+    app: tauri::AppHandle,
+    name: String,
+) -> Result<Vec<displays::ProfileView>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let estado = estado_displays(&app).ok_or_else(displays_no_disponible)?;
+        return tokio::task::spawn_blocking(move || estado.borrar_perfil(&name))
+            .await
+            .map_err(|e| format!("displays: la tarea de borrar perfil se cayó: {e}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (&app, &name);
+        Err(displays_no_disponible())
+    }
+}
+
+/// Lee los ajustes de displays (hoy: el plazo del auto-revert).
+#[tauri::command]
+async fn displays_get_settings(app: tauri::AppHandle) -> Result<displays::SettingsView, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let estado = estado_displays(&app).ok_or_else(displays_no_disponible)?;
+        return tokio::task::spawn_blocking(move || estado.leer_ajustes())
+            .await
+            .map_err(|e| format!("displays: la tarea de ajustes se cayó: {e}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = &app;
+        Err(displays_no_disponible())
+    }
+}
+
+/// Guarda los ajustes de displays. Devuelve los ajustes al día.
+#[tauri::command]
+async fn displays_update_settings(
+    app: tauri::AppHandle,
+    settings: displays::SettingsView,
+) -> Result<displays::SettingsView, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let estado = estado_displays(&app).ok_or_else(displays_no_disponible)?;
+        return tokio::task::spawn_blocking(move || estado.guardar_ajustes(settings))
+            .await
+            .map_err(|e| format!("displays: la tarea de guardar ajustes se cayó: {e}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (&app, &settings);
+        Err(displays_no_disponible())
+    }
+}
+
+/// Aplica las posiciones del lienzo de arrastre (Fase 3). Es un SetDisplayConfig:
+/// vuelve con la cuenta regresiva puesta, igual que el toggle o el cargar perfil.
+#[tauri::command]
+async fn displays_apply_layout(
+    app: tauri::AppHandle,
+    positions: Vec<displays::PosicionView>,
+) -> Result<displays::DisplaysSnapshot, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let estado = estado_displays(&app).ok_or_else(displays_no_disponible)?;
+        return tokio::task::spawn_blocking(move || estado.aplicar_layout(positions))
+            .await
+            .map_err(|e| format!("displays: la tarea del lienzo se cayó: {e}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (&app, &positions);
+        Err(displays_no_disponible())
+    }
+}
+
 #[tauri::command]
 fn record_frontend_log(level: String, msg: String) {
     match level.as_str() {
@@ -1808,6 +1945,13 @@ pub fn run() {
             displays_toggle,
             displays_confirm,
             displays_revert,
+            displays_list_profiles,
+            displays_save_profile,
+            displays_load_profile,
+            displays_delete_profile,
+            displays_get_settings,
+            displays_update_settings,
+            displays_apply_layout,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

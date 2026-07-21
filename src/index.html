@@ -506,13 +506,71 @@
         <span class="modal-title">DISPLAYS</span>
         <span class="mono" id="displays-count" style="margin-left:auto;font-size:10px;opacity:0.6">—</span>
       </header>
+      <!-- Pestañas (Fase 3). La barra de confirmación y las acciones viven abajo,
+           FUERA de los panes: un cambio pendiente (p. ej. al cargar un perfil)
+           tiene que verse aunque estés en otra pestaña. -->
+      <nav class="displays-tabs" id="displays-tabs" role="tablist">
+        <button class="displays-tab is-active" type="button" data-tab="list" role="tab">LISTA</button>
+        <button class="displays-tab" type="button" data-tab="profiles" role="tab">PERFILES</button>
+        <button class="displays-tab" type="button" data-tab="settings" role="tab">AJUSTES</button>
+        <button class="displays-tab" type="button" data-tab="canvas" role="tab">LIENZO</button>
+      </nav>
       <div class="modal-body">
         <p class="modal-error" id="displays-error" hidden></p>
-        <p class="mono displays-mock-warning" id="displays-mock-warning" hidden>
-          ⚠ DATOS DE PRUEBA — estos monitores son falsos (MONARCH_FORCE_MOCK_BACKEND)
-        </p>
-        <ul class="displays-list" id="displays-list"></ul>
-        <p class="mono displays-empty" id="displays-empty" hidden>Sin monitores para mostrar.</p>
+
+        <!-- Pane: LISTA (Fase 1/2 — sin cambios de comportamiento) -->
+        <div class="displays-pane" data-pane="list">
+          <p class="mono displays-mock-warning" id="displays-mock-warning" hidden>
+            ⚠ DATOS DE PRUEBA — estos monitores son falsos (MONARCH_FORCE_MOCK_BACKEND)
+          </p>
+          <ul class="displays-list" id="displays-list"></ul>
+          <p class="mono displays-empty" id="displays-empty" hidden>Sin monitores para mostrar.</p>
+        </div>
+
+        <!-- Pane: PERFILES (Fase 3) -->
+        <div class="displays-pane" data-pane="profiles" hidden>
+          <div class="displays-profile-save">
+            <input class="displays-profile-name" id="displays-profile-name" type="text"
+                   maxlength="60" placeholder="Nombre del perfil…" autocomplete="off" spellcheck="false" />
+            <button class="modal-btn small accept" type="button" id="displays-save-profile">＋ GUARDAR EL ACTUAL</button>
+          </div>
+          <!-- Banner de confirmación (pisar / borrar). Tus perfiles son tus datos:
+               nada se pisa ni se borra sin este OK explícito. -->
+          <div class="displays-confirm-banner" id="displays-profile-confirm" hidden>
+            <span class="mono displays-confirm-text" id="displays-profile-confirm-text">—</span>
+            <span class="displays-confirm-actions">
+              <button class="modal-btn small reject" type="button" id="displays-profile-confirm-yes">SÍ</button>
+              <button class="modal-btn small" type="button" id="displays-profile-confirm-no">NO</button>
+            </span>
+          </div>
+          <ul class="displays-profiles-list" id="displays-profiles-list"></ul>
+          <p class="mono displays-empty" id="displays-profiles-empty" hidden>Todavía no guardaste ningún perfil.</p>
+        </div>
+
+        <!-- Pane: AJUSTES (Fase 3) -->
+        <div class="displays-pane" data-pane="settings" hidden>
+          <div class="displays-setting">
+            <label class="displays-setting-label" for="displays-revert-secs">Plazo del auto-revert</label>
+            <p class="displays-setting-hint">Cuántos segundos espera un cambio antes de volver solo si no lo confirmás.</p>
+            <div class="displays-setting-row">
+              <input class="displays-setting-input" id="displays-revert-secs" type="number"
+                     min="3" max="120" step="1" inputmode="numeric" />
+              <span class="displays-setting-unit">segundos</span>
+              <button class="modal-btn small accept" type="button" id="displays-settings-save">GUARDAR</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pane: LIENZO (Fase 3) -->
+        <div class="displays-pane" data-pane="canvas" hidden>
+          <p class="displays-canvas-hint mono">Arrastrá los monitores — se pegan al borde. APLICAR lo manda a Windows (vuelve solo si no confirmás).</p>
+          <div class="displays-canvas" id="displays-canvas"></div>
+          <p class="mono displays-empty" id="displays-canvas-empty" hidden>No hay monitores activos para acomodar.</p>
+          <div class="displays-canvas-actions">
+            <button class="modal-btn small" type="button" id="displays-canvas-reset">↺ DESHACER CAMBIOS</button>
+            <button class="modal-btn small accept" type="button" id="displays-canvas-apply">✓ APLICAR</button>
+          </div>
+        </div>
       </div>
       <!-- Barra de confirmación: solo aparece mientras el backend tiene un
            cambio esperando el OK. Vive FUERA de .modal-body a propósito — si

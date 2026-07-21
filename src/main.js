@@ -203,6 +203,9 @@
     displays: [], // monitores del ultimo snapshot (SPEC-displays)
     displaysPending: null, // { deadlineAt } mientras un cambio espera confirmacion (Fase 2)
     displaysBusy: false, // hay un invoke de displays en vuelo: no encimar otro
+    displaysProfiles: null, // perfiles guardados (Fase 3); null = todavia no cargados
+    displaysTab: 'list', // pestaña activa del modal (Fase 3)
+    displaysDraft: [], // borrador del lienzo: monitores activos con su posicion en edicion (Fase 3)
   };
 
   // ---------- Progress bar segments ----------------------------------------
@@ -1616,6 +1619,23 @@
   const displaysPendingText = document.getElementById('displays-pending-text');
   const displaysConfirmBtn = document.getElementById('displays-confirm');
   const displaysRevertBtn = document.getElementById('displays-revert');
+  // Fase 3: pestañas, perfiles y ajustes.
+  const displaysTabs = document.getElementById('displays-tabs');
+  const displaysPanes = displaysModal ? Array.from(displaysModal.querySelectorAll('.displays-pane')) : [];
+  const displaysProfilesList = document.getElementById('displays-profiles-list');
+  const displaysProfilesEmpty = document.getElementById('displays-profiles-empty');
+  const displaysProfileName = document.getElementById('displays-profile-name');
+  const displaysSaveProfileBtn = document.getElementById('displays-save-profile');
+  const displaysProfileConfirm = document.getElementById('displays-profile-confirm');
+  const displaysProfileConfirmText = document.getElementById('displays-profile-confirm-text');
+  const displaysProfileConfirmYes = document.getElementById('displays-profile-confirm-yes');
+  const displaysProfileConfirmNo = document.getElementById('displays-profile-confirm-no');
+  const displaysRevertSecsInput = document.getElementById('displays-revert-secs');
+  const displaysSettingsSaveBtn = document.getElementById('displays-settings-save');
+  const displaysCanvas = document.getElementById('displays-canvas');
+  const displaysCanvasEmpty = document.getElementById('displays-canvas-empty');
+  const displaysCanvasApplyBtn = document.getElementById('displays-canvas-apply');
+  const displaysCanvasResetBtn = document.getElementById('displays-canvas-reset');
 
   // El modulo de monitores es Windows-only. En Android el comando existe igual
   // (devuelve Err), asi que esconder el boton es cosmetico, no load-bearing.
@@ -1652,6 +1672,12 @@
   // CPU en reposo, que es justo lo que este proyecto vigila.
   let displaysCountdownTimer = null;
   let displaysLastShownSec = -1;
+  // Fase 3: acción destructiva de perfil esperando el OK del banner de confirmación.
+  let pendingProfileAction = null; // { type: 'overwrite'|'delete', name }
+  // Fase 3: estado del lienzo de arrastre.
+  let canvasView = null;   // { scale, minX, minY, offsetX, offsetY } del último render
+  let canvasDirty = false; // hay un acomodo local sin aplicar (protege de refrescos)
+  let canvasDrag = null;   // arrastre en curso: { m, div, startX, startY, origX, origY, scale }
 
   function stopDisplaysCountdown() {
     if (displaysCountdownTimer !== null) {
@@ -1702,6 +1728,22 @@
   function refreshDisplaysUi() {
     renderDisplays();
     renderDisplaysPending();
+    // Los botones CARGAR/BORRAR/GUARDAR se apagan mientras hay un cambio en
+    // vuelo o pendiente; renderProfiles se ocupa (no-op si no se cargaron).
+    renderProfiles();
+    // Lienzo: NO se toca en medio de un arrastre (re-renderizar re-escalaría y
+    // sacaría el monitor de abajo del cursor). Si el estado ya se asentó (sin
+    // pendiente) y no hay un acomodo local sin aplicar, se re-sincroniza con la
+    // realidad; si el usuario tiene algo a medio acomodar, se respeta.
+    if (state.displaysTab === 'canvas' && !canvasDrag) {
+      // Re-sincroniza con la realidad SOLO en un estado asentado: sin arrastre,
+      // sin acomodo local sin aplicar, sin cambio pendiente, y **sin un apply en
+      // vuelo** — durante el apply `state.displays` todavía tiene lo VIEJO, y
+      // re-inicializar ahí pisaría el acomodo recién mandado (se vería el layout
+      // viejo justo mientras hay que confirmar o revertir).
+      if (!canvasDirty && !state.displaysPending && !state.displaysBusy) initCanvasDraft();
+      renderCanvas();
+    }
   }
 
   function buildDisplayItem(d) {
@@ -1899,12 +1941,461 @@
     }
   }
 
+  // --- Fase 3: pestañas -----------------------------------------------------
+
+  function switchDisplaysTab(tab) {
+    state.displaysTab = tab;
+    if (displaysTabs) {
+      displaysTabs.querySelectorAll('.displays-tab').forEach((b) => {
+        b.classList.toggle('is-active', b.dataset.tab === tab);
+      });
+    }
+    displaysPanes.forEach((p) => { p.hidden = p.dataset.pane !== tab; });
+    if (displaysError) displaysError.hidden = true;
+    hideProfileConfirm();
+    // Los datos de perfiles/ajustes se piden recién al entrar a su pestaña.
+    if (tab === 'profiles') loadProfiles();
+    else if (tab === 'settings') loadSettings();
+    // Lienzo: si hay un acomodo local sin aplicar, se conserva al volver a la
+    // pestaña (mismo criterio que la re-sync); si no, se arranca de la realidad.
+    else if (tab === 'canvas') { if (!canvasDirty) initCanvasDraft(); renderCanvas(); }
+  }
+
+  // --- Fase 3: perfiles -----------------------------------------------------
+
+  function buildProfileItem(p) {
+    const li = document.createElement('li');
+    li.className = 'displays-profile-item';
+    li.dataset.name = p.name;
+    // Template ESTATICO; los datos entran por setText (mismo patron que las filas
+    // de monitores y de peers: nunca innerHTML con strings del backend).
+    li.innerHTML = `
+      <div class="displays-profile-info">
+        <div class="displays-profile-name-text"></div>
+        <div class="mono displays-profile-summary"></div>
+      </div>
+      <div class="displays-profile-actions">
+        <button class="modal-btn small accept displays-profile-load" type="button">CARGAR</button>
+        <button class="modal-btn small reject displays-profile-delete" type="button">BORRAR</button>
+      </div>`;
+    updateProfileItem(li, p);
+    return li;
+  }
+
+  function updateProfileItem(li, p) {
+    setText(li.querySelector('.displays-profile-name-text'), p.name);
+    setText(li.querySelector('.displays-profile-summary'),
+      (typeof p.summary === 'string' && p.summary) ? p.summary : '—');
+    const busy = !!state.displaysBusy;
+    const pending = !!state.displaysPending;
+    const loadBtn = li.querySelector('.displays-profile-load');
+    const delBtn = li.querySelector('.displays-profile-delete');
+    if (loadBtn) {
+      loadBtn.disabled = busy || pending;
+      loadBtn.title = pending
+        ? 'Hay un cambio esperando confirmación.'
+        : 'Aplicar este perfil (vuelve solo si no lo confirmás).';
+    }
+    if (delBtn) delBtn.disabled = busy;
+  }
+
+  // Render por diff, como renderDisplays: se reusa el <li> por data-name.
+  function renderProfiles() {
+    if (!displaysProfilesList) return;
+    const items = state.displaysProfiles;
+    if (items === null) return; // todavia no cargados: no tocar el DOM
+    const existing = new Map();
+    Array.from(displaysProfilesList.querySelectorAll('li.displays-profile-item')).forEach((li) => {
+      if (li.dataset.name) existing.set(li.dataset.name, li);
+    });
+    const seen = new Set();
+    items.forEach((p, idx) => {
+      seen.add(p.name);
+      try {
+        let li = existing.get(p.name);
+        if (li) updateProfileItem(li, p);
+        else li = buildProfileItem(p);
+        if (displaysProfilesList.children[idx] !== li) {
+          displaysProfilesList.insertBefore(li, displaysProfilesList.children[idx] || null);
+        }
+      } catch (err) {
+        console.error('[displays] perfil malformado', err);
+      }
+    });
+    existing.forEach((li, name) => { if (!seen.has(name)) li.remove(); });
+    if (displaysProfilesEmpty) displaysProfilesEmpty.hidden = items.length > 0;
+    if (displaysSaveProfileBtn) displaysSaveProfileBtn.disabled = !!state.displaysBusy;
+  }
+
+  async function loadProfiles() {
+    if (displaysError) displaysError.hidden = true;
+    try {
+      const profiles = await invoke('displays_list_profiles');
+      state.displaysProfiles = Array.isArray(profiles) ? profiles : [];
+    } catch (err) {
+      state.displaysProfiles = [];
+      showDisplaysError(err);
+    }
+    renderProfiles();
+  }
+
+  // El banner de confirmacion se reusa para pisar y para borrar. Tus perfiles son
+  // tus datos: ninguna de las dos corre sin que aprietes SÍ.
+  function hideProfileConfirm() {
+    pendingProfileAction = null;
+    if (displaysProfileConfirm) displaysProfileConfirm.hidden = true;
+  }
+
+  function askProfileConfirm(action, message) {
+    pendingProfileAction = action;
+    if (displaysProfileConfirmText) displaysProfileConfirmText.textContent = message;
+    if (displaysProfileConfirm) displaysProfileConfirm.hidden = false;
+  }
+
+  async function runPendingProfileAction() {
+    const action = pendingProfileAction;
+    hideProfileConfirm();
+    if (!action) return;
+    if (action.type === 'overwrite') await doSaveProfile(action.name);
+    else if (action.type === 'delete') await doDeleteProfile(action.name);
+  }
+
+  function saveProfileFlow() {
+    hideProfileConfirm();
+    const typed = (displaysProfileName && displaysProfileName.value || '').trim();
+    if (!typed) {
+      setStatus('DISPLAYS · poné un nombre para el perfil', { priority: 'warn', ttl: 4000 });
+      if (displaysProfileName) displaysProfileName.focus();
+      return;
+    }
+    // Guarda anti-pisado a ciegas: sin la lista cargada no se puede saber si el
+    // nombre ya existe, y guardar igual pisaría un perfil sin mostrar el banner.
+    if (state.displaysProfiles === null) {
+      setStatus('DISPLAYS · esperá, cargando perfiles…', { priority: 'warn', ttl: 3000 });
+      return;
+    }
+    // Pisar un perfil que ya existe = transformar tus datos: se pide OK antes. El
+    // match es sin distinguir mayúsculas, PERO se pisa el nombre CANÓNICO ya
+    // guardado (no la capitalización tipeada): el backend hace upsert por nombre
+    // exacto, así que "trabajo" sobre "Trabajo" tiene que reemplazar "Trabajo",
+    // no crear un duplicado.
+    const existing = (state.displaysProfiles || []).find(
+      (p) => p.name.toLowerCase() === typed.toLowerCase()
+    );
+    if (existing) {
+      askProfileConfirm(
+        { type: 'overwrite', name: existing.name },
+        `Ya existe "${existing.name}". Guardar reemplaza su layout guardado por el actual.`
+      );
+      return;
+    }
+    doSaveProfile(typed);
+  }
+
+  async function doSaveProfile(name) {
+    if (state.displaysBusy) return;
+    state.displaysBusy = true;
+    renderProfiles();
+    try {
+      const profiles = await invoke('displays_save_profile', { name });
+      state.displaysProfiles = Array.isArray(profiles) ? profiles : [];
+      if (displaysProfileName) displaysProfileName.value = '';
+      setStatus(`DISPLAYS · perfil "${name}" guardado`, { force: true });
+    } catch (err) {
+      showDisplaysError(err);
+    } finally {
+      state.displaysBusy = false;
+      renderProfiles();
+    }
+  }
+
+  // Cargar = aplicar el layout del perfil, con la MISMA red que el detach: el
+  // snapshot vuelve con la cuenta regresiva, y si no confirmás vuelve solo.
+  async function loadProfileFlow(name) {
+    if (state.displaysBusy || state.displaysPending) return;
+    hideProfileConfirm();
+    state.displaysBusy = true;
+    if (displaysError) displaysError.hidden = true;
+    renderProfiles();
+    blip(660, 0.06);
+    setStatus(`DISPLAYS · cargando "${name}"…`, { force: true });
+    try {
+      applyDisplaysSnapshot(await invoke('displays_load_profile', { name }));
+    } catch (err) {
+      try { await loadDisplays(); } catch (_) {}
+      showDisplaysError(err);
+    } finally {
+      state.displaysBusy = false;
+      refreshDisplaysUi();
+    }
+  }
+
+  function deleteProfileFlow(name) {
+    if (state.displaysBusy) return;
+    askProfileConfirm({ type: 'delete', name }, `¿Borrar el perfil "${name}"? No se puede deshacer.`);
+  }
+
+  async function doDeleteProfile(name) {
+    if (state.displaysBusy) return;
+    state.displaysBusy = true;
+    renderProfiles();
+    try {
+      const profiles = await invoke('displays_delete_profile', { name });
+      state.displaysProfiles = Array.isArray(profiles) ? profiles : [];
+      setStatus(`DISPLAYS · perfil "${name}" borrado`, { force: true });
+    } catch (err) {
+      showDisplaysError(err);
+    } finally {
+      state.displaysBusy = false;
+      renderProfiles();
+    }
+  }
+
+  // --- Fase 3: ajustes ------------------------------------------------------
+
+  async function loadSettings() {
+    if (displaysError) displaysError.hidden = true;
+    try {
+      const settings = await invoke('displays_get_settings');
+      const secs = Number(settings && settings.revertTimeoutSecs);
+      if (displaysRevertSecsInput && Number.isFinite(secs)) displaysRevertSecsInput.value = String(secs);
+    } catch (err) {
+      showDisplaysError(err);
+    }
+  }
+
+  async function saveSettings() {
+    if (state.displaysBusy) return;
+    const raw = Number(displaysRevertSecsInput && displaysRevertSecsInput.value);
+    if (!Number.isFinite(raw)) {
+      setStatus('DISPLAYS · el plazo tiene que ser un número', { priority: 'warn', ttl: 4000 });
+      return;
+    }
+    // El backend igual pone un piso de 1s; acá se acota a un rango con sentido.
+    const secs = Math.min(120, Math.max(3, Math.round(raw)));
+    state.displaysBusy = true;
+    if (displaysSettingsSaveBtn) displaysSettingsSaveBtn.disabled = true;
+    try {
+      const settings = await invoke('displays_update_settings', { settings: { revertTimeoutSecs: secs } });
+      const saved = Number(settings && settings.revertTimeoutSecs);
+      const shown = Number.isFinite(saved) ? saved : secs;
+      if (displaysRevertSecsInput) displaysRevertSecsInput.value = String(shown);
+      setStatus(`DISPLAYS · auto-revert en ${shown}s`, { force: true });
+    } catch (err) {
+      showDisplaysError(err);
+    } finally {
+      state.displaysBusy = false;
+      if (displaysSettingsSaveBtn) displaysSettingsSaveBtn.disabled = false;
+    }
+  }
+
+  // --- Fase 3: lienzo de arrastre (opción A — espejo de Windows) ------------
+
+  function monKey(m) { return `${m.adapterLuid}:${m.targetId}`; }
+
+  // El borrador arranca de los monitores ACTIVOS del snapshot, con su posición
+  // actual. Solo se acomodan los activos (los apagados no tienen lugar).
+  function initCanvasDraft() {
+    const active = (state.displays || []).filter((d) => d.active);
+    state.displaysDraft = active.map((d) => ({
+      adapterLuid: d.adapterLuid,
+      targetId: d.targetId,
+      name: d.name,
+      primary: !!d.primary,
+      w: d.width > 0 ? d.width : 1920,
+      h: d.height > 0 ? d.height : 1080,
+      x: Number.isFinite(d.positionX) ? d.positionX : 0,
+      y: Number.isFinite(d.positionY) ? d.positionY : 0,
+    }));
+    canvasDirty = false;
+  }
+
+  function positionCanvasMonitor(div, m) {
+    if (!canvasView) return;
+    const { scale, minX, minY, offsetX, offsetY } = canvasView;
+    div.style.left = `${offsetX + (m.x - minX) * scale}px`;
+    div.style.top = `${offsetY + (m.y - minY) * scale}px`;
+    div.style.width = `${Math.max(8, m.w * scale)}px`;
+    div.style.height = `${Math.max(8, m.h * scale)}px`;
+  }
+
+  function renderCanvas() {
+    if (!displaysCanvas) return;
+    const mons = state.displaysDraft || [];
+    const busy = !!state.displaysBusy;
+    const pending = !!state.displaysPending;
+    if (displaysCanvasApplyBtn) displaysCanvasApplyBtn.disabled = busy || pending || mons.length === 0;
+    if (displaysCanvasResetBtn) displaysCanvasResetBtn.disabled = busy || mons.length === 0;
+    if (displaysCanvasEmpty) displaysCanvasEmpty.hidden = mons.length > 0;
+    if (mons.length === 0) { displaysCanvas.replaceChildren(); canvasView = null; return; }
+
+    const pad = 16;
+    const cw = displaysCanvas.clientWidth || 400;
+    const chh = displaysCanvas.clientHeight || 240;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    mons.forEach((m) => {
+      minX = Math.min(minX, m.x); minY = Math.min(minY, m.y);
+      maxX = Math.max(maxX, m.x + m.w); maxY = Math.max(maxY, m.y + m.h);
+    });
+    const bw = Math.max(1, maxX - minX);
+    const bh = Math.max(1, maxY - minY);
+    const availW = Math.max(1, cw - 2 * pad);
+    const availH = Math.max(1, chh - 2 * pad);
+    const scale = Math.min(availW / bw, availH / bh);
+    const offsetX = pad + (availW - bw * scale) / 2;
+    const offsetY = pad + (availH - bh * scale) / 2;
+    canvasView = { scale, minX, minY, offsetX, offsetY };
+
+    const nodes = mons.map((m) => {
+      const div = document.createElement('div');
+      div.className = 'displays-canvas-monitor' + (m.primary ? ' is-primary' : '');
+      div.dataset.mon = monKey(m);
+      positionCanvasMonitor(div, m);
+      // textContent, nunca innerHTML: el nombre viene del backend.
+      const label = document.createElement('div');
+      label.className = 'displays-canvas-label';
+      label.textContent = m.name;
+      const meta = document.createElement('div');
+      meta.className = 'displays-canvas-meta mono';
+      meta.textContent = `${m.w}×${m.h}${m.primary ? ' · P' : ''}`;
+      div.appendChild(label);
+      div.appendChild(meta);
+      return div;
+    });
+    displaysCanvas.replaceChildren(...nodes);
+  }
+
+  function onCanvasMouseDown(e) {
+    const div = e.target && e.target.closest ? e.target.closest('.displays-canvas-monitor') : null;
+    if (!div || state.displaysBusy || state.displaysPending || !canvasView) return;
+    const key = div.dataset.mon;
+    const m = (state.displaysDraft || []).find((x) => monKey(x) === key);
+    if (!m) return;
+    e.preventDefault();
+    canvasDrag = {
+      m, div,
+      startX: e.clientX, startY: e.clientY,
+      origX: m.x, origY: m.y,
+      scale: canvasView.scale,
+    };
+    div.classList.add('is-dragging');
+    document.addEventListener('mousemove', onCanvasMouseMove);
+    document.addEventListener('mouseup', onCanvasMouseUp);
+  }
+
+  function onCanvasMouseMove(e) {
+    if (!canvasDrag) return;
+    const { m, div, startX, startY, origX, origY, scale } = canvasDrag;
+    // Píxeles de pantalla → coordenadas virtuales, con la escala CONGELADA al
+    // empezar el arrastre (no se re-renderiza, así no rescala bajo el cursor).
+    m.x = Math.round(origX + (e.clientX - startX) / scale);
+    m.y = Math.round(origY + (e.clientY - startY) / scale);
+    canvasDirty = true;
+    positionCanvasMonitor(div, m);
+  }
+
+  function onCanvasMouseUp() {
+    document.removeEventListener('mousemove', onCanvasMouseMove);
+    document.removeEventListener('mouseup', onCanvasMouseUp);
+    if (!canvasDrag) return;
+    const { m, div } = canvasDrag;
+    div.classList.remove('is-dragging');
+    canvasDrag = null;
+    snapMonitor(m);   // pegar al borde de un vecino, sin huecos ni superposición
+    renderCanvas();   // recomputa escala/centro con la posición final
+  }
+
+  function nearest(v, opts) {
+    let best = opts[0], bestD = Infinity;
+    opts.forEach((o) => { const d = Math.abs(o - v); if (d < bestD) { bestD = d; best = o; } });
+    return best;
+  }
+
+  function rectsOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
+    // Tocarse por el borde (ax+aw === bx) NO es superponerse.
+    return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+  }
+
+  // Opción A: al soltar, el monitor se pega flush al borde de algún vecino y se
+  // alinea en el eje perpendicular, eligiendo la ubicación más cercana a donde
+  // se lo soltó y que no se superponga con nadie.
+  function snapMonitor(dragged) {
+    const others = (state.displaysDraft || []).filter((x) => x !== dragged);
+    if (!others.length) return;
+    const dropX = dragged.x, dropY = dragged.y;
+    const candidates = [];
+    others.forEach((o) => {
+      const alignY = nearest(dropY, [o.y, o.y + o.h - dragged.h]);
+      const alignX = nearest(dropX, [o.x, o.x + o.w - dragged.w]);
+      candidates.push({ x: o.x + o.w, y: alignY });        // a la derecha de O
+      candidates.push({ x: o.x - dragged.w, y: alignY });  // a la izquierda
+      candidates.push({ x: alignX, y: o.y + o.h });        // abajo
+      candidates.push({ x: alignX, y: o.y - dragged.h });  // arriba
+    });
+    const valid = candidates.filter((c) =>
+      !others.some((o) => rectsOverlap(c.x, c.y, dragged.w, dragged.h, o.x, o.y, o.w, o.h))
+    );
+    const pool = valid.length ? valid : candidates;
+    let best = pool[0], bestD = Infinity;
+    pool.forEach((c) => {
+      const d = Math.hypot(c.x - dropX, c.y - dropY);
+      if (d < bestD) { bestD = d; best = c; }
+    });
+    if (best) { dragged.x = best.x; dragged.y = best.y; }
+  }
+
+  function canvasResetDraft() {
+    if (state.displaysBusy) return;
+    initCanvasDraft();
+    renderCanvas();
+    setStatus('DISPLAYS · acomodo deshecho', { force: true });
+  }
+
+  // APLICAR: el acomodo es un SetDisplayConfig, así que vuelve con la misma red
+  // (cuenta regresiva + auto-revert) que el toggle o el cargar perfil.
+  async function canvasApplyFlow() {
+    if (state.displaysBusy || state.displaysPending) return;
+    const mons = state.displaysDraft || [];
+    if (!mons.length) return;
+    const positions = mons.map((m) => ({
+      adapterLuid: m.adapterLuid, targetId: m.targetId, x: m.x, y: m.y,
+    }));
+    // Se manda al sistema: deja de ser una edición local suelta. Así, cuando la
+    // confirmación se resuelva, el lienzo re-sincroniza con la realidad.
+    canvasDirty = false;
+    state.displaysBusy = true;
+    if (displaysError) displaysError.hidden = true;
+    refreshDisplaysUi();
+    blip(660, 0.06);
+    setStatus('DISPLAYS · aplicando el acomodo…', { force: true });
+    try {
+      applyDisplaysSnapshot(await invoke('displays_apply_layout', { positions }));
+    } catch (err) {
+      try { await loadDisplays(); } catch (_) {}
+      showDisplaysError(err);
+    } finally {
+      state.displaysBusy = false;
+      refreshDisplaysUi();
+    }
+  }
+
   async function openDisplaysModal() {
     if (!displaysModal) return;
     // Vaciar antes del await: si no, al reabrir se ven los monitores del
     // snapshot anterior como si fueran los de ahora.
     state.displays = [];
     renderDisplays();
+    // Fase 3: cada apertura arranca en LISTA; perfiles/ajustes se cargan recién
+    // al entrar a su pestaña, y el nombre a medio tipear no sobrevive.
+    state.displaysProfiles = null;
+    if (displaysProfilesList) displaysProfilesList.replaceChildren();
+    if (displaysProfileName) displaysProfileName.value = '';
+    hideProfileConfirm();
+    // Lienzo: sin borrador ni arrastre a medias de una apertura anterior.
+    state.displaysDraft = [];
+    canvasDirty = false;
+    canvasDrag = null;
+    switchDisplaysTab('list');
     if (displaysCount) displaysCount.textContent = 'LEYENDO…';
     // renderDisplays() con la lista vacia prende el "Sin monitores"; durante la
     // lectura todavia no sabemos eso.
@@ -1963,6 +2454,61 @@
       if (id) toggleDisplay(id);
     });
   }
+
+  // --- Fase 3: pestañas, perfiles y ajustes --------------------------------
+  if (displaysTabs) {
+    displaysTabs.addEventListener('click', (e) => {
+      const btn = e.target && e.target.closest ? e.target.closest('.displays-tab') : null;
+      if (!btn || !btn.dataset.tab) return;
+      blip(720, 0.04);
+      switchDisplaysTab(btn.dataset.tab);
+    });
+  }
+  if (displaysSaveProfileBtn) {
+    displaysSaveProfileBtn.addEventListener('click', () => { blip(880, 0.05); saveProfileFlow(); });
+  }
+  if (displaysProfileName) {
+    displaysProfileName.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); saveProfileFlow(); }
+    });
+  }
+  if (displaysProfileConfirmYes) {
+    displaysProfileConfirmYes.addEventListener('click', () => { blip(1100, 0.05); runPendingProfileAction(); });
+  }
+  if (displaysProfileConfirmNo) {
+    displaysProfileConfirmNo.addEventListener('click', () => { blip(440, 0.06); hideProfileConfirm(); });
+  }
+  // Delegacion en la lista de perfiles: CARGAR / BORRAR.
+  if (displaysProfilesList) {
+    displaysProfilesList.addEventListener('click', (e) => {
+      const el = e.target;
+      if (!el || !el.closest) return;
+      const li = el.closest('.displays-profile-item');
+      const name = li && li.dataset ? li.dataset.name : null;
+      if (!name) return;
+      const loadBtn = el.closest('.displays-profile-load');
+      const delBtn = el.closest('.displays-profile-delete');
+      if (loadBtn && !loadBtn.disabled) loadProfileFlow(name);
+      else if (delBtn && !delBtn.disabled) deleteProfileFlow(name);
+    });
+  }
+  if (displaysSettingsSaveBtn) {
+    displaysSettingsSaveBtn.addEventListener('click', () => { blip(880, 0.05); saveSettings(); });
+  }
+  if (displaysRevertSecsInput) {
+    displaysRevertSecsInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); saveSettings(); }
+    });
+  }
+  // Lienzo: arrastre (delegado en el contenedor) + APLICAR / DESHACER.
+  if (displaysCanvas) displaysCanvas.addEventListener('mousedown', onCanvasMouseDown);
+  if (displaysCanvasApplyBtn) {
+    displaysCanvasApplyBtn.addEventListener('click', () => { blip(880, 0.05); canvasApplyFlow(); });
+  }
+  if (displaysCanvasResetBtn) {
+    displaysCanvasResetBtn.addEventListener('click', () => { blip(440, 0.06); canvasResetDraft(); });
+  }
+
   if (displaysModal) {
     displaysModal.addEventListener('click', (e) => {
       if (e.target === displaysModal) closeDisplaysModal();

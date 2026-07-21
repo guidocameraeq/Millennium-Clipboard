@@ -2988,3 +2988,266 @@ html.fx-off .status-item .status-dot { animation: none !important; }
   padding: 6px 8px;
   margin: 0 0 10px 0;
 }
+
+/* ===========================================================================
+   DISPLAYS — Fase 3: pestañas, perfiles y ajustes
+   =========================================================================== */
+
+/* --- Pestañas ------------------------------------------------------------ */
+.displays-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--neon-cyan-soft);
+}
+
+.displays-tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--text-dim);
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 2px;
+  padding: 8px 12px;
+  margin-bottom: -1px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+
+.displays-tab:hover { color: var(--text-bright); }
+
+.displays-tab.is-active {
+  color: var(--neon-cyan);
+  border-bottom-color: var(--neon-cyan);
+}
+
+/* Cada pane ocupa el body; solo se ve el activo. Mismo motivo de !important que
+   .hud-btn[hidden]: un `display` del autor le gana al [hidden] del user-agent. */
+.displays-pane[hidden] { display: none !important; }
+
+/* --- Perfiles ------------------------------------------------------------ */
+.displays-profile-save {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.displays-profile-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--neon-cyan-soft);
+  color: var(--text-bright);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 8px 10px;
+}
+
+.displays-profile-name:focus {
+  outline: none;
+  border-color: var(--neon-cyan);
+}
+
+.displays-profiles-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.displays-profile-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--neon-cyan-soft);
+}
+
+.displays-profile-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.displays-profile-name-text {
+  font-family: var(--font-display);
+  font-size: 13px;
+  letter-spacing: 1px;
+  color: var(--text-bright);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.displays-profile-summary {
+  font-size: 11px;
+  color: var(--text-mute);
+}
+
+.displays-profile-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+}
+
+/* --- Banner de confirmación (pisar / borrar un perfil) ------------------- */
+/* Ámbar como la barra de auto-revert: es una decisión destructiva que espera tu
+   OK. Tus perfiles son tus datos; nada se pisa sin pasar por acá. */
+.displays-confirm-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--neon-amber);
+  background: rgba(255, 179, 71, 0.08);
+}
+.displays-confirm-banner[hidden] { display: none !important; }
+
+.displays-confirm-text {
+  flex: 1 1 160px;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--neon-amber);
+}
+
+.displays-confirm-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+}
+
+/* --- Ajustes ------------------------------------------------------------- */
+.displays-setting {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--neon-cyan-soft);
+}
+
+.displays-setting-label {
+  font-family: var(--font-display);
+  font-size: 13px;
+  letter-spacing: 1px;
+  color: var(--text-bright);
+}
+
+.displays-setting-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-mute);
+}
+
+.displays-setting-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.displays-setting-input {
+  width: 84px;
+  background: var(--bg-deep, var(--bg-card));
+  border: 1px solid var(--neon-cyan-soft);
+  color: var(--text-bright);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 6px 8px;
+  text-align: right;
+}
+
+.displays-setting-input:focus {
+  outline: none;
+  border-color: var(--neon-cyan);
+}
+
+.displays-setting-unit {
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--text-mute);
+}
+
+/* --- Lienzo de arrastre -------------------------------------------------- */
+.displays-canvas-hint {
+  font-size: 11px;
+  color: var(--text-mute);
+  margin: 0 0 10px 0;
+}
+
+.displays-canvas {
+  position: relative;
+  width: 100%;
+  height: 240px;
+  background: var(--bg-card);
+  border: 1px solid var(--neon-cyan-soft);
+  overflow: hidden;
+  /* La rejilla de puntos da referencia visual sin robar protagonismo. */
+  background-image: radial-gradient(var(--neon-cyan-soft) 1px, transparent 1px);
+  background-size: 16px 16px;
+  touch-action: none;
+}
+
+.displays-canvas-monitor {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 4px;
+  overflow: hidden;
+  background: rgba(0, 240, 255, 0.10);
+  border: 1px solid var(--neon-cyan);
+  color: var(--text-bright);
+  cursor: grab;
+  user-select: none;
+  transition: box-shadow 0.1s;
+}
+
+.displays-canvas-monitor:hover {
+  box-shadow: 0 0 8px rgba(0, 240, 255, 0.35);
+}
+
+.displays-canvas-monitor.is-dragging {
+  cursor: grabbing;
+  z-index: 5;
+  box-shadow: 0 0 12px rgba(0, 240, 255, 0.55);
+}
+
+.displays-canvas-monitor.is-primary {
+  border-color: var(--neon-magenta);
+  background: rgba(255, 43, 214, 0.10);
+}
+
+.displays-canvas-label {
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.displays-canvas-meta {
+  font-size: 9px;
+  color: var(--text-mute);
+  white-space: nowrap;
+}
+
+.displays-canvas-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
