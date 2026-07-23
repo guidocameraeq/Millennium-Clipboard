@@ -17,13 +17,12 @@
 > SESSION_HANDOFF.md.
 
 - [ ] **Verificar Fase 1 + Fase 2 JUNTAS en hardware** (Guido eligió construir la 2 sobre la beta sin
-  confirmar → se prueban juntas). **Primero falta un build con la Fase 2**: la beta instalable
-  `v1.3.0-beta.1` es Fase 1 SOLA (se compiló antes de la Fase 2) → o `npm run tauri dev` en el desktop, o
-  push→CI para un build nuevo (decisión de Guido; no pushear sin su OK). A probar: **Fase 1** (★ primario /
-  startup profile / atajos / botón actualizar) **y Fase 2** (saltar CLIP↔DISP con un transfer en curso, el
-  banner global contando desde Clipboard, ESC/CLOSE, las 4 sub-pestañas), + regresión
-  clipboard/transferencias + **CPU en reposo ~0% en el Task Manager**. Cuando anden las dos: **release
-  final** (tag `v1.3.0` sin sufijo), **FF `main`**, y **archivar AMBOS** specs
+  confirmar → se prueban juntas). Ya hay build: **prerelease `v1.3.0-beta.2`** (Fase 1+2) pusheado →
+  cuando el CI esté verde (mirar Actions), instalarla por el **auto-updater** (Settings → APP UPDATES →
+  CHECK). A probar: **Fase 1** (★ primario / startup profile / atajos / botón actualizar) **y Fase 2**
+  (saltar CLIP↔DISP con un transfer en curso, el banner global contando desde Clipboard, ESC/CLOSE, las 4
+  sub-pestañas), + regresión clipboard/transferencias + **CPU en reposo ~0% en el Task Manager**. Cuando
+  anden las dos: **release final** (tag `v1.3.0` sin sufijo), **FF `main`**, y **archivar AMBOS** specs
   (`docs/SPEC-displays-v2.md` + `docs/SPEC-displays-v2-fase2.md`) a `docs/archive/` con "✅ IMPLEMENTADO".
   Si aparece un bug, arreglarlo antes del final.
 - [ ] **Fase 3 — cambio de audio por perfil** (net-new, requiere INVESTIGACIÓN). Al aplicar un perfil,

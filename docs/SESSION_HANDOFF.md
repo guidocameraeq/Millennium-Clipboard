@@ -2,7 +2,7 @@
 
 > Save game del proyecto. `/cierre` lo SOBREESCRIBE ENTERO en cada sesión — acá nunca se apila historia (eso vive en CHANGELOG). El hook SessionStart lo inyecta en cada chat nuevo.
 
-**Cierre**: 2026-07-23 · **Branch**: `feat/displays-v2` · **Working tree**: limpio (tras los commits de cierre).
+**Cierre**: 2026-07-23 · **Branch**: `feat/displays-v2` · **Working tree**: limpio (tras los commits de cierre + el bump a `1.3.0-beta.2`, pusheados).
 
 ## En una línea
 
@@ -47,19 +47,20 @@ sobre la beta sin confirmar, **ahora se verifican las DOS fases juntas en hardwa
 
 ## En qué estado quedó
 
-- **`feat/displays-v2`** = Fase 1 (1.3.0-beta.1) **+ Fase 2 (este cierre)**, en 2 commits nuevos (feat +
-  docs). **NO pusheado** (regla del proyecto: no push sin pedido). **`main` sigue en 1.2.0.**
-- **Versión**: SIN tocar (sigue `1.3.0-beta.1`). La Fase 2 NO se releaseó ni tagueó — eso es después de
-  la verificación en hardware.
-- **La beta instalable `v1.3.0-beta.1` es Fase 1 SOLA** (se compiló del commit `fcb408d`, antes de la
-  Fase 2). Para probar la Fase 2 en hardware hace falta un build NUEVO (ver próximo paso).
-- **Hardware**: ni Fase 1 ni Fase 2 se probaron en el monitor real todavía.
+- **`feat/displays-v2`** = Fase 1 + Fase 2 + **bump a `1.3.0-beta.2`**, **pusheado** (rama + tag
+  `v1.3.0-beta.2`). Guido lo pidió: prerelease para probar la Fase 2 por el updater. **`main` sigue en
+  1.2.0** (no se mergea hasta el release final post-hardware).
+- **Prerelease `v1.3.0-beta.2`**: el tag dispara `release.yml`, que compila el `.exe` **con la Fase 2**
+  (el frontend se embebe del `src/` actual) y lo publica como **prerelease** → el auto-updater la ofrece,
+  la landing NO. **Verificar que el CI salió verde** en Actions — desde acá no se puede (no hay `gh`, repo
+  privado). El bump pasó el guard local (los 3 archivos del guard coinciden con el tag).
+- **Hardware**: ni Fase 1 ni Fase 2 se probaron en el monitor real todavía — se prueban JUNTAS instalando
+  la `beta.2` por el updater.
 
 ## Próximo paso CONCRETO (al retomar)
 
-1. **Conseguir un build con la Fase 2 para probar en hardware.** Dos caminos (elegir con Guido):
-   (a) `npm run tauri dev` en el desktop real (rápido, sin release), o (b) push de la rama → CI arma un
-   build/beta. Yo no puedo buildear local (sale del CI) ni pushear sin tu OK.
+1. **Cuando el CI de la `beta.2` esté verde** (mirar Actions): instalarla por el auto-updater (Settings →
+   APP UPDATES → CHECK) en el desktop real. Ya no hace falta buildear a mano — la beta.2 trae la Fase 2.
 2. **Verificar Fase 1 + Fase 2 JUNTAS en hardware** (Guido eligió construir la 2 sobre la beta sin
    confirmar, así que se prueban juntas): ★ primario / startup profile / atajos / botón actualizar (Fase
    1) **y** el rediseño (saltar CLIP↔DISP con un transfer en curso, el banner global contando desde
@@ -73,8 +74,9 @@ sobre la beta sin confirmar, **ahora se verifican las DOS fases juntas en hardwa
 
 ## Bloqueos
 
-- **Para la verificación en hardware falta un build con la Fase 2** (la beta actual es Fase 1 sola) — es el
-  paso 1 de arriba, requiere decisión de Guido (dev local vs push→CI).
+- **El CI de la `beta.2` tiene que salir verde** (`release.yml` compila ~30 min + `build.yml` corre por el
+  push a la rama). Verificar en Actions; si sale rojo, ver el log. Desde acá no se puede (sin `gh`, repo
+  privado).
 
 ## Contexto que no está en otros docs
 

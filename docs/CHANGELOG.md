@@ -8,7 +8,8 @@ Rediseño estructural, **puro frontend** (backend intacto): los monitores dejaro
 a una sección a pantalla completa con pestañas de nivel superior en el HUD. Verificado E2E con Playwright +
 mock de `window.__TAURI__` sobre datos SMOKE (8/8 criterios del spec) + review adversarial multi-agente
 (3 dimensiones limpias, 1 hallazgo bajo corregido). **NO verificado en hardware todavía** — se prueba junto
-con la Fase 1. Sin bump de versión ni release (eso es post-hardware).
+con la Fase 1. Pre-releaseado como **`v1.3.0-beta.2`** (Fase 1+2) para probar por el auto-updater; el
+release final (tag limpio + FF `main`) es post-hardware.
 
 ### Added
 - **Pestañas de sección CLIP | DISP** en el HUD (`#hud-sections`, `.hud-section-btn`), reveladas solo fuera
