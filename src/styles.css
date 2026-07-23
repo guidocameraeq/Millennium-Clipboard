@@ -348,6 +348,38 @@ html, body {
   transform: translateY(1px);
 }
 
+/* Pestañas de sección CLIPBOARD | DISPLAYS (Displays v2 Fase 2). Reusan el molde
+   .hud-btn; la activa queda iluminada como un .hud-btn:hover fijo. El grupo
+   arranca hidden y main.js lo revela solo fuera de Android (userAgent), así en
+   Android no queda una pestaña muerta. */
+.hud-sections {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.hud-sections[hidden] { display: none !important; }
+
+/* Compactas: son DOS teclas donde antes había una (DISP). Con este padding más
+   corto, las 6 teclas del HUD entran en la ventana por defecto (1080). */
+.hud-section-btn {
+  padding: 7px 9px;
+}
+
+.hud-section-btn.is-active {
+  border-color: var(--neon-cyan);
+  color: var(--neon-cyan);
+  box-shadow: 0 0 16px var(--neon-cyan-glow), inset 0 0 12px rgba(0, 240, 255, 0.08);
+}
+
+/* Con la tecla extra, el HUD se aprieta antes de que entre el modo mobile
+   (pre.js lo activa recién en <=900). En la franja angosta de escritorio
+   (901–1040) escondemos las stats HOST/NODE del centro — lo menos crítico —
+   para que SCAN/LOG/QR/CLIP/DISP/CONF siempre entren sin cortarse. Arriba de
+   1040 (incluye el 1080 por defecto) las stats se ven normal. */
+@media (max-width: 1040px) {
+  .hud-center { display: none; }
+}
+
 /* ==========================================================================
    MAIN GRID
    ========================================================================== */
@@ -357,6 +389,25 @@ html, body {
   grid-template-columns: 340px 1fr;
   gap: 14px;
   min-height: 0;
+}
+
+/* --- Secciones de nivel superior (Displays v2 Fase 2) -------------------- */
+/* CLIPBOARD (.grid) y DISPLAYS (.displays-section) comparten la fila central
+   (1fr) del grid de .app; solo una está a la vista. En desktop auto-ubican bien
+   porque siempre hay exactamente UNA visible (la otra es display:none). En
+   mobile .app pasa a flex-column y estas reglas no estorban (displays igual no
+   se renderiza en Android). Se ocultan con [hidden], NUNCA se desmontan: un
+   transfer en curso del clipboard sobrevive el ida y vuelta.
+   El !important es la piedra de siempre: .grid trae display:grid y
+   .displays-section trae display:flex, y cualquier `display` del autor le gana
+   al [hidden] del user-agent (ver .hud-btn[hidden], .displays-pane[hidden]). */
+#clipboard-section[hidden],
+.displays-section[hidden] { display: none !important; }
+
+.displays-section {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
 }
 
 /* Generic card frame */
@@ -1964,6 +2015,13 @@ html.is-mobile .hud-btn {
   gap: 2px !important;
 }
 html.is-mobile .hud-btn-glyph { font-size: 14px !important; margin-right: 0 !important; }
+/* En is-mobile, .hud-right es un grid y cada hijo directo ocupa una celda. El
+   wrapper .hud-sections (CLIP+DISP) sería UNA sola celda → los dos botones
+   quedarían apretados a media celda frente a SCAN/LOG/QR/CONF. Con display:contents
+   el wrapper desaparece y CLIP/DISP vuelven a ser celdas propias, parejas con el
+   resto. El :not([hidden]) es clave: sin él, este !important le ganaría al
+   .hud-sections[hidden]{display:none} y en Android reaparecerían los botones. */
+html.is-mobile .hud-sections:not([hidden]) { display: contents !important; }
 
 html.is-mobile .grid {
   display: flex !important;
@@ -2518,12 +2576,21 @@ html.is-mobile .status-val { font-size: 9px !important; }
 }
 
 /* BACKEND ERROR BANNER --------------------------------------------------- */
-.backend-banner {
+/* Stack de banners de nivel app: contenedor fijo arriba de todo. Los banners
+   (backend-error rojo, auto-revert de displays ámbar) son hijos EN FLUJO, así se
+   apilan verticalmente sin superponerse — el spec pedía que no chocaran.
+   pointer-events:none deja pasar los clics por los márgenes; cada banner los
+   reactiva en su inner. */
+.app-banners {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
   z-index: 9000;
+  pointer-events: none;
+}
+
+.backend-banner {
   pointer-events: none;
 }
 
@@ -2604,6 +2671,49 @@ html.is-mobile .status-val { font-size: 9px !important; }
 .backend-banner-close:hover {
   background: rgba(255, 255, 255, 0.08);
   border-color: rgba(255, 255, 255, 0.4);
+}
+
+/* --- Banner GLOBAL del auto-revert (Displays v2 Fase 2) ------------------- */
+/* Molde tomado de .backend-banner pero en ÁMBAR (misma paleta que la vieja barra
+   de pending del modal): no es un error, es una decisión que vence sola. Vive en
+   el stack de banners, visible desde cualquier sección — aunque estés en
+   Clipboard, ves que un cambio de monitores espera tu OK. */
+.displays-banner { pointer-events: none; }
+.displays-banner[hidden] { display: none !important; }
+
+.displays-banner-inner {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
+  border-bottom: 2px solid var(--neon-amber);
+  background: linear-gradient(180deg, rgba(60, 44, 0, 0.96), rgba(40, 30, 0, 0.92));
+  box-shadow: 0 4px 24px rgba(255, 179, 71, 0.3);
+  animation: banner-in 0.3s ease-out;
+}
+
+.displays-banner-glyph {
+  font-size: 22px;
+  line-height: 1;
+  color: var(--neon-amber);
+  text-shadow: 0 0 10px rgba(255, 179, 71, 0.5);
+  flex-shrink: 0;
+}
+
+.displays-banner-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  letter-spacing: 2px;
+  color: var(--neon-amber);
+  text-shadow: 0 0 6px rgba(255, 179, 71, 0.35);
+}
+
+.displays-banner-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 /* Incoming files modal — thumbnails next to each file name */
@@ -2808,9 +2918,21 @@ html.fx-off .status-item .status-dot { animation: none !important; }
    .qr-pane[hidden]. */
 .hud-btn[hidden] { display: none !important; }
 
-.displays-modal {
-  width: min(720px, 94vw);
-  max-height: 86vh;
+/* Displays v2 Fase 2: displays dejó de ser un modal y es una sección a pantalla
+   completa. .displays-shell espeja el molde de .modal (mismo borde/sombra neón)
+   pero ocupa todo el alto de su celda en vez de flotar centrado. */
+.displays-shell {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-card-hi);
+  border: 1px solid var(--neon-cyan);
+  box-shadow:
+    0 0 48px var(--neon-cyan-glow),
+    inset 0 0 24px rgba(0, 240, 255, 0.06);
 }
 
 .displays-list {
@@ -2944,8 +3066,8 @@ html.fx-off .status-item .status-dot { animation: none !important; }
 /* Un boton apagado tiene que LEERSE apagado: es el unico aviso de que ese
    monitor no se puede tocar (es el ultimo activo, o hay un cambio pendiente).
    Scoped al modal de displays para no tocar el resto de la app. */
-.displays-modal .modal-btn:disabled,
-.displays-modal .modal-btn:disabled:hover {
+.displays-shell .modal-btn:disabled,
+.displays-shell .modal-btn:disabled:hover {
   opacity: 0.35;
   cursor: not-allowed;
   background: transparent;
@@ -2955,39 +3077,9 @@ html.fx-off .status-item .status-dot { animation: none !important; }
   box-shadow: none;
 }
 
-/* --- Fase 2: barra de confirmacion --------------------------------------- */
-/* Ambar y no cian a proposito: esto no es informacion, es una decision que
-   vence sola. Vive entre el body y las acciones, con el mismo borde/fondo que
-   .modal-actions para que se lea como parte del pie del modal. */
-.displays-pending {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  padding: 10px 18px;
-  border-top: 1px solid var(--neon-amber);
-  background: rgba(255, 179, 71, 0.08);
-}
-/* SIN ESTO LA BARRA NO SE ESCONDE NUNCA. El `hidden` del HTML se apoya en la
-   regla `[hidden]{display:none}` de la hoja del navegador, y cualquier `display`
-   del autor le gana (origen autor > origen user-agent). Misma piedra que
-   .hud-btn[hidden] y .qr-pane[hidden] mas arriba. */
-.displays-pending[hidden] { display: none !important; }
-
-.displays-pending-glyph {
-  font-size: 16px;
-  line-height: 1;
-  color: var(--neon-amber);
-  flex: 0 0 auto;
-}
-
-.displays-pending-text {
-  flex: 1 1 140px;
-  font-size: 11px;
-  letter-spacing: 2px;
-  color: var(--neon-amber);
-  text-shadow: 0 0 6px rgba(255, 179, 71, 0.35);
-}
+/* La vieja barra de confirmación in-modal (.displays-pending*) se fue al banner
+   GLOBAL del auto-revert (.displays-banner*, arriba, cerca de .backend-banner)
+   en la Fase 2. Se borró de acá para no dejar CSS muerto. */
 
 /* Ventana angosta: la fila ya no entra en una linea con el boton, asi que el
    boton baja en vez de aplastar el nombre del monitor. */

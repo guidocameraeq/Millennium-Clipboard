@@ -53,22 +53,30 @@
         <button class="hud-btn" data-action="qr" title="QR pairing">
           <span class="hud-btn-glyph">▣</span>QR
         </button>
-        <!-- Displays (SPEC-displays Fase 1). Arranca hidden y lo revela main.js
-             solo fuera de Android: el modulo de monitores es Windows-only. NO se
-             usa .desktop-only para esto — esa clase depende de html.is-mobile,
-             que pre.js activa tambien por ancho<=900 o pantalla tactil, asi que
-             una ventana angosta en Windows perderia el boton. -->
-        <button class="hud-btn" data-action="displays" title="Connected monitors" id="hud-displays-btn" hidden>
-          <span class="hud-btn-glyph">▤</span>DISP
-        </button>
+        <!-- Pestañas de nivel superior CLIPBOARD | DISPLAYS (Displays v2 Fase 2).
+             Absorben el viejo botón DISP: navegan de sección, no abren un modal.
+             Arranca hidden y lo revela main.js solo fuera de Android (el módulo de
+             monitores es Windows-only): en Android el grupo entero desaparece y la
+             app queda solo-clipboard, sin pestaña muerta. userAgent, NO
+             .desktop-only — esa clase depende de html.is-mobile, que pre.js activa
+             también por ancho<=900 o pantalla táctil, así que una ventana angosta
+             en Windows perdería las pestañas. -->
+        <div class="hud-sections" id="hud-sections" hidden>
+          <button class="hud-btn hud-section-btn is-active" data-action="section-clipboard" data-section="clipboard" title="Portapapeles">
+            <span class="hud-btn-glyph">▦</span>CLIP
+          </button>
+          <button class="hud-btn hud-section-btn" data-action="section-displays" data-section="displays" id="hud-displays-btn" title="Monitores conectados">
+            <span class="hud-btn-glyph">▤</span>DISP
+          </button>
+        </div>
         <button class="hud-btn" data-action="settings" title="Settings">
           <span class="hud-btn-glyph">⚙</span>CONF
         </button>
       </div>
     </header>
 
-    <!-- MAIN GRID ========================================================== -->
-    <main class="grid">
+    <!-- MAIN GRID (sección CLIPBOARD) ====================================== -->
+    <main class="grid" id="clipboard-section">
       <!-- LEFT: PEERS PANEL -->
       <section class="card peers">
         <div class="card-corners">
@@ -175,6 +183,116 @@
         </div>
       </section>
     </main>
+
+    <!-- DISPLAYS (sección) — Displays v2 Fase 2: los monitores dejaron de ser un
+         pop-up y viven en su propia sección a pantalla completa. La lógica de
+         adentro (4 sub-pestañas, red de auto-rollback, todo lo de la Fase 1) NO
+         cambió; cambió el marco: de .modal-backdrop/.modal a
+         .displays-section/.displays-shell. Se oculta con [hidden] (no se
+         desmonta) al saltar a CLIPBOARD, así un transfer en curso sobrevive. El
+         reloj del auto-revert ya NO vive acá: se fue al banner global (abajo). -->
+    <section class="displays-section" id="displays-section" hidden aria-label="Displays">
+      <div class="displays-shell">
+        <div class="card-corners">
+          <span></span><span></span><span></span><span></span>
+        </div>
+        <header class="modal-head">
+          <span class="modal-glyph">▤</span>
+          <span class="modal-title">DISPLAYS</span>
+          <span class="mono" id="displays-count" style="margin-left:auto;font-size:10px;opacity:0.6">—</span>
+        </header>
+        <!-- Pestañas. Las acciones viven abajo, FUERA de los panes. -->
+        <nav class="displays-tabs" id="displays-tabs" role="tablist">
+          <button class="displays-tab is-active" type="button" data-tab="list" role="tab">LISTA</button>
+          <button class="displays-tab" type="button" data-tab="profiles" role="tab">PERFILES</button>
+          <button class="displays-tab" type="button" data-tab="settings" role="tab">AJUSTES</button>
+          <button class="displays-tab" type="button" data-tab="canvas" role="tab">LIENZO</button>
+        </nav>
+        <div class="modal-body">
+          <p class="modal-error" id="displays-error" hidden></p>
+
+          <!-- Pane: LISTA (Fase 1/2 — sin cambios de comportamiento) -->
+          <div class="displays-pane" data-pane="list">
+            <p class="mono displays-mock-warning" id="displays-mock-warning" hidden>
+              ⚠ DATOS DE PRUEBA — estos monitores son falsos (MONARCH_FORCE_MOCK_BACKEND)
+            </p>
+            <ul class="displays-list" id="displays-list"></ul>
+            <p class="mono displays-empty" id="displays-empty" hidden>Sin monitores para mostrar.</p>
+          </div>
+
+          <!-- Pane: PERFILES (Fase 3) -->
+          <div class="displays-pane" data-pane="profiles" hidden>
+            <div class="displays-profile-save">
+              <input class="displays-profile-name" id="displays-profile-name" type="text"
+                     maxlength="60" placeholder="Nombre del perfil…" autocomplete="off" spellcheck="false" />
+              <button class="modal-btn small accept" type="button" id="displays-save-profile">＋ GUARDAR EL ACTUAL</button>
+            </div>
+            <!-- Banner de confirmación (pisar / borrar). Tus perfiles son tus datos:
+                 nada se pisa ni se borra sin este OK explícito. -->
+            <div class="displays-confirm-banner" id="displays-profile-confirm" hidden>
+              <span class="mono displays-confirm-text" id="displays-profile-confirm-text">—</span>
+              <span class="displays-confirm-actions">
+                <button class="modal-btn small reject" type="button" id="displays-profile-confirm-yes">SÍ</button>
+                <button class="modal-btn small" type="button" id="displays-profile-confirm-no">NO</button>
+              </span>
+            </div>
+            <ul class="displays-profiles-list" id="displays-profiles-list"></ul>
+            <p class="mono displays-empty" id="displays-profiles-empty" hidden>Todavía no guardaste ningún perfil.</p>
+          </div>
+
+          <!-- Pane: AJUSTES (Fase 3) -->
+          <div class="displays-pane" data-pane="settings" hidden>
+            <div class="displays-setting">
+              <label class="displays-setting-label" for="displays-revert-secs">Plazo del auto-revert</label>
+              <p class="displays-setting-hint">Cuántos segundos espera un cambio antes de volver solo si no lo confirmás.</p>
+              <div class="displays-setting-row">
+                <input class="displays-setting-input" id="displays-revert-secs" type="number"
+                       min="3" max="120" step="1" inputmode="numeric" />
+                <span class="displays-setting-unit">segundos</span>
+                <button class="modal-btn small accept" type="button" id="displays-settings-save">GUARDAR</button>
+              </div>
+            </div>
+            <!-- Displays v2, Fase 1: aplicar un perfil al encender -->
+            <div class="displays-setting">
+              <label class="displays-setting-label" for="displays-startup-profile">Aplicar un perfil al encender</label>
+              <p class="displays-setting-hint">Al arrancar Windows con Millennium en la bandeja (autostart), aplica este perfil solo. Si el layout ya coincide, no hace nada.</p>
+              <div class="displays-setting-row">
+                <select class="displays-setting-select" id="displays-startup-profile">
+                  <option value="">— ninguno —</option>
+                </select>
+              </div>
+            </div>
+            <!-- Displays v2, Fase 1: interruptor general de los atajos de perfil -->
+            <div class="displays-setting">
+              <label class="displays-setting-label">Atajos de teclado por perfil</label>
+              <p class="displays-setting-hint">Interruptor general. Cada atajo se asigna por perfil en la pestaña PERFILES. Apagado, ninguno funciona.</p>
+              <div class="displays-setting-row">
+                <label class="sound-toggle">
+                  <input type="checkbox" id="displays-shortcuts-enabled" />
+                  <span class="sound-track"><span class="sound-thumb"></span></span>
+                  <span class="settings-value mono" id="displays-shortcuts-enabled-label">ON</span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- Pane: LIENZO (Fase 3) -->
+          <div class="displays-pane" data-pane="canvas" hidden>
+            <p class="displays-canvas-hint mono">Arrastrá los monitores — se pegan al borde. APLICAR lo manda a Windows (vuelve solo si no confirmás).</p>
+            <div class="displays-canvas" id="displays-canvas"></div>
+            <p class="mono displays-empty" id="displays-canvas-empty" hidden>No hay monitores activos para acomodar.</p>
+            <div class="displays-canvas-actions">
+              <button class="modal-btn small" type="button" id="displays-canvas-reset">↺ DESHACER CAMBIOS</button>
+              <button class="modal-btn small accept" type="button" id="displays-canvas-apply">✓ APLICAR</button>
+            </div>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="modal-btn small" id="displays-refresh">↻ REFRESH</button>
+          <button class="modal-btn accept" id="displays-close">← CLIPBOARD</button>
+        </div>
+      </div>
+    </section>
 
     <!-- BOTTOM HUD ========================================================= -->
     <footer class="status-strip">
@@ -493,125 +611,6 @@
     </div>
   </div>
 
-  <!-- Displays modal (SPEC-displays Fase 2 — lista los monitores y deja
-       prender/apagar uno, con red de seguridad: todo cambio arranca una cuenta
-       regresiva y vuelve solo si nadie lo confirma). Espeja el molde del LOG. -->
-  <div class="modal-backdrop" id="displays-modal" hidden>
-    <div class="modal displays-modal">
-      <div class="card-corners">
-        <span></span><span></span><span></span><span></span>
-      </div>
-      <header class="modal-head">
-        <span class="modal-glyph">▤</span>
-        <span class="modal-title">DISPLAYS</span>
-        <span class="mono" id="displays-count" style="margin-left:auto;font-size:10px;opacity:0.6">—</span>
-      </header>
-      <!-- Pestañas (Fase 3). La barra de confirmación y las acciones viven abajo,
-           FUERA de los panes: un cambio pendiente (p. ej. al cargar un perfil)
-           tiene que verse aunque estés en otra pestaña. -->
-      <nav class="displays-tabs" id="displays-tabs" role="tablist">
-        <button class="displays-tab is-active" type="button" data-tab="list" role="tab">LISTA</button>
-        <button class="displays-tab" type="button" data-tab="profiles" role="tab">PERFILES</button>
-        <button class="displays-tab" type="button" data-tab="settings" role="tab">AJUSTES</button>
-        <button class="displays-tab" type="button" data-tab="canvas" role="tab">LIENZO</button>
-      </nav>
-      <div class="modal-body">
-        <p class="modal-error" id="displays-error" hidden></p>
-
-        <!-- Pane: LISTA (Fase 1/2 — sin cambios de comportamiento) -->
-        <div class="displays-pane" data-pane="list">
-          <p class="mono displays-mock-warning" id="displays-mock-warning" hidden>
-            ⚠ DATOS DE PRUEBA — estos monitores son falsos (MONARCH_FORCE_MOCK_BACKEND)
-          </p>
-          <ul class="displays-list" id="displays-list"></ul>
-          <p class="mono displays-empty" id="displays-empty" hidden>Sin monitores para mostrar.</p>
-        </div>
-
-        <!-- Pane: PERFILES (Fase 3) -->
-        <div class="displays-pane" data-pane="profiles" hidden>
-          <div class="displays-profile-save">
-            <input class="displays-profile-name" id="displays-profile-name" type="text"
-                   maxlength="60" placeholder="Nombre del perfil…" autocomplete="off" spellcheck="false" />
-            <button class="modal-btn small accept" type="button" id="displays-save-profile">＋ GUARDAR EL ACTUAL</button>
-          </div>
-          <!-- Banner de confirmación (pisar / borrar). Tus perfiles son tus datos:
-               nada se pisa ni se borra sin este OK explícito. -->
-          <div class="displays-confirm-banner" id="displays-profile-confirm" hidden>
-            <span class="mono displays-confirm-text" id="displays-profile-confirm-text">—</span>
-            <span class="displays-confirm-actions">
-              <button class="modal-btn small reject" type="button" id="displays-profile-confirm-yes">SÍ</button>
-              <button class="modal-btn small" type="button" id="displays-profile-confirm-no">NO</button>
-            </span>
-          </div>
-          <ul class="displays-profiles-list" id="displays-profiles-list"></ul>
-          <p class="mono displays-empty" id="displays-profiles-empty" hidden>Todavía no guardaste ningún perfil.</p>
-        </div>
-
-        <!-- Pane: AJUSTES (Fase 3) -->
-        <div class="displays-pane" data-pane="settings" hidden>
-          <div class="displays-setting">
-            <label class="displays-setting-label" for="displays-revert-secs">Plazo del auto-revert</label>
-            <p class="displays-setting-hint">Cuántos segundos espera un cambio antes de volver solo si no lo confirmás.</p>
-            <div class="displays-setting-row">
-              <input class="displays-setting-input" id="displays-revert-secs" type="number"
-                     min="3" max="120" step="1" inputmode="numeric" />
-              <span class="displays-setting-unit">segundos</span>
-              <button class="modal-btn small accept" type="button" id="displays-settings-save">GUARDAR</button>
-            </div>
-          </div>
-          <!-- Displays v2, Fase 1: aplicar un perfil al encender -->
-          <div class="displays-setting">
-            <label class="displays-setting-label" for="displays-startup-profile">Aplicar un perfil al encender</label>
-            <p class="displays-setting-hint">Al arrancar Windows con Millennium en la bandeja (autostart), aplica este perfil solo. Si el layout ya coincide, no hace nada.</p>
-            <div class="displays-setting-row">
-              <select class="displays-setting-select" id="displays-startup-profile">
-                <option value="">— ninguno —</option>
-              </select>
-            </div>
-          </div>
-          <!-- Displays v2, Fase 1: interruptor general de los atajos de perfil -->
-          <div class="displays-setting">
-            <label class="displays-setting-label">Atajos de teclado por perfil</label>
-            <p class="displays-setting-hint">Interruptor general. Cada atajo se asigna por perfil en la pestaña PERFILES. Apagado, ninguno funciona.</p>
-            <div class="displays-setting-row">
-              <label class="sound-toggle">
-                <input type="checkbox" id="displays-shortcuts-enabled" />
-                <span class="sound-track"><span class="sound-thumb"></span></span>
-                <span class="settings-value mono" id="displays-shortcuts-enabled-label">ON</span>
-              </label>
-            </div>
-          </div>
-        </div>
-
-        <!-- Pane: LIENZO (Fase 3) -->
-        <div class="displays-pane" data-pane="canvas" hidden>
-          <p class="displays-canvas-hint mono">Arrastrá los monitores — se pegan al borde. APLICAR lo manda a Windows (vuelve solo si no confirmás).</p>
-          <div class="displays-canvas" id="displays-canvas"></div>
-          <p class="mono displays-empty" id="displays-canvas-empty" hidden>No hay monitores activos para acomodar.</p>
-          <div class="displays-canvas-actions">
-            <button class="modal-btn small" type="button" id="displays-canvas-reset">↺ DESHACER CAMBIOS</button>
-            <button class="modal-btn small accept" type="button" id="displays-canvas-apply">✓ APLICAR</button>
-          </div>
-        </div>
-      </div>
-      <!-- Barra de confirmación: solo aparece mientras el backend tiene un
-           cambio esperando el OK. Vive FUERA de .modal-body a propósito — si
-           estuviera adentro, con la lista scrolleada el contador se perdería de
-           vista justo cuando es lo único que importa. El reloj lo maneja
-           main.js con UN solo interval. -->
-      <div class="displays-pending" id="displays-pending" hidden>
-        <span class="displays-pending-glyph">⏱</span>
-        <span class="mono displays-pending-text" id="displays-pending-text">—</span>
-        <button class="modal-btn small accept" type="button" id="displays-confirm">✓ CONFIRMAR</button>
-        <button class="modal-btn small reject" type="button" id="displays-revert">↩ REVERTIR AHORA</button>
-      </div>
-      <div class="modal-actions">
-        <button class="modal-btn small" id="displays-refresh">↻ REFRESH</button>
-        <button class="modal-btn accept" id="displays-close">✓ CLOSE</button>
-      </div>
-    </div>
-  </div>
-
   <!-- QR pairing modal -->
   <div class="modal-backdrop" id="qr-modal" hidden>
     <div class="modal qr-modal">
@@ -653,15 +652,37 @@
     </div>
   </div>
 
-  <!-- Backend-error persistent banner (HTTPS bind failure, instance conflict) -->
-  <div class="backend-banner" id="backend-banner" hidden>
-    <div class="backend-banner-inner">
-      <span class="backend-banner-glyph">⚠</span>
-      <div class="backend-banner-text">
-        <div class="backend-banner-title">BACKEND ERROR</div>
-        <div class="backend-banner-msg mono" id="backend-banner-msg"></div>
+  <!-- Stack de banners de nivel app (fijo, arriba de todo). Dos moldes distintos
+       que pueden coexistir sin pisarse: el de error de backend (rojo) y el del
+       auto-revert de displays (ámbar). Al ser hijos en flujo del stack, se apilan
+       verticalmente en vez de superponerse (el spec pedía que no chocaran). -->
+  <div class="app-banners" id="app-banners">
+    <!-- Backend-error persistent banner (HTTPS bind failure, instance conflict) -->
+    <div class="backend-banner" id="backend-banner" hidden>
+      <div class="backend-banner-inner">
+        <span class="backend-banner-glyph">⚠</span>
+        <div class="backend-banner-text">
+          <div class="backend-banner-title">BACKEND ERROR</div>
+          <div class="backend-banner-msg mono" id="backend-banner-msg"></div>
+        </div>
+        <button class="backend-banner-close" id="backend-banner-close" title="Dismiss">✕</button>
       </div>
-      <button class="backend-banner-close" id="backend-banner-close" title="Dismiss">✕</button>
+    </div>
+
+    <!-- Banner GLOBAL del auto-revert (Displays v2 Fase 2). Antes era la barra
+         #displays-pending DENTRO del modal; ahora vive a nivel app, visible desde
+         cualquier sección. Conserva los mismos ids que ya maneja main.js
+         (renderDisplaysPending + los listeners de CONFIRMAR/REVERTIR), así el
+         cambio es de marco, no de lógica. Molde tomado de .backend-banner. -->
+    <div class="displays-banner" id="displays-pending" hidden role="alert">
+      <div class="displays-banner-inner">
+        <span class="displays-banner-glyph">⏱</span>
+        <span class="mono displays-banner-text" id="displays-pending-text">—</span>
+        <span class="displays-banner-actions">
+          <button class="modal-btn small accept" type="button" id="displays-confirm">✓ CONFIRMAR</button>
+          <button class="modal-btn small reject" type="button" id="displays-revert">↩ REVERTIR AHORA</button>
+        </span>
+      </div>
     </div>
   </div>
 

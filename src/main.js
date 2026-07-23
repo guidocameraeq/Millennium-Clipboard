@@ -206,6 +206,7 @@
     displaysProfiles: null, // perfiles guardados (Fase 3); null = todavia no cargados
     displaysTab: 'list', // pestaña activa del modal (Fase 3)
     displaysDraft: [], // borrador del lienzo: monitores activos con su posicion en edicion (Fase 3)
+    section: 'clipboard', // sección de nivel superior activa: 'clipboard' | 'displays' (Displays v2 Fase 2)
   };
 
   // ---------- Progress bar segments ----------------------------------------
@@ -1094,8 +1095,10 @@
         openQrModal();
       } else if (action === 'settings') {
         openSettingsModal();
-      } else if (action === 'displays') {
-        openDisplaysModal();
+      } else if (action === 'section-clipboard') {
+        switchSection('clipboard');
+      } else if (action === 'section-displays') {
+        switchSection('displays');
       }
     });
   });
@@ -1606,8 +1609,12 @@
   // dibuja el reloj y le avisa al backend; el que decide siempre es el backend
   // (si la pantalla se apaga y el usuario no puede ni ver la ventana, el
   // rollback tiene que salir igual).
-  const displaysBtn = document.getElementById('hud-displays-btn');
-  const displaysModal = document.getElementById('displays-modal');
+  // Displays v2 Fase 2: displays es una SECCIÓN, no un modal. Estas refs
+  // reemplazan al viejo displaysModal/displaysBtn.
+  const displaysSectionEl = document.getElementById('displays-section');
+  const clipboardSectionEl = document.getElementById('clipboard-section');
+  const hudSections = document.getElementById('hud-sections');
+  const hudSectionBtns = hudSections ? Array.from(hudSections.querySelectorAll('.hud-section-btn')) : [];
   const displaysList = document.getElementById('displays-list');
   const displaysCount = document.getElementById('displays-count');
   const displaysError = document.getElementById('displays-error');
@@ -1621,7 +1628,7 @@
   const displaysRevertBtn = document.getElementById('displays-revert');
   // Fase 3: pestañas, perfiles y ajustes.
   const displaysTabs = document.getElementById('displays-tabs');
-  const displaysPanes = displaysModal ? Array.from(displaysModal.querySelectorAll('.displays-pane')) : [];
+  const displaysPanes = displaysSectionEl ? Array.from(displaysSectionEl.querySelectorAll('.displays-pane')) : [];
   const displaysProfilesList = document.getElementById('displays-profiles-list');
   const displaysProfilesEmpty = document.getElementById('displays-profiles-empty');
   const displaysProfileName = document.getElementById('displays-profile-name');
@@ -1641,11 +1648,14 @@
   const displaysCanvasApplyBtn = document.getElementById('displays-canvas-apply');
   const displaysCanvasResetBtn = document.getElementById('displays-canvas-reset');
 
-  // El modulo de monitores es Windows-only. En Android el comando existe igual
-  // (devuelve Err), asi que esconder el boton es cosmetico, no load-bearing.
-  // Se usa el userAgent como el resto del codebase, NO html.is-mobile.
-  if (displaysBtn && !/android/i.test(navigator.userAgent)) {
-    displaysBtn.hidden = false;
+  // El modulo de monitores es Windows-only. En Android las pestañas de sección NO
+  // se revelan → la app queda solo-clipboard, sin pestaña muerta ni hueco. Se usa
+  // el userAgent como el resto del codebase, NO html.is-mobile (una ventana
+  // angosta en Windows conserva Displays). displaysEnabled tambien gatea
+  // switchSection('displays') como cinturon: la sección nunca se muestra en Android.
+  const displaysEnabled = !/android/i.test(navigator.userAgent);
+  if (hudSections && displaysEnabled) {
+    hudSections.hidden = false;
   }
 
   // La CCD API entrega el refresco en miliherz (60000 = 60 Hz).
@@ -1685,6 +1695,10 @@
   // terminó de poblar los controles. Sin esto, un cambio disparado durante la
   // carga mandaría los defaults vacíos y borraría el perfil de arranque guardado.
   let displaysSettingsLoaded = false;
+  // Displays v2 Fase 2: el reseteo de montaje (vaciar lista, olvidar perfiles,
+  // arrancar en LISTA) corre UNA sola vez — la primera vez que entrás a la
+  // sección, o al arrancar. En re-entradas se conserva la sub-pestaña activa.
+  let displaysSectionMounted = false;
   // Fase 3: estado del lienzo de arrastre.
   let canvasView = null;   // { scale, minX, minY, offsetX, offsetY } del último render
   let canvasDirty = false; // hay un acomodo local sin aplicar (protege de refrescos)
@@ -1723,9 +1737,10 @@
     // numero terminaria mintiendo sobre cuanto falta de verdad.
     state.displaysPending = { deadlineAt: Date.now() + (Number.isFinite(ms) && ms > 0 ? ms : 0) };
     renderDisplaysPending();
-    // El reloj solo tickea con el modal a la vista: cerrado no hay nada que
-    // repintar, y el que revierte de verdad vive en el backend.
-    if (displaysModal && !displaysModal.hidden && state.displaysPending.deadlineAt > Date.now()) {
+    // El reloj tickea mientras haya un cambio pendiente, SIN condición de sección:
+    // el banner global lo muestra también desde Clipboard. Sin pending, cero timer
+    // (CPU en reposo ~0%); el que revierte de verdad vive en el backend.
+    if (state.displaysPending.deadlineAt > Date.now()) {
       displaysCountdownTimer = setInterval(renderDisplaysPending, 250);
     }
   }
@@ -2637,54 +2652,71 @@
     }
   }
 
-  async function openDisplaysModal() {
-    if (!displaysModal) return;
-    // Vaciar antes del await: si no, al reabrir se ven los monitores del
-    // snapshot anterior como si fueran los de ahora.
-    state.displays = [];
-    renderDisplays();
-    // Fase 3: cada apertura arranca en LISTA; perfiles/ajustes se cargan recién
-    // al entrar a su pestaña, y el nombre a medio tipear no sobrevive.
-    state.displaysProfiles = null;
-    if (displaysProfilesList) displaysProfilesList.replaceChildren();
-    if (displaysProfileName) displaysProfileName.value = '';
-    displaysSettingsLoaded = false; // AJUSTES se re-carga al entrar a su pestaña
-    hideProfileConfirm();
-    // Lienzo: sin borrador ni arrastre a medias de una apertura anterior.
-    state.displaysDraft = [];
-    canvasDirty = false;
-    canvasDrag = null;
-    switchDisplaysTab('list');
-    if (displaysCount) displaysCount.textContent = 'LEYENDO…';
-    // renderDisplays() con la lista vacia prende el "Sin monitores"; durante la
-    // lectura todavia no sabemos eso.
-    if (displaysEmpty) displaysEmpty.hidden = true;
-    displaysModal.hidden = false;
-    // Si al cerrar el modal habia un cambio esperando, el reloj vuelve a correr
-    // en el acto: el deadline es absoluto, asi que sigue siendo valido aunque
-    // nadie lo estuviera mirando. El snapshot que llega en un instante lo
-    // corrige con el numero del backend.
-    if (state.displaysPending) {
-      startDisplaysCountdown(state.displaysPending.deadlineAt - Date.now());
+  // Displays v2 Fase 2: cambiar de sección de nivel superior. OCULTA (no
+  // desmonta) cada sección por CSS → un transfer en curso del clipboard
+  // sobrevive el ida y vuelta. El reloj de un pending corre independiente de la
+  // sección (banner global), así que salir de Displays NO lo frena.
+  function switchSection(section) {
+    if (section !== 'clipboard' && section !== 'displays') return;
+    if (section === 'displays' && !displaysEnabled) return; // Android: no existe
+    if (state.section === section) return;                  // ya estás ahí
+    state.section = section;
+    const showDisplays = section === 'displays';
+    if (clipboardSectionEl) clipboardSectionEl.hidden = showDisplays;
+    if (displaysSectionEl) displaysSectionEl.hidden = !showDisplays;
+    hudSectionBtns.forEach((b) => {
+      b.classList.toggle('is-active', b.dataset.section === section);
+    });
+    if (showDisplays) enterDisplaysSection();
+    else leaveDisplaysSection();
+  }
+
+  async function enterDisplaysSection() {
+    if (!displaysSectionEl) return;
+    if (!displaysSectionMounted) {
+      // Reseteo de montaje (una sola vez, o al arrancar): vaciar la lista,
+      // olvidar perfiles/ajustes cacheados y el borrador del lienzo, y arrancar
+      // en la sub-pestaña activa (state.displaysTab; 'list' al arrancar). En
+      // re-entradas NO se resetea: se conserva la sub-pestaña donde estabas
+      // (criterio #3). Vaciar antes del await: si no, se verían los monitores
+      // del snapshot anterior como si fueran los de ahora.
+      displaysSectionMounted = true;
+      state.displays = [];
+      renderDisplays();
+      state.displaysProfiles = null;
+      if (displaysProfilesList) displaysProfilesList.replaceChildren();
+      if (displaysProfileName) displaysProfileName.value = '';
+      displaysSettingsLoaded = false; // AJUSTES se re-carga al entrar a su pestaña
+      hideProfileConfirm();
+      state.displaysDraft = [];
+      canvasDirty = false;
+      canvasDrag = null;
+      switchDisplaysTab(state.displaysTab || 'list');
+      if (displaysCount) displaysCount.textContent = 'LEYENDO…';
+      // renderDisplays() con la lista vacia prende el "Sin monitores"; durante la
+      // lectura todavia no sabemos eso.
+      if (displaysEmpty) displaysEmpty.hidden = true;
     }
-    // A mano, NO focusFirstControl: el primer boton del DOM ahora es CONFIRMAR,
-    // que casi siempre vive en la barra oculta — enfocar algo con display:none
-    // no hace nada y el foco se queda en el body (adios teclado).
+    // load-on-enter-section: releer el snapshot cada vez que entrás (acción del
+    // usuario; la enumeración nunca corre sola). El reloj de un pending ya está
+    // corriendo si corresponde, independiente de la sección, y loadDisplays lo
+    // reconcilia con el número del backend.
+    // NO focusFirstControl a ciegas: si hay un cambio pendiente, el foco va a
+    // CONFIRMAR (en el banner global); si no, a REFRESH.
     const firstFocus = (state.displaysPending && displaysConfirmBtn) ? displaysConfirmBtn : displaysRefreshBtn;
-    if (firstFocus) firstFocus.focus(); else focusFirstControl(displaysModal);
+    if (firstFocus) firstFocus.focus();
+    else if (displaysSectionEl) focusFirstControl(displaysSectionEl);
     await loadDisplays();
   }
 
-  function closeDisplaysModal() {
-    if (displaysModal) displaysModal.hidden = true;
-    // Si quedó una captura de atajo abierta, cortar su listener global de teclado.
+  function leaveDisplaysSection() {
+    // Salir de la sección NO frena el reloj del pending: el banner global lo
+    // sigue mostrando desde Clipboard (por eso NO se llama stopDisplaysCountdown).
+    // Solo se corta una captura de atajo a medias, que depende del teclado.
     cancelShortcutCapture();
-    // El timer no sobrevive al modal. state.displaysPending SI: guarda el
-    // deadline para poder rehidratar al reabrir.
-    stopDisplaysCountdown();
   }
 
-  if (displaysCloseBtn) displaysCloseBtn.addEventListener('click', closeDisplaysModal);
+  if (displaysCloseBtn) displaysCloseBtn.addEventListener('click', () => switchSection('clipboard'));
   if (displaysRefreshBtn) {
     displaysRefreshBtn.addEventListener('click', async () => {
       blip(880, 0.06);
@@ -2795,23 +2827,22 @@
     displaysCanvasResetBtn.addEventListener('click', () => { blip(440, 0.06); canvasResetDraft(); });
   }
 
-  if (displaysModal) {
-    displaysModal.addEventListener('click', (e) => {
-      if (e.target === displaysModal) closeDisplaysModal();
-    });
-  }
+  // Displays ya NO es un modal con backdrop → no hay "clic afuera" que cerrar.
 
-  // Close any modal on ESC or click outside the panel (defensive layer
-  // in case a stray JS error elsewhere skips listeners).
+  // Close any modal on ESC (defensive layer in case a stray JS error elsewhere
+  // skips listeners). Displays es una SECCIÓN, no un modal: ESC la devuelve a
+  // Clipboard — pero SOLO si no había un modal encima (si lo había, ESC ya lo
+  // cerró). Nunca deja la pantalla en blanco (criterio #8).
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      if (!settingsModal.hidden) closeSettingsModal();
-      if (!incomingModal.hidden) closeIncomingModal();
-      if (!addPeerModal.hidden) closeAddPeerModal();
-      if (!peerDetailsModal.hidden) closePeerDetailsModal();
-      if (logModal && !logModal.hidden) closeLogModal();
-      if (qrModal && !qrModal.hidden) closeQrModal();
-      if (displaysModal && !displaysModal.hidden) closeDisplaysModal();
+      let modalClosed = false;
+      if (!settingsModal.hidden) { closeSettingsModal(); modalClosed = true; }
+      if (!incomingModal.hidden) { closeIncomingModal(); modalClosed = true; }
+      if (!addPeerModal.hidden) { closeAddPeerModal(); modalClosed = true; }
+      if (!peerDetailsModal.hidden) { closePeerDetailsModal(); modalClosed = true; }
+      if (logModal && !logModal.hidden) { closeLogModal(); modalClosed = true; }
+      if (qrModal && !qrModal.hidden) { closeQrModal(); modalClosed = true; }
+      if (!modalClosed && state.section === 'displays') switchSection('clipboard');
     }
   });
 
@@ -3407,17 +3438,19 @@
       notify(`🖼 Image clipboard from ${senderAlias}`, `${width}×${height} ready to paste`);
     });
 
-    // Monitores (SPEC-displays Fase 2). La topologia cambio: puede ser un
-    // attach/detach nuestro o un cable que alguien movio. Se relee SOLO con el
-    // modal abierto — cerrado, el snapshot no lo ve nadie.
+    // Monitores. La topologia cambio: puede ser un attach/detach nuestro o un
+    // cable que alguien movio. Se relee SOLO con la sección Displays a la vista —
+    // en Clipboard el snapshot no lo mira nadie (la enumeración no corre sola).
     await listen('displays-changed', () => {
-      if (displaysModal && !displaysModal.hidden) loadDisplays();
+      if (state.section === 'displays') loadDisplays();
     });
 
-    // Ciclo de confirmacion. El reloj es del backend; esto solo lo dibuja.
+    // Ciclo de confirmacion. El reloj es del backend; esto solo lo dibuja. El
+    // banner del pending es global: se refresca siempre; loadDisplays (la lista)
+    // solo si la sección está a la vista.
     await listen('displays-confirmation', (event) => {
       const payload = event.payload || {};
-      const modalOpen = !!(displaysModal && !displaysModal.hidden);
+      const displaysVisible = state.section === 'displays';
       if (payload.kind === 'applied') {
         const ms = Number(payload.timeoutMs);
         startDisplaysCountdown(Number.isFinite(ms) && ms > 0 ? ms : 10000);
@@ -3426,12 +3459,12 @@
       } else if (payload.kind === 'confirmed') {
         clearDisplaysPending();
         refreshDisplaysUi();
-        if (modalOpen) loadDisplays();
+        if (displaysVisible) loadDisplays();
         setStatus('DISPLAYS · cambio confirmado', { force: true });
       } else if (payload.kind === 'reverted') {
         clearDisplaysPending();
         refreshDisplaysUi();
-        if (modalOpen) loadDisplays();
+        if (displaysVisible) loadDisplays();
         // El "por que" importa: revertir a mano y quedarse sin confirmar a
         // tiempo se ven identicos en pantalla, y no son lo mismo.
         const why = payload.reason === 'timeout' ? 'nadie confirmó a tiempo'
