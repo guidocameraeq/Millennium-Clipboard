@@ -2,76 +2,91 @@
 
 > Save game del proyecto. `/cierre` lo SOBREESCRIBE ENTERO en cada sesión — acá nunca se apila historia (eso vive en CHANGELOG). El hook SessionStart lo inyecta en cada chat nuevo.
 
-**Cierre**: 2026-07-21 · **Branch**: `feat/displays-v2` · **Working tree**: limpio (tras el commit de cierre).
+**Cierre**: 2026-07-23 · **Branch**: `feat/displays-v2` · **Working tree**: limpio (tras los commits de cierre).
 
 ## En una línea
 
-**Displays v2 Fase 1 ("perfiles con superpoderes") IMPLEMENTADA, verificada LOCAL (gates verdes + review
-adversarial) y pre-releaseada como `v1.3.0-beta.1` — pero NO verificada en hardware todavía.** Además,
-la **Fase 2 (rediseño) quedó con spec READY**: Guido eligió la Opción A (pestañas arriba) mirando
-mockups, y el Arquitecto escribió + red-teó `docs/SPEC-displays-v2-fase2.md`. Próximo paso: **probar la
-beta en hardware**, y después ejecutar la Fase 2 en chat nuevo.
+**Displays v2 Fase 2 (rediseño: los monitores dejaron de ser un pop-up y ahora son una SECCIÓN a
+pantalla completa, con pestañas arriba CLIP | DISP y el reloj del auto-revert en un banner global)
+IMPLEMENTADA y verificada E2E en el frontend (8/8 criterios del spec, con Playwright + mock de
+`window.__TAURI__` sobre datos SMOKE) + review adversarial — pero NO verificada en hardware todavía.**
+Sigue pendiente lo mismo que la Fase 1: probar en el monitor real. Como Guido eligió construir la Fase 2
+sobre la beta sin confirmar, **ahora se verifican las DOS fases juntas en hardware**.
 
 ## Lo que se hizo esta sesión
 
-- **Fase 1 de Displays v2 completa** (4 features, todas apoyadas en lo que el motor de Monarch ya
-  soportaba, sin tocar el vendor):
-  - **★ primario** por monitor en LISTA (apply en vivo, pasa por la red de auto-rollback).
-  - **Perfil de arranque**: al bootear con `--autostart` aplica ese perfil **directo, sin red**; no-op si ya coincide.
-  - **Atajos globales por perfil** (`tauri-plugin-global-shortcut` v2.3.2, gateado a Windows) + interruptor general; disparan el perfil directo. Conflicto con otro programa → avisa y no registra.
-  - **Botón "↻ actualizar"** por perfil (pisa con el layout actual, con confirmación).
-- **Verificación local** (todo verde): crate scratch reusado (2 ramas cfg, sin warnings), vendor (22
-  tests), displays-tests (13), `node --check`, `cargo metadata` (resolvió el plugin + fijó el lock).
-- **Review adversarial multi-agente** (4 dimensiones + verificación de cada hallazgo): **4 bugs reales
-  corregidos** — el freeze del subsistema si `confirm` rebota tras un apply directo, la clase `capturing`
-  que no se limpiaba, la carrera de `saveSettings` que podía borrar el perfil de arranque, y el label
-  ON/OFF desincronizado.
-- **Pre-release `v1.3.0-beta.1`**: rama `feat/displays-v2` con 2 commits (feature `e54dbe4` + bump
-  `fcb408d`), versión subida en los 3 archivos del guard, guard verificado LOCAL, tag pusheado →
-  `release.yml` compilando en GitHub.
-- **Mockups Fase 2**: artifact HTML con 3 opciones de navegación (pestañas / lado a lado / barra
-  lateral). **Guido eligió la A (pestañas arriba).**
-- **Spec Fase 2 READY**: `docs/SPEC-displays-v2-fase2.md` (rediseño, Opción A), con el **red-team
-  incorporado** (8 huecos tapados: ESC/CLOSE sin destino, el reloj atado a `!displaysModal.hidden` en 4
-  lugares, la sub-pestaña, el transfer en curso, la vara de regresión).
+- **Fase 2 completa (rediseño estructural, puro frontend — backend intacto):**
+  - **Pestañas de nivel superior CLIP | DISP en el HUD** (absorbieron el viejo botón DISP; navegan de
+    sección, no abren modal). Gateadas por `userAgent`: en Android no aparecen.
+  - **Displays dejó de ser `#displays-modal`/`.modal-backdrop`** y pasó a ser `<section id="displays-section">`
+    con `.displays-shell` a pantalla completa, hija directa de `.app` (comparte la fila central del grid
+    con el clipboard). El interior (4 sub-pestañas, red de auto-rollback, todo lo de la Fase 1) quedó
+    **idéntico**; solo cambió el marco.
+  - **Cambio de sección OCULTA con `[hidden]`, NO desmonta** → un transfer en curso del clipboard
+    sobrevive el ida y vuelta (verificado por identidad de nodo).
+  - **Banner GLOBAL del auto-revert** (`#displays-pending` movido a `#app-banners`, molde `.backend-banner`
+    en ámbar) — visible desde cualquier sección, con los MISMOS ids que ya maneja `main.js` (cambio de
+    marco, no de lógica). Apilado con el backend-banner sin superponerse.
+  - **Ciclo de vida del reloj re-cableado**: los 4 chequeos `!displaysModal.hidden` → el timer tickea por
+    `state.displaysPending` (sin condición de sección; corre desde Clipboard vía el banner); `displays-changed`
+    y `displays-confirmation` recargan la lista según `state.section === 'displays'`.
+  - **ESC/CLOSE** en Displays vuelven a Clipboard (nunca dejan la pantalla en blanco); clic-afuera
+    eliminado (ya no hay backdrop). ESC con un modal encima cierra el modal, no cambia de sección.
+- **Verificación E2E (Playwright + mock `window.__TAURI__` sobre datos SMOKE, sirviendo `src/` estático):**
+  los 8 criterios del spec verdes, + 2 edge cases (pending sin haber entrado nunca a Displays; los dos
+  banners juntos). Gates: `node --check` verde, `cargo check` verde (backend no se tocó).
+- **2 regresiones cazadas y corregidas durante la verificación:**
+  1. **Botón CONF fuera de pantalla** a 1080 (la tecla extra desbordaba el HUD) → etiquetas terse CLIP/DISP
+     (con tooltip) + media query que esconde HOST/NODE abajo de 1040px.
+  2. **CLIP/DISP apretados en una celda** en modo `is-mobile` (ventana Windows ≤900), hallazgo del review
+     adversarial → `html.is-mobile .hud-sections:not([hidden]) { display: contents }` (el `:not([hidden])`
+     es clave: sin él, en Android reaparecerían los botones).
+- **Review adversarial multi-agente** (4 dimensiones: lifecycle / css-rehosting / NO-SE-TOCA-compat /
+  edge-races, cada hallazgo verificado): 3 dimensiones limpias, 1 hallazgo real (bajo) = el grid mobile de
+  arriba, corregido y verificado.
 
 ## En qué estado quedó
 
-- **`feat/displays-v2`** = Fase 1 (código + bump a 1.3.0-beta.1), pusheada. **`main` sigue en 1.2.0** (la
-  Fase 1 NO está mergeada; se FF al sacar el release final, como se hizo con la Fase 3).
-- **`v1.3.0-beta.1`**: el tag está pusheado; `release.yml` estaba compilando al cierre. **Verificar que
-  salió verde** en GitHub (Actions) — desde acá no se puede (no hay `gh`, repo privado).
-- **Hardware**: NADA de la Fase 1 se probó en el monitor real todavía. Es lo primero al retomar.
+- **`feat/displays-v2`** = Fase 1 (1.3.0-beta.1) **+ Fase 2 (este cierre)**, en 2 commits nuevos (feat +
+  docs). **NO pusheado** (regla del proyecto: no push sin pedido). **`main` sigue en 1.2.0.**
+- **Versión**: SIN tocar (sigue `1.3.0-beta.1`). La Fase 2 NO se releaseó ni tagueó — eso es después de
+  la verificación en hardware.
+- **La beta instalable `v1.3.0-beta.1` es Fase 1 SOLA** (se compiló del commit `fcb408d`, antes de la
+  Fase 2). Para probar la Fase 2 en hardware hace falta un build NUEVO (ver próximo paso).
+- **Hardware**: ni Fase 1 ni Fase 2 se probaron en el monitor real todavía.
 
 ## Próximo paso CONCRETO (al retomar)
 
-1. **Verificar la beta `1.3.0-beta.1` en hardware**: cuando el CI esté verde, instalarla por el
-   auto-updater (Settings → APP UPDATES → CHECK) y probar en el desktop real: ★ primario, el atajo
-   aplicando un perfil, el startup profile (dejar la TV, reiniciar con autostart), + regresión
-   (clipboard/transferencias) + **CPU en reposo ~0% en el Task Manager**.
-2. Si la Fase 1 anda: sacar el **release final** (tag `v1.3.0` **sin** sufijo → la landing lo sirve),
-   **FF `main`** a `feat/displays-v2`, y **archivar** `docs/SPEC-displays-v2.md` (Fase 1) a
+1. **Conseguir un build con la Fase 2 para probar en hardware.** Dos caminos (elegir con Guido):
+   (a) `npm run tauri dev` en el desktop real (rápido, sin release), o (b) push de la rama → CI arma un
+   build/beta. Yo no puedo buildear local (sale del CI) ni pushear sin tu OK.
+2. **Verificar Fase 1 + Fase 2 JUNTAS en hardware** (Guido eligió construir la 2 sobre la beta sin
+   confirmar, así que se prueban juntas): ★ primario / startup profile / atajos / botón actualizar (Fase
+   1) **y** el rediseño (saltar CLIP↔DISP con un transfer en curso, el banner global contando desde
+   Clipboard, ESC/CLOSE, las 4 sub-pestañas) — + regresión clipboard/transferencias + **CPU en reposo
+   ~0% en el Task Manager** (el reloj no debe dejar timers colgados sin pending).
+3. **Si andan las dos**: sacar el **release final** (tag `v1.3.0` sin sufijo), **FF `main`**, y **archivar
+   AMBOS** specs (`docs/SPEC-displays-v2.md` Fase 1 + `docs/SPEC-displays-v2-fase2.md` Fase 2) a
    `docs/archive/` con "✅ IMPLEMENTADO". Si aparece un bug, arreglarlo antes del final.
-3. **Ejecutar la Fase 2** (rediseño) → chat NUEVO → `inicio — ejecutá el spec
-   docs/SPEC-displays-v2-fase2.md (está READY)`. **Decisión de secuencia** (está en el spec): conviene
-   verificar la Fase 1 en hardware ANTES de arrancar la 2 (si la beta tiene un bug latente, la 2 lo
-   heredaría).
+4. Después: **Fase 3 (audio por perfil)** → diseñar con el Arquitecto, arranca por un spike de
+   investigación (backlog crudo en `docs/TODO.md` → 🟣 Displays v2).
 
 ## Bloqueos
 
-Ninguno. (El CI del release corre en GitHub; verificar verde.)
+- **Para la verificación en hardware falta un build con la Fase 2** (la beta actual es Fase 1 sola) — es el
+  paso 1 de arriba, requiere decisión de Guido (dev local vs push→CI).
 
 ## Contexto que no está en otros docs
 
-- **El crate scratch de verificación local se reutilizó** (de la sesión previa, en el temp): apunta por
-  `#[path]` al `displays/mod.rs` real y tiene el build de `windows 0.60` cacheado → `cargo check` en las
-  2 ramas en ~1-2s. Al reconstruirlo, la receta sigue en DECISIONS (sin `winreg`, con `anyhow`).
-- **`lib.rs` NO se compila local** (dlltool) → los comandos, el plugin y el handler del hotkey **solo los
-  valida el CI**. Se cuidó siguiendo los patrones existentes + la API del plugin verificada contra
-  fuentes (Rust-only NO necesita tocar `capabilities/`).
-- **La Fase 1 (`SPEC-displays-v2.md`) NO se archiva todavía**: espera la verificación en hardware (su
-  propia regla "cuando esté verificada" en la línea final del spec).
-- **Mockups Fase 2** (artifact publicado, Opción A elegida) y el **groundwork** viven en el scratchpad de
-  la sesión (efímeros); lo durable quedó en el spec de la Fase 2 + este handoff.
-- **El CI corre ante cualquier push** a la rama (incluidos los de solo-docs) — sigue como TODO
-  (`paths-ignore`).
+- **Cómo se verificó E2E el frontend** (el proyecto no tenía harness Playwright): se copia `src/` a un dir
+  servible, se le inyecta un `mock-tauri.js` (define `window.__TAURI__` con `core.invoke`/`event.listen`
+  falsos + datos SMOKE + un `__emit` para disparar eventos del backend + un wrap de `setInterval` para
+  contar timers activos por nombre), se sirve estático y se maneja con Playwright. El script de sync y el
+  mock quedaron en el scratchpad de la sesión (efímeros); la receta está acá. Sirve para toda la Fase 2/3
+  que sea frontend.
+- **El frontend NO carga en un navegador pelado**: `main.js` línea 6 hace `window.__TAURI__.core` → sin el
+  mock, tira. Por eso el harness.
+- **Backend (`src-tauri`) NO se tocó** en toda la Fase 2 — es puro frontend (index.html/main.js/styles.css).
+  `cargo check` verde confirma que sigue compilando (para el host).
+- **La Fase 1 (`SPEC-displays-v2.md`) sigue sin archivar** — ahora se archiva JUNTO con la Fase 2, tras la
+  verificación en hardware de las dos.

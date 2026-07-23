@@ -2,6 +2,50 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
+## 2026-07-23 — Displays v2 Fase 2 IMPLEMENTADA (rediseño: displays como sección) · verificada E2E frontend · NO hardware
+
+Rediseño estructural, **puro frontend** (backend intacto): los monitores dejaron de ser un pop-up y pasaron
+a una sección a pantalla completa con pestañas de nivel superior en el HUD. Verificado E2E con Playwright +
+mock de `window.__TAURI__` sobre datos SMOKE (8/8 criterios del spec) + review adversarial multi-agente
+(3 dimensiones limpias, 1 hallazgo bajo corregido). **NO verificado en hardware todavía** — se prueba junto
+con la Fase 1. Sin bump de versión ni release (eso es post-hardware).
+
+### Added
+- **Pestañas de sección CLIP | DISP** en el HUD (`#hud-sections`, `.hud-section-btn`), reveladas solo fuera
+  de Android (userAgent). Absorbieron el viejo botón DISP: navegan de sección vía `state.section`
+  (`'clipboard'|'displays'`), no abren modal.
+- **Sección Displays** (`#displays-section` / `.displays-shell`): re-hospeda el contenido del viejo
+  `#displays-modal` a pantalla completa, como hija directa de `.app` (comparte la fila 1fr del grid con el
+  clipboard). Interior sin cambios de comportamiento.
+- **Banner GLOBAL del auto-revert** (`.displays-banner` en `#app-banners`, ámbar, molde `.backend-banner`):
+  el reloj salió del modal a nivel app, visible desde cualquier sección. Conserva los ids
+  `#displays-pending/-text/-confirm/-revert` que ya maneja `main.js`.
+- `switchSection` / `enterDisplaysSection` / `leaveDisplaysSection` + gate de montaje
+  (`displaysSectionMounted`): el reseteo (vaciar lista, arrancar en LISTA) corre solo la 1ª vez; en
+  re-entradas se conserva la sub-pestaña activa.
+
+### Changed
+- **Cambio de sección OCULTA con `[hidden]`, NO desmonta** → un transfer en curso del clipboard sobrevive el
+  ida y vuelta (verificado por identidad de nodo).
+- **Reloj del auto-revert re-cableado**: los 4 chequeos `!displaysModal.hidden` → el `setInterval` tickea
+  por `state.displaysPending` (sin condición de sección; corre desde Clipboard); `displays-changed` y
+  `displays-confirmation` recargan la lista según `state.section === 'displays'`. Sin pending, cero timer
+  (CPU en reposo).
+- **ESC/CLOSE** en Displays vuelven a Clipboard (nunca pantalla en blanco); ESC con un modal encima cierra
+  el modal, no cambia de sección. Se eliminó el clic-afuera (ya no hay backdrop).
+- **HUD**: etiquetas terse CLIP/DISP (con tooltip) para que las 6 teclas entren a 1080; media query esconde
+  las stats HOST/NODE abajo de 1040px.
+
+### Fixed (durante la verificación)
+- **Botón CONF fuera de pantalla** a 1080 (la tecla extra desbordaba el HUD) → CLIP/DISP + media query.
+- **CLIP/DISP apretados en una sola celda** en `is-mobile` (ventana Windows ≤900), hallazgo del review
+  adversarial → `html.is-mobile .hud-sections:not([hidden]) { display: contents }`. El `:not([hidden])` es
+  clave: sin él, el `!important` le ganaría al `[hidden]` y en Android reaparecerían los botones.
+
+### Removed
+- CSS muerto de la vieja barra in-modal `.displays-pending*` (reemplazada por el banner global) y la regla
+  `.displays-modal` (el elemento ya no existe).
+
 ## 2026-07-21 — Displays v2 Fase 1 IMPLEMENTADA (local + review) · pre-release v1.3.0-beta.1 · Fase 2 spec READY
 
 Segunda misión del día (chat aparte). "Perfiles con superpoderes": se cableó a la UI lo que el motor de

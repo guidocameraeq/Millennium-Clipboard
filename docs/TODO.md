@@ -2,7 +2,7 @@
 
 > ÚNICA fuente de pendientes del proyecto. Completado → SE BORRA (la historia vive en CHANGELOG y git). Header de 1 línea, sin narrativa de sesión.
 
-2026-07-21 — ver SESSION_HANDOFF.md
+2026-07-23 — ver SESSION_HANDOFF.md
 
 ## 🔵 Displays (SPEC-displays — misión activa; roadmap de fases en `docs/SPEC-displays.md`)
 - [ ] **Fase 3 — sub-checks físicos que faltan** (el núcleo ya se verificó en hardware el 2026-07-21: perfiles, lienzo, auto-revert, updater — ver CHANGELOG). Faltan, de paso en el próximo uso: (a) **cambiar el plazo del auto-revert desde AJUSTES** y ver que el próximo cambio lo use; (b) **enchufar/desenchufar** algo y ver la LISTA actualizarse **sola, sin apretar REFRESH** (el watcher `WM_DISPLAYCHANGE`); (c) **regresión**: transferencia/clipboard siguen igual y **CPU en reposo ~0% en el Task Manager**. Con estos, el SPEC-displays queda COMPLETO y se archiva.
@@ -12,18 +12,20 @@
 
 ## 🟣 Displays v2 — misión en curso (2026-07-21)
 
-> Fase 1 ("perfiles con superpoderes") IMPLEMENTADA y pre-releaseada como beta; Fase 2 (rediseño) con spec
-> READY. Ver SESSION_HANDOFF.md.
+> Fase 1 ("perfiles con superpoderes") y Fase 2 (rediseño: displays como sección) IMPLEMENTADAS. Fase 1
+> pre-releaseada como beta; Fase 2 verificada E2E frontend. NINGUNA verificada en hardware. Ver
+> SESSION_HANDOFF.md.
 
-- [ ] **Fase 1 — verificar la beta `v1.3.0-beta.1` en hardware** (★ primario / startup profile / atajos
-  globales / botón actualizar, + regresión clipboard/transferencias + **CPU en reposo ~0% en el Task
-  Manager**). Cuando ande: sacar el **release final** (tag `v1.3.0` sin sufijo), **FF `main`** a
-  `feat/displays-v2`, y **archivar** `docs/SPEC-displays-v2.md` (Fase 1) a `docs/archive/`. Si aparece un
-  bug, arreglarlo antes del final.
-- [ ] **Fase 2 — rediseño (displays como sección propia, Opción A elegida por Guido).** Spec **READY**:
-  `docs/SPEC-displays-v2-fase2.md`. Ejecutar en chat nuevo: `inicio — ejecutá el spec
-  docs/SPEC-displays-v2-fase2.md (está READY)`. **Decisión de secuencia (en el spec):** verificar la Fase
-  1 en hardware ANTES de arrancar la 2 (si la beta tiene un bug latente, la 2 lo heredaría).
+- [ ] **Verificar Fase 1 + Fase 2 JUNTAS en hardware** (Guido eligió construir la 2 sobre la beta sin
+  confirmar → se prueban juntas). **Primero falta un build con la Fase 2**: la beta instalable
+  `v1.3.0-beta.1` es Fase 1 SOLA (se compiló antes de la Fase 2) → o `npm run tauri dev` en el desktop, o
+  push→CI para un build nuevo (decisión de Guido; no pushear sin su OK). A probar: **Fase 1** (★ primario /
+  startup profile / atajos / botón actualizar) **y Fase 2** (saltar CLIP↔DISP con un transfer en curso, el
+  banner global contando desde Clipboard, ESC/CLOSE, las 4 sub-pestañas), + regresión
+  clipboard/transferencias + **CPU en reposo ~0% en el Task Manager**. Cuando anden las dos: **release
+  final** (tag `v1.3.0` sin sufijo), **FF `main`**, y **archivar AMBOS** specs
+  (`docs/SPEC-displays-v2.md` + `docs/SPEC-displays-v2-fase2.md`) a `docs/archive/` con "✅ IMPLEMENTADO".
+  Si aparece un bug, arreglarlo antes del final.
 - [ ] **Fase 3 — cambio de audio por perfil** (net-new, requiere INVESTIGACIÓN). Al aplicar un perfil,
   cambiar el output de audio por default de Windows (ej. salida por la TV). **NO está en Monarch.** API
   tipo IMMDevice/`IPolicyConfig` (semi-documentada). Extender el perfil para guardar el "audio deseado"
