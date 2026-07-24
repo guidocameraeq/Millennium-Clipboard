@@ -20,6 +20,32 @@
   cambiar el output de audio por default de Windows (ej. salida por la TV). **NO está en Monarch.** API
   tipo IMMDevice/`IPolicyConfig` (semi-documentada). Extender el perfil para guardar el "audio deseado"
   (dato del usuario → cuidado con la migración del schema). Su propio spec, arrancando por un spike.
+  **Proceso: (1) spike → (2) spec delta → (3) build, en 3 chats/misiones distintas.** Prompt de arranque
+  listo para pegar en un chat NUEVO (lo armó el Arquitecto 2026-07-23):
+
+  ```
+  arquitecto — diseñemos la Fase 3 de Displays v2: "audio por perfil". Al aplicar un
+  perfil de monitores, que cambie también la salida de audio por default de Windows
+  (p. ej. el perfil "TV" manda el sonido a la TV).
+
+  Es un feature sobre Millennium Clipboard (ya anda; quedó en v1.3.0 con Displays v2
+  Fase 1+2). Seguí ESTE proceso, en orden, sin saltear pasos:
+
+  1) SPIKE primero. Investigá si es factible desde el backend (Rust/Tauri) y cómo:
+     cuál es la API de Windows para cambiar el dispositivo de salida por default
+     (se mencionó algo tipo IPolicyConfig / IMMDeviceEnumerator, semi-documentada),
+     si hay crate/binding o hay que ir por FFI, y qué tan frágil es. Mostrame los
+     hallazgos + la conclusión de factibilidad y ESPERÁ MI OK. NO escribas el spec aún.
+
+  2) Con mi OK, armá el SPEC DELTA (formato del proyecto, con su NO SE TOCA). Punto
+     sensible: el "audio deseado" se guarda dentro de cada perfil = son mis datos →
+     hay migración de displays.json; mostrame la tabla "esto cambio / esto preservo".
+
+  3) El build es OTRA sesión. Vos no codeás nada.
+
+  Roadmap y contexto: docs/archive/SPEC-displays-v2-fase2.md (sección "Faseado") y
+  docs/TODO.md (🟣 Displays v2).
+  ```
 - [ ] **[Más adelante] Resolución/refresh por perfil** (un perfil pone la TV en 1080p, otro en 4K).
   `OutputConfig.resolution`/`refresh_rate_mhz` ya se guardan y aplican; falta capturar/editar la
   resolución por perfil en la UI. No urgente (Guido lo dijo explícito).
