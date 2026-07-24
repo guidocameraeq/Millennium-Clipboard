@@ -96,6 +96,17 @@ pub struct DisplayFingerprint {
     pub edid_fingerprint: Option<String>,
 }
 
+/// Salida de audio deseada por un perfil (Displays v2, Fase 3).
+///
+/// `endpoint_id` es la clave técnica opaca del endpoint (de `IMMDevice::GetId`);
+/// `friendly_name` es la etiqueta linda para la UI y el fallback si el id ya no
+/// resuelve (cambio de driver, USB a otro puerto). Ambos `String` → `Eq` trivial.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AudioTarget {
+    pub endpoint_id: String,
+    pub friendly_name: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
@@ -108,6 +119,11 @@ pub struct AppSettings {
     pub display_toggle_shortcut_base: Option<String>,
     pub profile_shortcuts: BTreeMap<String, String>,
     pub display_toggle_shortcuts: BTreeMap<String, String>,
+    /// Salida de audio deseada por perfil (Displays v2, Fase 3), keyed por
+    /// **nombre** de perfil — mismo lugar y patrón que `profile_shortcuts`. Sin
+    /// entrada = ese perfil está en "No tocar el audio". Nace vacío en stores
+    /// viejos gracias al `#[serde(default)]` a nivel struct.
+    pub profile_audio: BTreeMap<String, AudioTarget>,
 }
 
 impl Default for AppSettings {
@@ -121,6 +137,7 @@ impl Default for AppSettings {
             display_toggle_shortcut_base: Some(DEFAULT_DISPLAY_TOGGLE_SHORTCUT_BASE.to_string()),
             profile_shortcuts: BTreeMap::new(),
             display_toggle_shortcuts: BTreeMap::new(),
+            profile_audio: BTreeMap::new(),
         }
     }
 }

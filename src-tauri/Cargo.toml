@@ -122,6 +122,16 @@ windows = { version = "0.60", features = [
   "Win32_UI_ColorSystem",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
+  # Displays v2, Fase 3 (audio por perfil): enumerar salidas y setear el default.
+  # Media_Audio → IMMDeviceEnumerator/EnumAudioEndpoints/IMMDevice/ERole/EDataFlow/
+  # DEVICE_STATE_ACTIVE + IPolicyConfig (declarado a mano). Shell_PropertiesSystem →
+  # IPropertyStore para el friendly name. FunctionDiscovery → PKEY_Device_FriendlyName.
+  # Com_StructuredStorage → PROPVARIANT que devuelve GetValue.
+  "Win32_Media_Audio",
+  "Win32_UI_Shell_PropertiesSystem",
+  "Win32_Devices_FunctionDiscovery",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Variant",
 ] }
 
 # Mobile-only plugins (Android / iOS)

@@ -1579,6 +1579,71 @@ async fn displays_clear_profile_shortcut(
     }
 }
 
+/// Lista las salidas de audio activas para el dropdown "Sonido a:" (Fase 3).
+#[tauri::command]
+async fn displays_list_audio_outputs(
+    app: tauri::AppHandle,
+) -> Result<Vec<displays::AudioView>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let estado = estado_displays(&app).ok_or_else(displays_no_disponible)?;
+        return tokio::task::spawn_blocking(move || {
+            Ok::<_, String>(estado.listar_salidas_de_audio())
+        })
+        .await
+        .map_err(|e| format!("displays: la tarea de audio se cayó: {e}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = &app;
+        Err(displays_no_disponible())
+    }
+}
+
+/// Asigna una salida de audio a un perfil (Fase 3). Devuelve la lista al día.
+#[tauri::command]
+async fn displays_set_profile_audio(
+    app: tauri::AppHandle,
+    name: String,
+    endpoint_id: String,
+    friendly_name: String,
+) -> Result<Vec<displays::ProfileView>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let estado = estado_displays(&app).ok_or_else(displays_no_disponible)?;
+        return tokio::task::spawn_blocking(move || {
+            estado.asignar_audio(&name, &endpoint_id, &friendly_name)
+        })
+        .await
+        .map_err(|e| format!("displays: la tarea de audio se cayó: {e}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (&app, &name, &endpoint_id, &friendly_name);
+        Err(displays_no_disponible())
+    }
+}
+
+/// Quita la salida de audio de un perfil, vuelve a "No tocar" (Fase 3).
+#[tauri::command]
+async fn displays_clear_profile_audio(
+    app: tauri::AppHandle,
+    name: String,
+) -> Result<Vec<displays::ProfileView>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let estado = estado_displays(&app).ok_or_else(displays_no_disponible)?;
+        return tokio::task::spawn_blocking(move || estado.limpiar_audio(&name))
+            .await
+            .map_err(|e| format!("displays: la tarea de audio se cayó: {e}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (&app, &name);
+        Err(displays_no_disponible())
+    }
+}
+
 #[tauri::command]
 fn record_frontend_log(level: String, msg: String) {
     match level.as_str() {
@@ -2210,6 +2275,9 @@ pub fn run() {
             displays_set_primary,
             displays_set_profile_shortcut,
             displays_clear_profile_shortcut,
+            displays_list_audio_outputs,
+            displays_set_profile_audio,
+            displays_clear_profile_audio,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

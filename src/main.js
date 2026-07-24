@@ -2040,6 +2040,10 @@
       <div class="displays-profile-info">
         <div class="displays-profile-name-text"></div>
         <div class="mono displays-profile-summary"></div>
+        <div class="displays-profile-audio">
+          <label class="displays-profile-audio-label">Sonido a:</label>
+          <select class="displays-setting-select displays-profile-audio-select"></select>
+        </div>
       </div>
       <div class="displays-profile-actions">
         <button class="modal-btn small accept displays-profile-load" type="button">CARGAR</button>
@@ -2091,6 +2095,45 @@
         ? `Atajo: ${sc}. Clic para cambiarlo (Supr borra · Esc cancela).`
         : 'Asignar un atajo global para aplicar este perfil.';
     }
+
+    // Displays v2, Fase 3: dropdown de salida de audio ("Sonido a:"). No se
+    // repuebla mientras el usuario lo tiene abierto/enfocado (le pisaría la
+    // selección); mismo cuidado que populateStartupOptions con 'current'.
+    const audioSel = li.querySelector('.displays-profile-audio-select');
+    if (audioSel) {
+      if (document.activeElement !== audioSel) populateAudioSelect(audioSel, p);
+      audioSel.disabled = busy || pending;
+    }
+  }
+
+  // Puebla un <select> "Sonido a:" con No tocar + las salidas activas. Todo por
+  // createElement/textContent (nombres del sistema: nunca innerHTML crudo).
+  function populateAudioSelect(sel, p) {
+    const outputs = Array.isArray(state.audioOutputs) ? state.audioOutputs : [];
+    const assigned = (p.audio && typeof p.audio.endpointId === 'string') ? p.audio.endpointId : '';
+    sel.replaceChildren();
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = 'No tocar';
+    sel.appendChild(none);
+    let found = false;
+    outputs.forEach((o) => {
+      const opt = document.createElement('option');
+      opt.value = o.endpointId;
+      opt.textContent = o.friendlyName;
+      if (o.endpointId === assigned) found = true;
+      sel.appendChild(opt);
+    });
+    // El perfil tiene una salida guardada que no está activa ahora (TV apagada):
+    // mostrarla igual para no borrar visualmente la asignación.
+    if (assigned && !found) {
+      const opt = document.createElement('option');
+      opt.value = assigned;
+      const label = (p.audio && p.audio.friendlyName) ? p.audio.friendlyName : assigned;
+      opt.textContent = `${label} (no disponible)`;
+      sel.appendChild(opt);
+    }
+    sel.value = assigned;
   }
 
   // Render por diff, como renderDisplays: se reusa el <li> por data-name.
@@ -2130,7 +2173,47 @@
       state.displaysProfiles = [];
       showDisplaysError(err);
     }
+    await loadAudioOutputs();
     renderProfiles();
+  }
+
+  // Displays v2, Fase 3: lista de salidas de audio activas para poblar los
+  // dropdowns "Sonido a:". Best-effort: si falla, los dropdowns quedan solo con
+  // "No tocar" (+ la salida guardada de cada perfil, aunque no esté activa).
+  async function loadAudioOutputs() {
+    try {
+      const outs = await invoke('displays_list_audio_outputs');
+      state.audioOutputs = Array.isArray(outs) ? outs : [];
+    } catch (err) {
+      state.audioOutputs = [];
+      console.warn('[displays] no se pudieron listar las salidas de audio', err);
+    }
+  }
+
+  // Displays v2, Fase 3: guarda (o limpia) la salida de audio de un perfil. Vacío
+  // = "No tocar". Devuelve la lista al día para re-renderizar.
+  async function setProfileAudioFlow(name, endpointId) {
+    if (state.displaysBusy) return;
+    state.displaysBusy = true;
+    renderProfiles();
+    try {
+      let profiles;
+      if (!endpointId) {
+        profiles = await invoke('displays_clear_profile_audio', { name });
+        setStatus(`DISPLAYS · "${name}": audio en No tocar`, { force: true });
+      } else {
+        const out = (state.audioOutputs || []).find((o) => o.endpointId === endpointId);
+        const friendlyName = out ? out.friendlyName : '';
+        profiles = await invoke('displays_set_profile_audio', { name, endpointId, friendlyName });
+        setStatus(`DISPLAYS · "${name}": sonido a "${friendlyName || 'esa salida'}"`, { force: true });
+      }
+      state.displaysProfiles = Array.isArray(profiles) ? profiles : [];
+    } catch (err) {
+      showDisplaysError(err);
+    } finally {
+      state.displaysBusy = false;
+      renderProfiles();
+    }
   }
 
   // El banner de confirmacion se reusa para pisar y para borrar. Tus perfiles son
@@ -2792,6 +2875,14 @@
       else if (updateBtn && !updateBtn.disabled) updateProfileFlow(name);
       else if (scBtn && !scBtn.disabled) startShortcutCapture(name);
     });
+    // Los <select> emiten 'change', no 'click': listener aparte para el audio.
+    displaysProfilesList.addEventListener('change', (e) => {
+      const el = e.target;
+      if (!el || !el.classList || !el.classList.contains('displays-profile-audio-select')) return;
+      const li = el.closest && el.closest('.displays-profile-item');
+      const name = li && li.dataset ? li.dataset.name : null;
+      if (name) setProfileAudioFlow(name, el.value);
+    });
   }
   if (displaysSettingsSaveBtn) {
     displaysSettingsSaveBtn.addEventListener('click', () => { blip(880, 0.05); saveSettings(); });
@@ -3443,6 +3534,20 @@
     // en Clipboard el snapshot no lo mira nadie (la enumeración no corre sola).
     await listen('displays-changed', () => {
       if (state.section === 'displays') loadDisplays();
+    });
+
+    // Displays v2, Fase 3: aviso puntual del audio por perfil. La salida asignada
+    // no estaba presente (TV apagada) o falló el cambio; el video se aplicó igual.
+    await listen('displays-audio', (event) => {
+      const payload = event.payload || {};
+      const device = typeof payload.device === 'string' ? payload.device : '';
+      if (payload.kind === 'unavailable') {
+        setStatus(`DISPLAYS · la salida "${device}" no está (¿TV apagada?); el audio no se cambió`,
+          { priority: 'warn', ttl: 8000 });
+      } else if (payload.kind === 'error') {
+        setStatus(`DISPLAYS · no se pudo cambiar el audio a "${device}"`,
+          { priority: 'warn', ttl: 8000 });
+      }
     });
 
     // Ciclo de confirmacion. El reloj es del backend; esto solo lo dibuja. El

@@ -462,6 +462,11 @@ where
             display_toggle_shortcut_base: Some(display_toggle_shortcut_base),
             profile_shortcuts,
             display_toggle_shortcuts,
+            // TRAMPA #1 (Displays v2, Fase 3): este literal re-arma AppSettings
+            // campo por campo. El audio por perfil se copia TAL CUAL del input;
+            // NUNCA `Default::default()` ni `BTreeMap::new()`, o cada guardado de
+            // ajustes/atajos vaciaría en silencio TODAS las salidas de audio.
+            profile_audio: settings.profile_audio,
         };
         self.persist_config()
     }
@@ -874,7 +879,7 @@ fn unique_unused_candidates_by_target_id<'a>(
 mod tests {
     use super::*;
     use crate::{
-        model::{OutputConfig, Position, Resolution},
+        model::{AudioTarget, OutputConfig, Position, Resolution},
         MemoryConfigStore, MockBackend,
     };
 
@@ -1871,5 +1876,94 @@ mod tests {
         assert!(rolled_back);
         assert_eq!(backend.current_layout().unwrap(), original);
         assert!(!manager.has_pending_confirmation());
+    }
+
+    // --- Displays v2, Fase 3: audio por perfil ------------------------------
+
+    #[test]
+    fn update_settings_preserves_profile_audio() {
+        // Trampa #1: update_settings re-arma AppSettings campo por campo. Guardar
+        // CUALQUIER ajuste NO debe vaciar las salidas de audio por perfil.
+        let (mut manager, _backend, _store) = build_manager();
+
+        let mut settings = manager.settings().clone();
+        settings.profile_audio.insert(
+            "TV".to_string(),
+            AudioTarget {
+                endpoint_id: "{0.0.0.00000000}.{tv-endpoint}".to_string(),
+                friendly_name: "TV Samsung".to_string(),
+            },
+        );
+        manager.update_settings(settings).unwrap();
+        assert_eq!(
+            manager.settings().profile_audio.len(),
+            1,
+            "update_settings descartó el audio recién asignado"
+        );
+
+        // Cambiar OTRO ajuste (perfil de arranque) y guardar: el audio DEBE
+        // seguir intacto (es la regresión que blinda la trampa #1).
+        let mut settings = manager.settings().clone();
+        settings.startup_profile_name = Some("TV".to_string());
+        manager.update_settings(settings).unwrap();
+
+        let audio = manager.settings().profile_audio.get("TV");
+        assert!(
+            audio.is_some(),
+            "trampa #1: cambiar un ajuste vació profile_audio"
+        );
+        assert_eq!(audio.unwrap().friendly_name, "TV Samsung");
+        assert_eq!(
+            manager.settings().startup_profile_name.as_deref(),
+            Some("TV")
+        );
+    }
+
+    #[test]
+    fn config_without_profile_audio_loads_with_empty_map() {
+        // Regresión (criterio 1): un displays.json de v1.3.0 NO tiene la clave
+        // profile_audio; debe cargar igual, con el mapa vacío, sin perder nada.
+        let json = r#"{
+            "profiles": [{ "name": "dual", "layout": { "outputs": [] } }],
+            "settings": {
+                "revert_timeout_secs": 8,
+                "profile_shortcuts": { "dual": "Ctrl+Shift+1" }
+            }
+        }"#;
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+        assert!(
+            config.settings.profile_audio.is_empty(),
+            "profile_audio debe nacer vacío en un store viejo"
+        );
+        assert_eq!(config.settings.revert_timeout_secs, 8);
+        assert_eq!(
+            config
+                .settings
+                .profile_shortcuts
+                .get("dual")
+                .map(String::as_str),
+            Some("Ctrl+Shift+1")
+        );
+        assert_eq!(config.profiles.len(), 1);
+    }
+
+    #[test]
+    fn profile_audio_survives_json_round_trip() {
+        // El campo nuevo persiste y se relee idéntico (ida y vuelta por JSON).
+        let mut config = AppConfig::default();
+        config.settings.profile_audio.insert(
+            "TV".to_string(),
+            AudioTarget {
+                endpoint_id: "{endpoint-id}".to_string(),
+                friendly_name: "TV".to_string(),
+            },
+        );
+        let json = serde_json::to_string(&config).unwrap();
+        let back: AppConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(config, back);
+        assert_eq!(
+            back.settings.profile_audio.get("TV").unwrap().endpoint_id,
+            "{endpoint-id}"
+        );
     }
 }

@@ -3208,6 +3208,27 @@ html.fx-off .status-item .status-dot { animation: none !important; }
   justify-content: flex-end;
 }
 
+/* Displays v2, Fase 3: dropdown de salida de audio por perfil ("Sonido a:").
+   Reusa .displays-setting-select (borde cyan, mono) pero achicado para la fila. */
+.displays-profile-audio {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+.displays-profile-audio-label {
+  font-size: 11px;
+  color: var(--text-mute);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.displays-profile-audio .displays-profile-audio-select {
+  min-width: 0;
+  flex: 1 1 auto;
+  font-size: 11px;
+  padding: 3px 6px;
+}
+
 /* Displays v2, Fase 1: botón de atajo por perfil. Neutro sin asignar; cyan con
    una combinación puesta; magenta y latiendo mientras se está capturando. */
 .displays-profile-shortcut {

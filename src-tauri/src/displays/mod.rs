@@ -42,6 +42,8 @@ use serde::{Deserialize, Serialize};
 #[allow(dead_code)] // helpers de color/wallpaper que solo usa una rama del apply
 mod apply;
 #[cfg(target_os = "windows")]
+mod audio;
+#[cfg(target_os = "windows")]
 mod backend;
 #[cfg(target_os = "windows")]
 mod enumerate;
@@ -150,6 +152,22 @@ pub struct ProfileView {
     /// El atajo global asignado a este perfil (Displays v2, Fase 1), o `None` si
     /// no tiene. Se guarda en `profile_shortcuts` por **nombre** de perfil.
     pub shortcut: Option<String>,
+    /// La salida de audio asignada a este perfil (Displays v2, Fase 3), o `None`
+    /// si está en "No tocar el audio". Se guarda en `profile_audio` por nombre.
+    pub audio: Option<AudioView>,
+}
+
+/// La salida de audio de un perfil, plana, para cruzar al frontend (Displays v2,
+/// Fase 3). No usa el `AudioTarget` del vendor a propósito: este DTO vive en la
+/// parte **ungateada** del módulo (tiene que nombrarse en cualquier plataforma) y
+/// el vendor `monarch` es windows-only.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioView {
+    /// Clave técnica opaca del endpoint (de `IMMDevice::GetId`).
+    pub endpoint_id: String,
+    /// Etiqueta linda para la UI (nombre del dispositivo).
+    pub friendly_name: String,
 }
 
 /// Los ajustes de displays que el frontend puede editar.
@@ -421,6 +439,10 @@ fn mock_displays() -> Vec<DisplayView> {
 /// Nombres de los eventos que el frontend escucha.
 pub const EVENTO_CAMBIO: &str = "displays-changed";
 pub const EVENTO_CONFIRMACION: &str = "displays-confirmation";
+/// Aviso puntual del audio por perfil (Displays v2, Fase 3): p.ej. la salida
+/// asignada no está presente (TV apagada). Canal aparte del de confirmación para
+/// no ensuciar la máquina de estados del banner de auto-revert.
+pub const EVENTO_AUDIO: &str = "displays-audio";
 
 /// Cómo este módulo le habla al frontend, **sin conocer a Tauri**.
 ///
@@ -439,15 +461,17 @@ mod estado {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    use monarch::{Layout, MonarchDisplayManager, Profile};
+    use monarch::{AudioTarget, Layout, MonarchDisplayManager, Profile};
 
+    use super::audio;
     use super::backend::SystemDisplayBackend;
     use super::ids::{format_display_id, parse_display_id};
     use super::store::MillenniumConfigStore;
     use super::watchdog::{self, Desenlace};
     use super::{
-        diagnostics, mark_can_detach, DisplayView, DisplaysSnapshot, Emisor, PendingView,
-        PosicionView, ProfileView, SettingsView, EVENTO_CAMBIO, EVENTO_CONFIRMACION, FORCE_MOCK_ENV,
+        diagnostics, mark_can_detach, AudioView, DisplayView, DisplaysSnapshot, Emisor, PendingView,
+        PosicionView, ProfileView, SettingsView, EVENTO_AUDIO, EVENTO_CAMBIO, EVENTO_CONFIRMACION,
+        FORCE_MOCK_ENV,
     };
 
     type Manager = MonarchDisplayManager<SystemDisplayBackend, MillenniumConfigStore>;
@@ -462,6 +486,23 @@ mod estado {
         emisor: Emisor,
         /// `true` cuando se está corriendo contra monitores de mentira.
         mock: bool,
+        /// Audio por perfil (Displays v2, Fase 3): el default de audio que había
+        /// ANTES de aplicar un perfil con salida asignada. Estado paralelo a la
+        /// confirmación de video del vendor (que NO conoce el audio): se captura
+        /// al aplicar con red, se restaura en el revert (manual o por timeout) y
+        /// se descarta al confirmar. `None` = no hay nada que revertir.
+        ///
+        /// **Por qué no lleva etiqueta de generación** (a diferencia del pending
+        /// de video, que el manager blinda por vencimiento): el manager sostiene
+        /// UNA sola confirmación a la vez — un apply nuevo exige resolver el
+        /// anterior primero. Por eso este slot siempre corresponde al pending vivo
+        /// (o es `None`). Un watchdog viejo, cuando despierta, o no encuentra
+        /// pendiente (→ `NadaQueHacer`, no toca el slot) o duerme hasta el
+        /// vencimiento REAL del pending vivo y recién ahí actúa — momento en que
+        /// restaurar/descartar este slot es lo correcto para ESE pending. No hay
+        /// interleaving que meta acá el previo de otro apply. (Ver `watchdog.rs`,
+        /// "Un watchdog viejo no puede pisar un apply nuevo".)
+        audio_previo: Mutex<Option<audio::AudioPrevio>>,
     }
 
     /// El handle que se guarda en Tauri y se clona hacia los hilos.
@@ -490,6 +531,7 @@ mod estado {
             manager: Mutex::new(manager),
             emisor,
             mock,
+            audio_previo: Mutex::new(None),
         }));
 
         // La ventana oculta cablea DOS reacciones distintas:
@@ -696,6 +738,8 @@ mod estado {
                 let mut guard = self.0.manager.lock().map_err(|_| envenenado())?;
                 guard.confirm_current_layout().map_err(|e| e.to_string())?;
             }
+            // El usuario aceptó: el audio nuevo se queda, ya no hay rollback.
+            self.olvidar_audio_previo();
             diagnostics::log("confirm:el_usuario_confirmo");
             self.avisar_confirmacion(serde_json::json!({ "kind": "confirmed" }));
             self.avisar_cambio();
@@ -708,6 +752,8 @@ mod estado {
                 let mut guard = self.0.manager.lock().map_err(|_| envenenado())?;
                 guard.rollback_pending().map_err(|e| e.to_string())?;
             }
+            // El video volvió: el audio también (el perfil es una unidad).
+            self.restaurar_audio_previo();
             diagnostics::log("revert:a_pedido_del_usuario");
             self.avisar_confirmacion(serde_json::json!({
                 "kind": "reverted",
@@ -788,11 +834,15 @@ mod estado {
         pub fn listar_perfiles(&self) -> Result<Vec<ProfileView>, String> {
             let guard = self.0.manager.lock().map_err(|_| envenenado())?;
             let perfiles = guard.list_profiles();
-            // El atajo de cada perfil vive en `profile_shortcuts` (por nombre),
-            // no en el `Profile`; se cruza acá para que la fila lo muestre.
+            // El atajo y la salida de audio de cada perfil viven en `AppSettings`
+            // (por nombre), no en el `Profile`; se cruzan acá para la fila.
             let atajos = guard.settings().profile_shortcuts.clone();
+            let audios = guard.settings().profile_audio.clone();
             drop(guard);
-            Ok(perfiles.iter().map(|p| vista_de_perfil(p, &atajos)).collect())
+            Ok(perfiles
+                .iter()
+                .map(|p| vista_de_perfil(p, &atajos, &audios))
+                .collect())
         }
 
         /// Guarda el layout actual con un nombre. Si el nombre ya existe, el
@@ -821,6 +871,11 @@ mod estado {
                 guard.delete_profile(nombre).map_err(|e| e.to_string())?;
                 let mut ajustes = guard.settings().clone();
                 let mut cambio = ajustes.profile_shortcuts.remove(nombre).is_some();
+                // Limpiar también la salida de audio del perfil borrado, para no
+                // dejar una entrada huérfana en profile_audio (igual que el atajo).
+                if ajustes.profile_audio.remove(nombre).is_some() {
+                    cambio = true;
+                }
                 if ajustes.startup_profile_name.as_deref() == Some(nombre) {
                     ajustes.startup_profile_name = None;
                     cambio = true;
@@ -896,13 +951,22 @@ mod estado {
             };
 
             match plazo {
-                // No-op: el perfil ya era el layout actual. Nada que perseguir.
+                // No-op de video: el perfil ya era el layout actual. Pero igual
+                // puede faltar mandar el sonido a la salida del perfil (el "botón
+                // único" solo-audio). Sin cuenta regresiva ⇒ el audio se aplica y
+                // queda directo (no hay rollback de audio en esta rama).
                 None => {
+                    self.aplicar_audio_de_perfil(nombre, false);
                     diagnostics::log("perfil:cargado:sin_cambios");
                     self.avisar_cambio();
                     self.snapshot()
                 }
-                Some(plazo) => self.aplicar_con_red(plazo),
+                // Video con red: aplicar el audio y dejar el previo capturado para
+                // que el watchdog lo devuelva si nadie confirma el cambio.
+                Some(plazo) => {
+                    self.aplicar_audio_de_perfil(nombre, true);
+                    self.aplicar_con_red(plazo)
+                }
             }
         }
 
@@ -951,14 +1015,22 @@ mod estado {
 
             match red_de_emergencia {
                 None => {
+                    // Commit inmediato (perfil de arranque / atajo global): el audio
+                    // se aplica y se queda; sin auto-revert de video, no hay previo
+                    // que capturar (hay_red=false).
+                    self.aplicar_audio_de_perfil(nombre, false);
                     diagnostics::log("perfil:aplicado_directo");
                     self.avisar_cambio();
                     Ok(())
                 }
                 // El apply SÍ ocurrió pero no se pudo commitear: se arma la red para
                 // que el pending se resuelva (si nadie confirma, el watchdog revierte)
-                // en vez de dejar el subsistema congelado en silencio.
-                Some(plazo) => self.aplicar_con_red(plazo).map(|_| ()),
+                // en vez de dejar el subsistema congelado en silencio. Acá el video
+                // SÍ puede auto-revertirse ⇒ capturar el audio previo (hay_red=true).
+                Some(plazo) => {
+                    self.aplicar_audio_de_perfil(nombre, true);
+                    self.aplicar_con_red(plazo).map(|_| ())
+                }
             }
         }
 
@@ -1165,6 +1237,8 @@ mod estado {
         fn reportar_desenlace(&self, desenlace: Desenlace) {
             match desenlace {
                 Desenlace::Revertido => {
+                    // El watchdog ya revirtió el VIDEO; devolver también el audio.
+                    self.restaurar_audio_previo();
                     crate::runtime_log::warn(
                         "[displays] nadie confirmó el cambio: se revirtió solo",
                     );
@@ -1179,6 +1253,9 @@ mod estado {
                 // parpadear la UI.
                 Desenlace::NadaQueHacer => {}
                 Desenlace::NoPudoRevertir(motivo) => {
+                    // El VIDEO quedó como está (no se pudo revertir) ⇒ el audio
+                    // nuevo también se queda; descartar el previo (nada que revertir).
+                    self.olvidar_audio_previo();
                     crate::runtime_log::err(format!(
                         "[displays] NO se pudo revertir solo: {motivo}. La pantalla quedó como está; revertí a mano."
                     ));
@@ -1228,6 +1305,142 @@ mod estado {
         fn avisar_confirmacion(&self, payload: serde_json::Value) {
             (self.0.emisor)(EVENTO_CONFIRMACION, payload);
         }
+
+        fn avisar_audio(&self, payload: serde_json::Value) {
+            (self.0.emisor)(EVENTO_AUDIO, payload);
+        }
+
+        // --- audio por perfil (Fase 3) --------------------------------------
+
+        /// Aplica la salida de audio del perfil `nombre`, si tiene una asignada y
+        /// está presente. Best-effort: NUNCA frena ni revierte el video. Si
+        /// `hay_red` (hay una confirmación de video que puede auto-revertirse),
+        /// captura el default previo en `Interno` para devolverlo en el revert.
+        ///
+        /// El lock del manager se toma solo para leer `profile_audio` y se suelta
+        /// antes de cualquier llamada COM (regla del stack: nada de sostener el
+        /// Mutex a través de trabajo bloqueante largo).
+        fn aplicar_audio_de_perfil(&self, nombre: &str, hay_red: bool) {
+            let target = {
+                let Ok(guard) = self.0.manager.lock() else {
+                    return;
+                };
+                guard.settings().profile_audio.get(nombre).cloned()
+            };
+            let Some(target) = target else {
+                return; // "No tocar el audio".
+            };
+            // Capturar el default ACTUAL antes de cambiarlo (solo si hay red que
+            // pueda revertir). Sin el lock del manager tomado.
+            let previo = if hay_red {
+                audio::capturar_default()
+            } else {
+                None
+            };
+            let resultado = audio::aplicar_salida(&target);
+            // Guardar el audio previo si el cambio se INTENTÓ: Ok(true) = cambió;
+            // Err = pudo cambiar PARCIALMENTE (un rol OK, otro falló) antes de
+            // devolver error. En ambos casos el revert debe poder deshacerlo. En
+            // Ok(false) no se tocó nada ⇒ no hay previo que guardar.
+            if hay_red && !matches!(resultado, Ok(false)) {
+                if let Some(previo) = previo.filter(|p| p.tiene_algo()) {
+                    if let Ok(mut slot) = self.0.audio_previo.lock() {
+                        *slot = Some(previo);
+                    }
+                }
+            }
+            match resultado {
+                Ok(true) => {
+                    crate::runtime_log::info(format!(
+                        "[displays] audio del perfil «{nombre}» → «{}»",
+                        target.friendly_name
+                    ));
+                }
+                Ok(false) => {
+                    // Salida no presente (TV apagada): avisar; el video ya se aplicó.
+                    crate::runtime_log::warn(format!(
+                        "[displays] la salida de audio «{}» del perfil «{nombre}» no está disponible; el audio no se cambió",
+                        target.friendly_name
+                    ));
+                    self.avisar_audio(serde_json::json!({
+                        "kind": "unavailable",
+                        "device": target.friendly_name,
+                    }));
+                }
+                Err(e) => {
+                    crate::runtime_log::warn(format!(
+                        "[displays] no se pudo cambiar el audio del perfil «{nombre}»: {e}"
+                    ));
+                    self.avisar_audio(serde_json::json!({
+                        "kind": "error",
+                        "device": target.friendly_name,
+                    }));
+                }
+            }
+        }
+
+        /// Consume el audio previo capturado y lo restaura como default de Windows.
+        /// No hace nada si no había nada capturado.
+        fn restaurar_audio_previo(&self) {
+            let previo = match self.0.audio_previo.lock() {
+                Ok(mut slot) => slot.take(),
+                Err(_) => None,
+            };
+            if let Some(previo) = previo {
+                audio::restaurar_default(&previo);
+            }
+        }
+
+        /// Descarta el audio previo capturado (el cambio se aceptó; no hay revert).
+        fn olvidar_audio_previo(&self) {
+            if let Ok(mut slot) = self.0.audio_previo.lock() {
+                *slot = None;
+            }
+        }
+
+        // --- audio por perfil: comandos --------------------------------------
+
+        /// Lista las salidas de audio activas para el dropdown "Sonido a:".
+        pub fn listar_salidas_de_audio(&self) -> Vec<AudioView> {
+            audio::listar_salidas().iter().map(a_audio_view).collect()
+        }
+
+        /// Asigna una salida de audio a un perfil (persistente). Devuelve la lista
+        /// al día. Mismo patrón seguro que `asignar_atajo`: clonar ajustes, tocar
+        /// solo lo propio y `update_settings` (que preserva el resto intacto).
+        pub fn asignar_audio(
+            &self,
+            nombre: &str,
+            endpoint_id: &str,
+            friendly_name: &str,
+        ) -> Result<Vec<ProfileView>, String> {
+            {
+                let mut guard = self.0.manager.lock().map_err(|_| envenenado())?;
+                let mut ajustes = guard.settings().clone();
+                ajustes.profile_audio.insert(
+                    nombre.to_string(),
+                    AudioTarget {
+                        endpoint_id: endpoint_id.to_string(),
+                        friendly_name: friendly_name.to_string(),
+                    },
+                );
+                guard.update_settings(ajustes).map_err(|e| e.to_string())?;
+            }
+            diagnostics::log("audio:asignado");
+            self.listar_perfiles()
+        }
+
+        /// Quita la salida de audio de un perfil (vuelve a "No tocar").
+        pub fn limpiar_audio(&self, nombre: &str) -> Result<Vec<ProfileView>, String> {
+            {
+                let mut guard = self.0.manager.lock().map_err(|_| envenenado())?;
+                let mut ajustes = guard.settings().clone();
+                ajustes.profile_audio.remove(nombre);
+                guard.update_settings(ajustes).map_err(|e| e.to_string())?;
+            }
+            diagnostics::log("audio:limpiado");
+            self.listar_perfiles()
+        }
     }
 
     fn envenenado() -> String {
@@ -1239,7 +1452,11 @@ mod estado {
     ///
     /// El resumen cuenta los monitores prendidos y lista sus resoluciones, para
     /// que el usuario reconozca qué perfil es sin cargarlo.
-    fn vista_de_perfil(perfil: &Profile, atajos: &BTreeMap<String, String>) -> ProfileView {
+    fn vista_de_perfil(
+        perfil: &Profile,
+        atajos: &BTreeMap<String, String>,
+        audios: &BTreeMap<String, AudioTarget>,
+    ) -> ProfileView {
         let activos: Vec<_> = perfil.layout.outputs.iter().filter(|o| o.enabled).collect();
         let summary = if activos.is_empty() {
             "sin monitores".to_string()
@@ -1260,6 +1477,15 @@ mod estado {
             active_count: activos.len(),
             summary,
             shortcut: atajos.get(&perfil.name).cloned(),
+            audio: audios.get(&perfil.name).map(a_audio_view),
+        }
+    }
+
+    /// `AudioTarget` (vendor, windows-only) → `AudioView` (DTO plano al frontend).
+    fn a_audio_view(t: &AudioTarget) -> AudioView {
+        AudioView {
+            endpoint_id: t.endpoint_id.clone(),
+            friendly_name: t.friendly_name.clone(),
         }
     }
 
