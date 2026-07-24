@@ -1,6 +1,6 @@
 # SPEC: Displays v2 · Fase 2 — Rediseño: displays como sección propia (Millennium Clipboard)
 Sacar los monitores del pop-up y ascenderlos a una sección de la ventana, con pestañas de nivel superior **CLIPBOARD | DISPLAYS** (Opción A, elegida por Guido en los mockups). Es un rediseño **estructural**: cambia dónde vive displays y cómo se navega; la lógica de adentro no se toca.
-- Estado: IMPLEMENTADO en código + verificado E2E (frontend, Playwright + mock `window.__TAURI__` sobre datos SMOKE, 8/8 criterios) el 2026-07-23. **NO archivar todavía: falta verificar en hardware** (junto con la Fase 1). No re-ejecutar.
+- Estado: ✅ IMPLEMENTADO 2026-07-23 — release final `v1.3.0`. Verificado E2E (frontend, Playwright + mock `window.__TAURI__`, 8/8 criterios) + review adversarial + UI confirmada en hardware. Único no probado en hardware: criterio #1 (transfer sobreviviendo el salto de sección) — salteado por bajo riesgo (verificado a nivel código por identidad de nodo). Archivado.
 - Fecha: 2026-07-21 (spec) · 2026-07-23 (implementación)
 
 > **Este spec cubre la FASE 2** del programa "Displays v2". Las que siguen (audio por perfil, resolución por perfil) llevan su propio spec cuando toque (ver "Faseado"). El ejecutor construye SOLO lo de este spec.

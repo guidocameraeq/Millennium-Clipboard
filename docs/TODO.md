@@ -10,21 +10,12 @@
 - [ ] **El CI corre ante cualquier push a `feat/displays`, incluidos los de solo documentación** (6,5 min desperdiciados por cada `/cierre`). Agregar `paths-ignore: ['docs/**', '**.md']` al trigger de `.github/workflows/build.yml`. Chico; hacerlo de paso en la próxima sesión.
 - [ ] **CPU en reposo tras la Fase 1**: no se verificó en Task Manager. El diff no agrega poll ni timer (la enumeración corre solo al abrir el modal o apretar REFRESH) ⇒ riesgo teórico, pero sin evidencia. Chequear de paso en la próxima corrida de la app.
 
-## 🟣 Displays v2 — misión en curso (2026-07-21)
+## 🟣 Displays v2 — Fase 1+2 CERRADAS (release v1.3.0); queda Fase 3
 
-> Fase 1 ("perfiles con superpoderes") y Fase 2 (rediseño: displays como sección) IMPLEMENTADAS. Fase 1
-> pre-releaseada como beta; Fase 2 verificada E2E frontend. NINGUNA verificada en hardware. Ver
-> SESSION_HANDOFF.md.
+> Fase 1 ("perfiles con superpoderes") y Fase 2 (rediseño: displays como sección) IMPLEMENTADAS,
+> verificadas en hardware y releaseadas como **v1.3.0** (2026-07-23); ambos specs archivados en
+> `docs/archive/`. Queda la Fase 3. Ver SESSION_HANDOFF.md.
 
-- [ ] **Verificar Fase 1 + Fase 2 JUNTAS en hardware** (Guido eligió construir la 2 sobre la beta sin
-  confirmar → se prueban juntas). Ya hay build: **prerelease `v1.3.0-beta.2`** (Fase 1+2) pusheado →
-  cuando el CI esté verde (mirar Actions), instalarla por el **auto-updater** (Settings → APP UPDATES →
-  CHECK). A probar: **Fase 1** (★ primario / startup profile / atajos / botón actualizar) **y Fase 2**
-  (saltar CLIP↔DISP con un transfer en curso, el banner global contando desde Clipboard, ESC/CLOSE, las 4
-  sub-pestañas), + regresión clipboard/transferencias + **CPU en reposo ~0% en el Task Manager**. Cuando
-  anden las dos: **release final** (tag `v1.3.0` sin sufijo), **FF `main`**, y **archivar AMBOS** specs
-  (`docs/SPEC-displays-v2.md` + `docs/SPEC-displays-v2-fase2.md`) a `docs/archive/` con "✅ IMPLEMENTADO".
-  Si aparece un bug, arreglarlo antes del final.
 - [ ] **Fase 3 — cambio de audio por perfil** (net-new, requiere INVESTIGACIÓN). Al aplicar un perfil,
   cambiar el output de audio por default de Windows (ej. salida por la TV). **NO está en Monarch.** API
   tipo IMMDevice/`IPolicyConfig` (semi-documentada). Extender el perfil para guardar el "audio deseado"
@@ -36,6 +27,19 @@
 ## 🔴 Crítico
 - [ ] **Fase 2 — verificación física Bloque B (UI): faltan 4** (necesitan 2 PCs). Bloque A (datos) ✅ verificado 2026-07-15 (ver CHANGELOG). Faltan: **TARGET LOST**, **error que no se pisa a los 5 s**, **barras TX/RX independientes**, **rename que sobrevive un `peers-changed`**. Notas: en una misma PC NO corren 2 instancias (single-instance por identifier) → 2 PCs, o cerrar la real + 1 instancia aislada (`MILLENNIUM_INSTANCE`+`MILLENNIUM_PORT`). Para TARGET LOST hace falta un peer **NO favorito** (`DRACOSSSLAPTOP` es favorito; `PEER_TTL=15 s`).
 - [ ] **DECIDIR (antes de tocar Android):** núcleo headless vs foreground-only (`android/SPEC.md`)
+
+## 🟠 Auto-update deja el frontend viejo cacheado (WebView2) — descubierto en la Fase 2
+
+- [ ] **Tras actualizar, la UI sigue siendo la vieja hasta borrar la caché del WebView2.** El backend
+  agarra la versión nueva (la app dice `beta.3`) pero el WebView2 sirve el frontend (HTML/JS/CSS) cacheado
+  de antes → Guido veía beta.3 con la UI de pop-up vieja, no las pestañas CLIP|DISP. La caché vive en
+  `%LOCALAPPDATA%\com.guidocameraeq.millennium\EBWebView` (los datos del usuario están en **Roaming**, no
+  se tocan). **Workaround manual** (una vez por PC tras cada update, hasta el fix): cerrar del todo →
+  borrar `EBWebView` → reabrir. **Fix de fondo (backend, su propia mini-spec):** que la app, al arrancar y
+  detectar cambio de versión (last-version guardada vs `CARGO_PKG_VERSION`), **limpie su caché sola** antes
+  de crear el webview; o servir los assets con `Cache-Control: no-cache`. Investigar el mecanismo exacto de
+  Tauri v2 + una beta para probar (no se compila local → CI). **Afecta CADA update en CADA PC** — no es
+  cosmético, es la razón por la que un update parece "no aplicar".
 
 ## 🟠 Seguridad (fuera de fase, chico)
 - [ ] **Autostart sin comillas (CWE-428)**: la entrada de autostart (`HKCU\...\Run`) que escribe `tauri-plugin-autostart` no lleva comillas → *unquoted path* con rutas con espacios. Hoy funciona por la heurística de Windows, pero conviene reescribirla con comillas. (Estaba anotado dentro de la línea de Fase 3; NO se tocó en esa fase — el plugin controla el quoting, hay que post-procesar la entrada del registro.)

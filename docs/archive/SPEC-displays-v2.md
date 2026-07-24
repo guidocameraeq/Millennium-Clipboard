@@ -1,6 +1,8 @@
 # SPEC: Displays v2 · Fase 1 — Perfiles con superpoderes (Millennium Clipboard)
+> ✅ IMPLEMENTADO 2026-07-23 — release final `v1.3.0`. Verificado en hardware: ★ primario, atajos y sobreescribir perfiles OK. Archivado.
+
 Exponer lo que el motor de Monarch ya soporta: elegir el monitor primario, aplicar un perfil al iniciar, atajos de teclado por perfil, y un botón para actualizar un perfil.
-- Estado: READY
+- Estado: ✅ IMPLEMENTADO 2026-07-23 (release v1.3.0)
 - Fecha: 2026-07-21
 
 > **Este spec cubre la FASE 1.** El programa "Displays v2" tiene más fases (rediseño, audio por perfil, resolución por perfil); cada una lleva su propio spec cuando toque (ver "Faseado"). El ejecutor construye SOLO lo de este spec.

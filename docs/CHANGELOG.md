@@ -2,16 +2,22 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
-## 2026-07-23 — Displays v2 Fase 2 IMPLEMENTADA (rediseño: displays como sección) · verificada E2E frontend · NO hardware
+## 2026-07-23 — Displays v2 COMPLETA (Fase 1+2) · release final **v1.3.0** · `main` al día
 
 Rediseño estructural, **puro frontend** (backend intacto): los monitores dejaron de ser un pop-up y pasaron
 a una sección a pantalla completa con pestañas de nivel superior en el HUD. Verificado E2E con Playwright +
 mock de `window.__TAURI__` sobre datos SMOKE (8/8 criterios del spec) + review adversarial multi-agente
 (3 dimensiones limpias, 1 hallazgo bajo corregido). **NO verificado en hardware todavía** — se prueba junto
-con la Fase 1. Pre-releaseado como **`v1.3.0-beta.2`** (Fase 1+2) para probar por el auto-updater; la
-beta.2 se bajó en el desktop de Guido pero no mostró la UI nueva (¿swap del updater no aplicado?), así que
-se re-cortó **`v1.3.0-beta.3`** (mismo código) para una instalación limpia. El release final (tag limpio +
-FF `main`) es post-hardware, cuando Guido confirme que ve las pestañas CLIP|DISP.
+con la Fase 1. Se pre-releaseó por el auto-updater (`beta.2` y `beta.3`, mismo código) para probar en
+hardware. **Verificado en hardware**: ★ primario / atajos / sobreescribir perfiles OK y la UI nueva
+(pestañas CLIP|DISP, sección a pantalla completa) renderiza bien. Con eso se sacó el **release final
+`v1.3.0`** (tag sin sufijo → la landing lo sirve), se hizo **FF de `main`** y se **archivaron ambos specs**
+(Fase 1 + Fase 2) en `docs/archive/`. Único criterio no probado en hardware: #1 (transfer sobreviviendo el
+salto de sección) — salteado por bajo riesgo (verificado a nivel código por identidad de nodo).
+
+**Nota — bug descubierto en vivo (queda como TODO, no bloquea el release):** tras un auto-update, el
+WebView2 sirve el frontend VIEJO cacheado hasta borrar `%LOCALAPPDATA%\...\EBWebView`. Afecta cada update;
+workaround manual mientras tanto. Ver `docs/TODO.md` → 🟠 Auto-update.
 
 ### Added
 - **Pestañas de sección CLIP | DISP** en el HUD (`#hud-sections`, `.hud-section-btn`), reveladas solo fuera
