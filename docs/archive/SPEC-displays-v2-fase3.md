@@ -1,6 +1,6 @@
-# SPEC: Displays v2 · Fase 3 — Audio por perfil (Millennium Clipboard)
+# ✅ IMPLEMENTADO 2026-07-25 (v1.4.0) — SPEC: Displays v2 · Fase 3 — Audio por perfil (Millennium Clipboard)
 Al aplicar un perfil de monitores, cambiar TAMBIÉN la salida de audio por default de Windows (ej. el perfil "TV" manda el sonido a la TV).
-- Estado: READY
+- Estado: ✅ IMPLEMENTADO 2026-07-25 · releaseado v1.4.0 · verificado en hardware (panel de Sonido)
 - Fecha: 2026-07-24
 
 ## Por qué (el dolor)

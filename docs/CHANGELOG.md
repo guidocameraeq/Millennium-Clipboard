@@ -2,6 +2,43 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
+## 2026-07-25 — Displays v2 Fase 3 "audio por perfil" · release final **v1.4.0** · Displays v2 COMPLETO
+
+Al aplicar un perfil de monitores, ahora **cambia también la salida de audio por default de Windows** a la
+que el perfil tenga asignada (los 3 roles: consola, multimedia, comunicaciones). Opt-in con **"No tocar"**
+por defecto; se elige a mano por un dropdown por perfil. Best-effort: si la salida no está (TV apagada) o
+falla, se avisa y el video se aplica igual. Si el cambio de monitores se auto-revierte, **el audio también
+vuelve**. Backend Rust (COM: `IMMDeviceEnumerator` + `IPolicyConfig` declarado a mano) + frontend. **Dato del
+usuario protegido con test** (la reescritura de ajustes copia el audio tal cual — "trampa #1"). Verificado:
+`cargo check` scratch verde en ambas ramas, 25/25 tests del vendor, review adversarial (3 hallazgos LOW,
+atendidos), y **en hardware por Guido** (el sonido va a la TV y vuelve al revertir). Se pre-releaseó
+`v1.4.0-beta.1` por el updater para probar; confirmado → **release final `v1.4.0`** (tag sin sufijo → la
+landing lo sirve), **FF de `main`**, spec archivado. Con esto **Displays v2 (Fase 1+2+3) queda COMPLETO.**
+
+### Added
+- **Audio por perfil**: campo nuevo `AppSettings.profile_audio` (`BTreeMap<nombre_perfil → AudioTarget{endpoint_id, friendly_name}>`)
+  en el vendor `monarch`, side-map por nombre (mismo patrón que `profile_shortcuts`, `#[serde(default)]` →
+  un `displays.json` viejo carga con el mapa vacío, sin migración destructiva).
+- **`src-tauri/src/displays/audio.rs`** (nuevo, windows-only): enumerar salidas activas y leer/setear el
+  default de Windows. `IPolicyConfig` declarado a mano (interfaz COM no documentada) con cascada de IIDs
+  Win7+ → Vista; molde RAII COM calcado de `DesktopWallpaperSession`. Best-effort, sin panics.
+- **3 comandos Tauri**: `displays_list_audio_outputs`, `displays_set_profile_audio`, `displays_clear_profile_audio`.
+- **Frontend**: dropdown "Sonido a:" por perfil (render por diff, no pisa la selección abierta) + toast del
+  evento `displays-audio` cuando la salida asignada no está presente.
+- **Cargo.toml**: features de audio del crate `windows` (`Win32_Media_Audio`, `Win32_UI_Shell_PropertiesSystem`,
+  `Win32_Devices_FunctionDiscovery`, `Win32_System_Com_StructuredStorage`, `Win32_System_Variant`).
+- **3 tests del vendor**: la "trampa #1" (guardar un ajuste no borra el audio), compat de un store sin el
+  campo, y round-trip por JSON.
+
+### Changed
+- **Rollback como unidad**: al aplicar un perfil con red se captura el default de audio previo (estado
+  paralelo en `Interno`, fuera del struct del vendor); se restaura en el revert manual y en el auto-revert
+  por timeout, y se descarta al confirmar. El audio se aplica también en la rama no-op del video (los
+  monitores ya puestos, solo falta mandar el sonido) y por las vías sin cuenta regresiva (perfil de arranque
+  y atajos globales).
+- **`update_settings`** (vendor `monarch`): copia `profile_audio` tal cual del input al re-armar `AppSettings`
+  (evita la pérdida silenciosa de las asignaciones en cada guardado de ajustes).
+
 ## 2026-07-23 — Displays v2 COMPLETA (Fase 1+2) · release final **v1.3.0** · `main` al día
 
 Rediseño estructural, **puro frontend** (backend intacto): los monitores dejaron de ser un pop-up y pasaron

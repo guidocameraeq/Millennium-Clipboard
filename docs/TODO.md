@@ -2,7 +2,7 @@
 
 > ÚNICA fuente de pendientes del proyecto. Completado → SE BORRA (la historia vive en CHANGELOG y git). Header de 1 línea, sin narrativa de sesión.
 
-2026-07-23 — ver SESSION_HANDOFF.md
+2026-07-25 — ver SESSION_HANDOFF.md
 
 ## 🔵 Displays (SPEC-displays — misión activa; roadmap de fases en `docs/SPEC-displays.md`)
 - [ ] **Fase 3 — sub-checks físicos que faltan** (el núcleo ya se verificó en hardware el 2026-07-21: perfiles, lienzo, auto-revert, updater — ver CHANGELOG). Faltan, de paso en el próximo uso: (a) **cambiar el plazo del auto-revert desde AJUSTES** y ver que el próximo cambio lo use; (b) **enchufar/desenchufar** algo y ver la LISTA actualizarse **sola, sin apretar REFRESH** (el watcher `WM_DISPLAYCHANGE`); (c) **regresión**: transferencia/clipboard siguen igual y **CPU en reposo ~0% en el Task Manager**. Con estos, el SPEC-displays queda COMPLETO y se archiva.
@@ -10,45 +10,25 @@
 - [ ] **El CI corre ante cualquier push a `feat/displays`, incluidos los de solo documentación** (6,5 min desperdiciados por cada `/cierre`). Agregar `paths-ignore: ['docs/**', '**.md']` al trigger de `.github/workflows/build.yml`. Chico; hacerlo de paso en la próxima sesión.
 - [ ] **CPU en reposo tras la Fase 1**: no se verificó en Task Manager. El diff no agrega poll ni timer (la enumeración corre solo al abrir el modal o apretar REFRESH) ⇒ riesgo teórico, pero sin evidencia. Chequear de paso en la próxima corrida de la app.
 
-## 🟣 Displays v2 — Fase 1+2 CERRADAS (release v1.3.0); queda Fase 3
+## 🟣 Displays v2 — COMPLETO (Fase 1+2+3, release v1.4.0); backlog de ideas
 
-> Fase 1 ("perfiles con superpoderes") y Fase 2 (rediseño: displays como sección) IMPLEMENTADAS,
-> verificadas en hardware y releaseadas como **v1.3.0** (2026-07-23); ambos specs archivados en
-> `docs/archive/`. Queda la Fase 3. Ver SESSION_HANDOFF.md.
+> Fase 1 ("perfiles con superpoderes"), Fase 2 (rediseño: displays como sección) y Fase 3 (audio por
+> perfil) IMPLEMENTADAS, verificadas en hardware y releaseadas (v1.3.0 y v1.4.0); specs archivados en
+> `docs/archive/`. **Displays v2 COMPLETO.** Queda solo backlog de ideas. Ver SESSION_HANDOFF.md.
 
-- [ ] **Fase 3 — cambio de audio por perfil** (net-new, requiere INVESTIGACIÓN). Al aplicar un perfil,
-  cambiar el output de audio por default de Windows (ej. salida por la TV). **NO está en Monarch.** API
-  tipo IMMDevice/`IPolicyConfig` (semi-documentada). Extender el perfil para guardar el "audio deseado"
-  (dato del usuario → cuidado con la migración del schema). Su propio spec, arrancando por un spike.
-  **Proceso: (1) spike → (2) spec delta → (3) build, en 3 chats/misiones distintas.** Prompt de arranque
-  listo para pegar en un chat NUEVO (lo armó el Arquitecto 2026-07-23):
-
-  ```
-  arquitecto — diseñemos la Fase 3 de Displays v2: "audio por perfil". Al aplicar un
-  perfil de monitores, que cambie también la salida de audio por default de Windows
-  (p. ej. el perfil "TV" manda el sonido a la TV).
-
-  Es un feature sobre Millennium Clipboard (ya anda; quedó en v1.3.0 con Displays v2
-  Fase 1+2). Seguí ESTE proceso, en orden, sin saltear pasos:
-
-  1) SPIKE primero. Investigá si es factible desde el backend (Rust/Tauri) y cómo:
-     cuál es la API de Windows para cambiar el dispositivo de salida por default
-     (se mencionó algo tipo IPolicyConfig / IMMDeviceEnumerator, semi-documentada),
-     si hay crate/binding o hay que ir por FFI, y qué tan frágil es. Mostrame los
-     hallazgos + la conclusión de factibilidad y ESPERÁ MI OK. NO escribas el spec aún.
-
-  2) Con mi OK, armá el SPEC DELTA (formato del proyecto, con su NO SE TOCA). Punto
-     sensible: el "audio deseado" se guarda dentro de cada perfil = son mis datos →
-     hay migración de displays.json; mostrame la tabla "esto cambio / esto preservo".
-
-  3) El build es OTRA sesión. Vos no codeás nada.
-
-  Roadmap y contexto: docs/archive/SPEC-displays-v2-fase2.md (sección "Faseado") y
-  docs/TODO.md (🟣 Displays v2).
-  ```
 - [ ] **[Más adelante] Resolución/refresh por perfil** (un perfil pone la TV en 1080p, otro en 4K).
   `OutputConfig.resolution`/`refresh_rate_mhz` ya se guardan y aplican; falta capturar/editar la
   resolución por perfil en la UI. No urgente (Guido lo dijo explícito).
+- [ ] **[Fase 4 · idea] "Perfiles como escenas": acción al aplicar.** Que un perfil, además de monitores +
+  audio, **lance una app/comando** al aplicarse. Disparador de Guido (usa displays para jugar/ver pelis en
+  la TV): perfil "jugar en la tele" → TV primaria (ya) + audio a la TV (ya, Fase 3) + **abrir Steam Big
+  Picture en la tele** (`steam://open/bigpicture`; cae solo en la TV porque es la primaria). **FÁCIL**
+  (lanzar proceso/URL, sin API rara — mucho más simple que el audio). Generalizar a "corré esto al aplicar":
+  Steam para jugar, Plex/Netflix/Kodi/navegador para ver, nada para trabajar. **A decidir con Guido**: si al
+  volver a la PC la app lanzada se cierra sola o la cierra él. Ideas hermanas baratas: **wallpaper por
+  perfil** (la maquinaria `IDesktopWallpaper` YA está en el código, apply.rs:908) y **nivel de volumen por
+  perfil** (API documentada `IAudioEndpointVolume`). Sueño dependiente de hardware: **prender la TV / cambiar
+  entrada por HDMI-CEC** (frágil). Cuando toque: su propio spike → spec (Modo B).
 
 ## 🔴 Crítico
 - [ ] **Fase 2 — verificación física Bloque B (UI): faltan 4** (necesitan 2 PCs). Bloque A (datos) ✅ verificado 2026-07-15 (ver CHANGELOG). Faltan: **TARGET LOST**, **error que no se pisa a los 5 s**, **barras TX/RX independientes**, **rename que sobrevive un `peers-changed`**. Notas: en una misma PC NO corren 2 instancias (single-instance por identifier) → 2 PCs, o cerrar la real + 1 instancia aislada (`MILLENNIUM_INSTANCE`+`MILLENNIUM_PORT`). Para TARGET LOST hace falta un peer **NO favorito** (`DRACOSSSLAPTOP` es favorito; `PEER_TTL=15 s`).
