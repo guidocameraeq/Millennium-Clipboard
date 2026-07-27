@@ -59,7 +59,7 @@ jobs:
 
     steps:
       - name: Checkout (el commit exacto que apunta el tag)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # --- LA RED DE SEGURIDAD: el tag tiene que coincidir con el código ---
       # Antes de gastar 30 min compilando, se falla rápido si el tag y la versión
@@ -102,7 +102,7 @@ jobs:
           echo "OK: tag y código coinciden en $TAG"
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
