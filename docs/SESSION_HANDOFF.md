@@ -2,44 +2,40 @@
 
 > Save game del proyecto. `/cierre` lo SOBREESCRIBE ENTERO en cada sesión — acá nunca se apila historia (eso vive en CHANGELOG). El hook SessionStart lo inyecta en cada chat nuevo.
 
-**Cierre**: 2026-07-25 · **Branch**: `feat/displays-v2` (= `main` por FF) · **Working tree**: limpio salvo lo anotado · **Último commit**: `docs: cierre …`
+**Cierre**: 2026-07-27 · **Branch**: `feat/displays-v2` (= `main` por FF) · **Working tree**: limpio tras el commit de este cierre · **Último commit**: `docs: cierre de sesión 2026-07-27 …`
 
 ## En una línea
 
-**Displays v2 Fase 3 "audio por perfil" — IMPLEMENTADA, verificada en hardware por Guido, y RELEASEADA como `v1.4.0` final.** Al aplicar un perfil, el sonido de Windows se manda a la salida que el perfil tenga asignada (los 3 roles). `main` al día por FF, spec archivado. **Con esto Displays v2 (Fase 1+2+3) queda COMPLETO.** Próximo trabajo (elegir en chat nuevo): **el fix de la caché del updater** (🟠, recomendado, chico) o la **Fase 4 "perfiles como escenas"** (con el Arquitecto).
+**Sesión de DISEÑO con el Arquitecto: nació el spec de Displays v2 Fase 4 "perfiles como escenas" — está READY, pendiente CONSTRUIR.** No se tocó código; el entregable es `docs/SPEC-displays-v2-fase4.md`. Al aplicar un perfil, además de mover monitores (F1/2) y cambiar audio (F3), va a **disparar acciones** (abrir Steam Big Picture / un juego / Chrome con cuenta+link, fijar volumen) y **cerrar lo que abrió al volver**. Próximo trabajo (chat nuevo): **construir la Fase 4** (spec listo) o el **fix de la caché del updater** (🟠, chico).
 
 ## Lo que se hizo esta sesión
 
-- **Fase 3 implementada** siguiendo el spec `SPEC-displays-v2-fase3.md` (ahora archivado). Backend Rust + frontend, en 6 capas:
-  - **Dato**: `AudioTarget {endpoint_id, friendly_name}` + `AppSettings.profile_audio: BTreeMap<String,AudioTarget>` (side-map por NOMBRE de perfil, mismo patrón que `profile_shortcuts`, `#[serde(default)]` → compat con stores viejos). En el **vendor** `monarch`.
-  - **COM** (`src-tauri/src/displays/audio.rs`, nuevo): `IMMDeviceEnumerator` para enumerar salidas activas y leer el default; **`IPolicyConfig` declarado a mano** (interfaz COM no documentada, con cascada de IIDs Win7+ → Vista) para setear el default. Molde RAII COM calcado de `DesktopWallpaperSession` (apply.rs). Best-effort, sin panics (`panic=abort`).
-  - **Enganche** en `mod.rs`: audio se aplica en `cargar_perfil` (las DOS ramas, incluida la no-op = "botón único" solo-audio), en `aplicar_perfil_directo` (arranque + atajos), con estado paralelo `audio_previo` en `Interno` para el rollback; se restaura en `revert()` y en el auto-revert del watchdog (`reportar_desenlace`), se descarta en `confirm()`.
-  - **Comandos Tauri** `displays_list_audio_outputs` / `displays_set_profile_audio` / `displays_clear_profile_audio` + registro.
-  - **Frontend**: dropdown "Sonido a:" por perfil (`buildProfileItem`/`updateProfileItem`, por diff, sin pisar la selección abierta) + toast del evento `displays-audio` cuando la salida no está.
-- **Trampa #1 blindada**: `update_settings` (vendor) copia `profile_audio` TAL CUAL del input (nunca `Default`), con **test** que lo prueba.
-- **Verificado**: `cargo check` del scratch crate **verde y sin warnings en AMBAS ramas** (Windows + linux/Android); **25/25 tests del vendor** (3 nuevos: trampa #1, compat de store viejo, round-trip); **review adversarial** de 6 dimensiones (3 hallazgos LOW: 2 arreglados —guardar el previo en fallo parcial + cascada de IIDs—, 1 documentado como decisión segura); `node --check` OK.
-- **Verificado en HARDWARE por Guido**: el sonido efectivamente va a la salida del perfil (criterio #3) y vuelve al auto-revertirse (criterio #5) — el gate que el spec ponía para cerrar.
-- **Release**: `v1.4.0-beta.1` (prerelease por el updater para probar) → confirmado → **`v1.4.0` final** (tag sin sufijo → la landing lo sirve). FF de `main`, spec archivado.
+- **Lluvia de ideas + investigación + spec delta** para la Fase 4, con el Arquitecto (Modo B). **No se escribió código de la app** — sesión de diseño.
+- **Investigación real** (subagentes con fuentes, no de memoria): cómo lanzar Steam Big Picture y apps/URIs en Windows, HDMI-CEC, control de TV por red, prior-art de escenas/macros (Stream Deck, Home Assistant, DisplayFusion), y Chrome perfil+URL. Titular: lo jugoso (abrir Steam) es lo **más fácil**; el control de TV es lo frágil.
+- **Decisiones tomadas con Guido**:
+  - Escenas: **2-3 fijas** (jugar / ver / trabajar); cualquier perfil puede ser escena (sin tipo aparte).
+  - Al volver: la escena **cierra sola** lo que abrió (modelo ida-y-vuelta), **atado al COMMIT** del cambio (si el video se auto-revierte, no corre ninguna acción).
+  - Piezas: **una sola acción `Lanzar`** (destino + args) cubre Big Picture, juego, Chrome cuenta+link y el **"comando libre"**; + **volumen por perfil**.
+  - **Control de TV y HDMI-CEC: DESCARTADO** — la TV de Guido es una **TCL con Google TV** (caso frágil ADB/Android TV, no el fácil Roku); la maneja con el control.
+  - "Ver pelis" = Chrome con una **cuenta específica** (`--profile-directory` = nombre de carpeta) + link.
+- **Spec escrito y aprobado**: `docs/SPEC-displays-v2-fase4.md` (READY), calcado de la Fase 3 — AGREGA / MODIFICA / **NO SE TOCA**, tabla "esto cambio / esto preservo", y la **trampa #1 de `update_settings`** heredada (debe copiar `profile_actions` tal cual o se borran en silencio).
 
 ## En qué estado quedó
 
-- **`main` = `feat/displays-v2` = `v1.4.0`** (FF, pusheado). Tag `v1.4.0` pusheado → `release.yml` publica el release FINAL.
-- **Verificar que el CI de `v1.4.0` salió verde** (Actions o API pública):
-  `curl -s https://api.github.com/repos/guidocameraeq/Millennium-Clipboard/releases/tags/v1.4.0` → `prerelease` debe ser `false` y el `.exe` en `assets`.
-- El build local sigue roto por toolchain (`dlltool`) — es lo conocido; el `.exe` sale del CI. El código se chequea con el scratch crate (ver DECISIONS.md).
+- **No se tocó código de la app** → nada que compilar (`cargo check`/`node --check` N/A esta sesión). El único cambio es el spec nuevo.
+- `main` sigue en **`v1.4.0`** (Displays v2 Fase 1+2+3 COMPLETO), sin cambios funcionales esta sesión.
 
 ## Próximo paso CONCRETO (al retomar) — elegir en chat NUEVO
 
-- 🅰️ **Fix de la caché del updater (recomendado, chico).** Tras un update, el WebView2 sirve el frontend VIEJO cacheado hasta borrar `%LOCALAPPDATA%\com.guidocameraeq.millennium\EBWebView`. Afecta CADA update en CADA PC. Fix de fondo: que la app limpie su caché al detectar cambio de versión al arrancar, o `Cache-Control: no-cache`. Mini-spec (delta) + una beta. Detalle en `docs/TODO.md` (🟠 Auto-update).
-- 🅱️ **Fase 4 — "perfiles como escenas": acción al aplicar (con el Arquitecto).** Que un perfil lance una app/comando (ej. "jugar en la tele" → TV primaria + audio a la TV + abrir Steam Big Picture). Más fácil que el audio (lanzar proceso/URL). Ideas hermanas: wallpaper por perfil, volumen por perfil. Backlog en `docs/TODO.md` (🟣).
+- 🅰️ **Construir la Fase 4** (spec listo). Abrir chat nuevo en la carpeta y pegar: `inicio — ejecutá el spec docs/SPEC-displays-v2-fase4.md (está READY)`. Verificar con `/smoke` (criterio #1: lo de NO SE TOCA sigue andando). **Dos asteriscos a verificar E2E en hardware**: (a) cerrar Big Picture por `steam://close/bigpicture` en Windows (no confirmado; plan B `Alt+Enter` o manual); (b) que el orden (foto de monitores → acción) haga caer Steam en la TV.
+- 🅱️ **Fix de la caché del updater** (🟠, chico): tras un update, el WebView2 sirve el frontend viejo cacheado hasta borrar `EBWebView`. Afecta cada update en cada PC. Detalle en `docs/TODO.md` (🟠 Auto-update).
 
 ## Bloqueos
 
-- Ninguno. (Verificar el verde del CI de `v1.4.0` es lo único pendiente de este cierre — si sale rojo, ver el log en Actions.)
+- Ninguno.
 
 ## Contexto que no está en otros docs
 
-- **Cómo se verificó el COM de audio sin poder buildear local**: se agregó al scratch crate (DECISIONS.md) la feature **`Win32_System_Variant`** (además de las 3 que nombraba el spec) — es la que destraba `PROPVARIANT` + `IPropertyStore::GetValue` + `PropVariantToStringAlloc` en windows-rs 0.60. `PropVariantToStringAlloc` vive en `System::Com::StructuredStorage`, NO en `UI::Shell::PropertiesSystem`. El `IPolicyConfig` a mano (vtable manual, `SetDefaultEndpoint` es el método #11) **compila y anda** en 0.60.
-- **`lib.rs` NO pasa por el scratch** (depende de tauri, no compila local) → su único gate es el CI. Auditarlo a mano antes de taggear: esta vez tenía un `Ok(...)` sin rama de error (tipo ambiguo) que se anotó explícito (`Ok::<_, String>(...)`).
-- **Bug de caché del updater** (ver próximo paso 🅰️): datos del usuario en `...\Roaming\...` (intactos al limpiar caché); caché del WebView2 en `...\Local\...\EBWebView`. Workaround: cerrar del todo (bandeja → Salir) → borrar `EBWebView` → reabrir.
-- **`docs/SPEC-displays.md`** (roadmap general de displays) sigue vivo: su 🔵 en el TODO tiene sub-checks físicos (auto-revert desde AJUSTES, watcher `WM_DISPLAYCHANGE`) que faltan.
+- **El spec ya trae toda la data de la investigación** (comandos de Steam con registro/`-start`, sintaxis de Chrome `--profile-directory` + fullscreen best-effort, por qué CEC y control de TV quedaron afuera). No hace falta re-investigar al construir.
+- **La TV de Guido es una TCL con Google TV** → si algún día se retoma "control de TV por red", es el camino **frágil** (ADB / Android TV Remote v2), no el fácil (Roku). Quedó FUERA del alcance de la Fase 4 a propósito.
+- **Molde a reusar al construir** (calcado de Fase 3): el estado paralelo `audio_previo` en `mod.rs` es el molde para `escena_activa`; el enganche del audio en `cargar_perfil` (2 ramas) + `aplicar_perfil_directo` es donde van las acciones; la "trampa #1" de `update_settings` (vendor `monarch`) aplica igual al nuevo `profile_actions`.

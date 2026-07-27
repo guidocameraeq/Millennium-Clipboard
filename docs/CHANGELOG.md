@@ -2,6 +2,26 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
+## 2026-07-27 — Displays v2 Fase 4 "perfiles como escenas": diseño + spec READY (sin código)
+
+Sesión de diseño con el Arquitecto (Modo B): lluvia de ideas + **investigación real** (subagentes con
+fuentes) + **spec delta**. **No se tocó código de la app.** Investigado: lanzar Steam Big Picture y apps/URIs
+en Windows, HDMI-CEC (descartado: caro/frágil), control de TV por red (descartado: la TV de Guido es una TCL
+con Google TV = caso frágil ADB/Android TV), prior-art de escenas (Stream Deck / Home Assistant /
+DisplayFusion), y Chrome `--profile-directory`+URL. Decidido con Guido: 2-3 escenas fijas; cualquier perfil
+puede ser escena; al volver la escena **cierra sola** lo que abrió (atado al COMMIT — si el video se
+auto-revierte, no corre ninguna acción); una sola acción `Lanzar` (destino+args) cubre Big Picture, juego,
+Chrome cuenta+link y el "comando libre"; + volumen por perfil.
+
+### Added
+- **`docs/SPEC-displays-v2-fase4.md`** (READY): al aplicar un perfil, disparar ACCIONES + **volumen por
+  perfil**, y correr la SALIDA (cerrar) al cambiar de perfil. Dato nuevo `AppSettings.profile_actions`
+  (side-map por nombre de perfil, `#[serde(default)]`, mismo patrón que `profile_audio`); estado paralelo
+  `escena_activa` en `mod.rs` (molde `audio_previo`); acciones atadas al commit (no al apply). Incluye
+  `NO SE TOCA`, tabla de migración "esto cambio / esto preservo", y la **trampa #1 de `update_settings`**
+  marcada. **FUERA de alcance**: control de TV, HDMI-CEC, wallpaper por perfil, desplegables inteligentes
+  (juegos de Steam / cuentas de Chrome), cerrar-por-proceso, piezas modulares por referencia.
+
 ## 2026-07-25 — Displays v2 Fase 3 "audio por perfil" · release final **v1.4.0** · Displays v2 COMPLETO
 
 Al aplicar un perfil de monitores, ahora **cambia también la salida de audio por default de Windows** a la

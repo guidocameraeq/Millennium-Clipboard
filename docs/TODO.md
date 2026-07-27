@@ -2,7 +2,7 @@
 
 > ÚNICA fuente de pendientes del proyecto. Completado → SE BORRA (la historia vive en CHANGELOG y git). Header de 1 línea, sin narrativa de sesión.
 
-2026-07-25 — ver SESSION_HANDOFF.md
+2026-07-27 — ver SESSION_HANDOFF.md
 
 ## 🔵 Displays (SPEC-displays — misión activa; roadmap de fases en `docs/SPEC-displays.md`)
 - [ ] **Fase 3 — sub-checks físicos que faltan** (el núcleo ya se verificó en hardware el 2026-07-21: perfiles, lienzo, auto-revert, updater — ver CHANGELOG). Faltan, de paso en el próximo uso: (a) **cambiar el plazo del auto-revert desde AJUSTES** y ver que el próximo cambio lo use; (b) **enchufar/desenchufar** algo y ver la LISTA actualizarse **sola, sin apretar REFRESH** (el watcher `WM_DISPLAYCHANGE`); (c) **regresión**: transferencia/clipboard siguen igual y **CPU en reposo ~0% en el Task Manager**. Con estos, el SPEC-displays queda COMPLETO y se archiva.
@@ -19,16 +19,16 @@
 - [ ] **[Más adelante] Resolución/refresh por perfil** (un perfil pone la TV en 1080p, otro en 4K).
   `OutputConfig.resolution`/`refresh_rate_mhz` ya se guardan y aplican; falta capturar/editar la
   resolución por perfil en la UI. No urgente (Guido lo dijo explícito).
-- [ ] **[Fase 4 · idea] "Perfiles como escenas": acción al aplicar.** Que un perfil, además de monitores +
-  audio, **lance una app/comando** al aplicarse. Disparador de Guido (usa displays para jugar/ver pelis en
-  la TV): perfil "jugar en la tele" → TV primaria (ya) + audio a la TV (ya, Fase 3) + **abrir Steam Big
-  Picture en la tele** (`steam://open/bigpicture`; cae solo en la TV porque es la primaria). **FÁCIL**
-  (lanzar proceso/URL, sin API rara — mucho más simple que el audio). Generalizar a "corré esto al aplicar":
-  Steam para jugar, Plex/Netflix/Kodi/navegador para ver, nada para trabajar. **A decidir con Guido**: si al
-  volver a la PC la app lanzada se cierra sola o la cierra él. Ideas hermanas baratas: **wallpaper por
-  perfil** (la maquinaria `IDesktopWallpaper` YA está en el código, apply.rs:908) y **nivel de volumen por
-  perfil** (API documentada `IAudioEndpointVolume`). Sueño dependiente de hardware: **prender la TV / cambiar
-  entrada por HDMI-CEC** (frágil). Cuando toque: su propio spike → spec (Modo B).
+- [ ] **Fase 4 "perfiles como escenas" — SPEC READY, pendiente CONSTRUIR.** Spec delta en
+  `docs/SPEC-displays-v2-fase4.md` (diseñado con el Arquitecto 2026-07-27, aprobado por Guido). Al aplicar un
+  perfil: disparar acciones (una sola acción `Lanzar` cubre Big Picture / juego `steam://rungameid/<id>` /
+  Chrome cuenta+link / comando libre) + **volumen por perfil**, y **cerrar lo que abrió al volver** (atado al
+  commit). Construir en chat nuevo: `inicio — ejecutá el spec docs/SPEC-displays-v2-fase4.md (está READY)`.
+  **Verificar E2E en hardware**: `steam://close/bigpicture` en Windows (no confirmado; plan B `Alt+Enter`) y
+  que Steam caiga en la TV (orden foto → acción). **FUERA del spec** (backlog): control de TV (la TCL Google
+  TV es el caso frágil ADB/Android TV), HDMI-CEC, **wallpaper por perfil** (`IDesktopWallpaper` ya está en
+  apply.rs), desplegables inteligentes (juegos de Steam / cuentas de Chrome), cerrar-por-proceso, piezas
+  modulares por referencia.
 
 ## 🔴 Crítico
 - [ ] **Fase 2 — verificación física Bloque B (UI): faltan 4** (necesitan 2 PCs). Bloque A (datos) ✅ verificado 2026-07-15 (ver CHANGELOG). Faltan: **TARGET LOST**, **error que no se pisa a los 5 s**, **barras TX/RX independientes**, **rename que sobrevive un `peers-changed`**. Notas: en una misma PC NO corren 2 instancias (single-instance por identifier) → 2 PCs, o cerrar la real + 1 instancia aislada (`MILLENNIUM_INSTANCE`+`MILLENNIUM_PORT`). Para TARGET LOST hace falta un peer **NO favorito** (`DRACOSSSLAPTOP` es favorito; `PEER_TTL=15 s`).
