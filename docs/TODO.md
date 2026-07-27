@@ -10,25 +10,30 @@
 - [ ] **El CI corre ante cualquier push a `feat/displays`, incluidos los de solo documentación** (6,5 min desperdiciados por cada `/cierre`). Agregar `paths-ignore: ['docs/**', '**.md']` al trigger de `.github/workflows/build.yml`. Chico; hacerlo de paso en la próxima sesión.
 - [ ] **CPU en reposo tras la Fase 1**: no se verificó en Task Manager. El diff no agrega poll ni timer (la enumeración corre solo al abrir el modal o apretar REFRESH) ⇒ riesgo teórico, pero sin evidencia. Chequear de paso en la próxima corrida de la app.
 
-## 🟣 Displays v2 — COMPLETO (Fase 1+2+3, release v1.4.0); backlog de ideas
+## 🟣 Displays v2 — Fase 1+2+3 release v1.4.0 · Fase 4 en beta v1.5.0-beta.1
 
 > Fase 1 ("perfiles con superpoderes"), Fase 2 (rediseño: displays como sección) y Fase 3 (audio por
-> perfil) IMPLEMENTADAS, verificadas en hardware y releaseadas (v1.3.0 y v1.4.0); specs archivados en
-> `docs/archive/`. **Displays v2 COMPLETO.** Queda solo backlog de ideas. Ver SESSION_HANDOFF.md.
+> perfil) IMPLEMENTADAS, verificadas en hardware y releaseadas (v1.3.0 y v1.4.0); specs archivados.
+> **Fase 4 ("perfiles como escenas") IMPLEMENTADA y en prerelease `v1.5.0-beta.1`** — pendiente terminar
+> la verificación de hardware y el release final (ver los items de abajo). Ver SESSION_HANDOFF.md.
 
 - [ ] **[Más adelante] Resolución/refresh por perfil** (un perfil pone la TV en 1080p, otro en 4K).
   `OutputConfig.resolution`/`refresh_rate_mhz` ya se guardan y aplican; falta capturar/editar la
   resolución por perfil en la UI. No urgente (Guido lo dijo explícito).
-- [ ] **Fase 4 "perfiles como escenas" — SPEC READY, pendiente CONSTRUIR.** Spec delta en
-  `docs/SPEC-displays-v2-fase4.md` (diseñado con el Arquitecto 2026-07-27, aprobado por Guido). Al aplicar un
-  perfil: disparar acciones (una sola acción `Lanzar` cubre Big Picture / juego `steam://rungameid/<id>` /
-  Chrome cuenta+link / comando libre) + **volumen por perfil**, y **cerrar lo que abrió al volver** (atado al
-  commit). Construir en chat nuevo: `inicio — ejecutá el spec docs/SPEC-displays-v2-fase4.md (está READY)`.
-  **Verificar E2E en hardware**: `steam://close/bigpicture` en Windows (no confirmado; plan B `Alt+Enter`) y
-  que Steam caiga en la TV (orden foto → acción). **FUERA del spec** (backlog): control de TV (la TCL Google
-  TV es el caso frágil ADB/Android TV), HDMI-CEC, **wallpaper por perfil** (`IDesktopWallpaper` ya está en
-  apply.rs), desplegables inteligentes (juegos de Steam / cuentas de Chrome), cerrar-por-proceso, piezas
-  modulares por referencia.
+- [ ] **Fase 4 "perfiles como escenas" — IMPLEMENTADA + beta `v1.5.0-beta.1`; falta verificación de hardware +
+  release final.** Spec archivado en `docs/archive/SPEC-displays-v2-fase4.md`. Código completo y verificado
+  local (28 tests vendor, harness Win/Linux, E2E Playwright, build CI verde). **En hardware (Guido): volumen +
+  Big Picture OK.** FALTAN de probar en hardware antes del release final: (3) Big Picture cae **en la TV**
+  (primaria); (5) **Chrome con esa cuenta** + link; (6) la **SALIDA** cierra Big Picture al volver (⚠
+  `steam://close/bigpicture` NO confirmado en Windows — plan B `Alt+Enter` / cierre manual); (7) auto-revert →
+  **no** se abre nada. **Si pasa → release final `v1.5.0`** (bump sin sufijo en Cargo.toml + tauri.conf.json +
+  Cargo.lock, tag `v1.5.0` → la landing lo sirve) + **FF de `feat/displays-v2-fase4` a `main`**.
+- [ ] **Fase 4 — review adversarial completo NO corrido** (se cortó por límite de sesión). La parte crítica
+  (gating de la escena: no se pueden apilar 2 confirmaciones ⇒ `escena_pendiente` no queda colgada) se revisó a
+  mano. Correr el sweep de 5 frentes o `/code-review ultra` si se quiere el belt-and-suspenders. Chico.
+- [ ] **[Backlog Fase 4, FUERA del spec]**: control de TV (la TCL Google TV es el caso frágil ADB/Android TV),
+  HDMI-CEC, **wallpaper por perfil** (`IDesktopWallpaper` ya está en apply.rs), desplegables inteligentes
+  (juegos de Steam / cuentas de Chrome), cerrar-por-proceso, piezas modulares por referencia, acción "esperar X ms".
 
 ## 🔴 Crítico
 - [ ] **Fase 2 — verificación física Bloque B (UI): faltan 4** (necesitan 2 PCs). Bloque A (datos) ✅ verificado 2026-07-15 (ver CHANGELOG). Faltan: **TARGET LOST**, **error que no se pisa a los 5 s**, **barras TX/RX independientes**, **rename que sobrevive un `peers-changed`**. Notas: en una misma PC NO corren 2 instancias (single-instance por identifier) → 2 PCs, o cerrar la real + 1 instancia aislada (`MILLENNIUM_INSTANCE`+`MILLENNIUM_PORT`). Para TARGET LOST hace falta un peer **NO favorito** (`DRACOSSSLAPTOP` es favorito; `PEER_TTL=15 s`).

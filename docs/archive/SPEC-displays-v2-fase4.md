@@ -1,6 +1,6 @@
-# SPEC: Displays v2 · Fase 4 — Perfiles como escenas (Millennium Clipboard)
+# ✅ IMPLEMENTADO 2026-07-27 (beta v1.5.0-beta.1) — SPEC: Displays v2 · Fase 4 — Perfiles como escenas (Millennium Clipboard)
 Al aplicar un perfil, además de mover monitores (Fase 1/2) y cambiar el audio (Fase 3), disparar ACCIONES (abrir Steam Big Picture / un juego / Chrome con una cuenta+link, fijar volumen) y, al salir de la escena, correr su limpieza.
-- Estado: READY
+- Estado: **IMPLEMENTADO** — releaseado como prerelease `v1.5.0-beta.1`. Verificado local (28 tests vendor, harness Win/Linux, E2E frontend) + build CI verde. En hardware (Guido): volumen + Big Picture OK; **pendiente** probar Chrome (cuenta+link), la SALIDA (cerrar Big Picture) y el auto-revert-sin-acciones → luego release final `v1.5.0`. Ver `docs/DECISIONS.md` ADR-014.
 - Fecha: 2026-07-27
 
 ## Por qué (el dolor)

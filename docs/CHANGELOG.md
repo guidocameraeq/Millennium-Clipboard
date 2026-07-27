@@ -2,6 +2,43 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
+## 2026-07-27 (tarde) — Displays v2 Fase 4 "perfiles como escenas": IMPLEMENTADA + prerelease **v1.5.0-beta.1**
+
+Construida la Fase 4 entera siguiendo el spec (ahora archivado). Al aplicar un perfil, además de mover
+monitores (F1/2) y rutear el audio (F3), **dispara ACCIONES de entrada** (lanzar Steam Big Picture / un juego
+/ Chrome con cuenta+link, fijar volumen) y corre la **SALIDA** de la escena anterior al cambiar de perfil
+(modelo ida-y-vuelta). Las acciones están **atadas al COMMIT**: corren en las vías inmediatas o en `confirm`;
+si el video se auto-revierte (timeout / revert / no-pudo), **no corre ninguna**. Todo best-effort: una acción
+que falla se loguea y sigue, el video/audio ya aplicados nunca se revierten por eso. Args **EN LISTA** (sin
+shell) → sin inyección. **Verificado local**: 28 tests del vendor verdes (incl. la trampa #1 de la Fase 4), el
+motor de displays type-checkeado en crate scratch (Windows y Linux, sin fugas de `cfg`), `acciones.rs` en un
+scratch Win32 aparte (firmas reales de `windows 0.60`), y **frontend E2E con Playwright** (agregar/quitar/
+reordenar acciones + escaping). **Build de CI verde** → prerelease `v1.5.0-beta.1` publicada con `.exe` +
+digest. **En hardware (Guido)**: volumen + abrir Big Picture OK; resto pendiente de probar. **NO mergeado a
+`main`** (queda en la rama `feat/displays-v2-fase4` hasta el release final).
+
+### Added
+- **Acciones por perfil-escena** (vendor `monarch`): `enum Accion { Lanzar { destino, args }, Volumen { nivel } }`
+  (tag serde `"tipo"`, `snake_case`), `PerfilAcciones { entrada, salida }`, y el mapa
+  `AppSettings.profile_actions: BTreeMap<nombre_perfil → PerfilAcciones>` (side-map por nombre, `#[serde(default)]`
+  de struct → un `displays.json` viejo carga con el mapa vacío, sin migración destructiva).
+- **`src-tauri/src/displays/acciones.rs`** (nuevo, windows-only): `ejecutar(&[Accion])` best-effort sin panics.
+  `Lanzar` con dispatch por tipo de destino — `.exe` + args EN LISTA por `Command` (`CREATE_NO_WINDOW` +
+  resolución por App Paths del registro); URI/`.lnk` por `ShellExecuteW`. `Volumen` por `IAudioEndpointVolume`.
+- **Ciclo de escena** en `mod.rs`: estado paralelo `escena_activa` + `escena_pendiente` (molde `audio_previo`),
+  enganchado en `cargar_perfil` / `aplicar_perfil_directo` / `confirm` / `revert` / watchdog, gated a commit.
+- **2 comandos Tauri**: `displays_set_profile_actions`, `displays_clear_profile_actions`; `ProfileView` suma el
+  campo `actions`. Editor de escena en el frontend (chips entrada/salida, presets Big Picture/Juego/Chrome/
+  Volumen/Cerrar BP/Comando libre, reordenar/quitar), todo por `textContent`, oculto en Android.
+
+### Changed
+- **`update_settings`** (vendor `monarch`) copia `profile_actions` tal cual (trampa #1, como con `profile_audio`)
+  + 3 tests de regresión nuevos (preserva acciones al guardar cualquier ajuste; compat store viejo; round-trip).
+- **`Cargo.toml`**: activada la feature `Win32_Media_Audio_Endpoints` del crate `windows` (para el volumen).
+- **`borrar_perfil`** limpia también la entrada de `profile_actions` y olvida la escena si era la borrada.
+- **`DECISIONS.md`**: nota del gate local actualizada — `winreg` ahora SÍ va en el crate scratch (displays lo usa
+  en `acciones.rs`); + ADR-014 con las decisiones de la Fase 4.
+
 ## 2026-07-27 — Displays v2 Fase 4 "perfiles como escenas": diseño + spec READY (sin código)
 
 Sesión de diseño con el Arquitecto (Modo B): lluvia de ideas + **investigación real** (subagentes con

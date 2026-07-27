@@ -411,12 +411,14 @@ pub mod runtime_log { /* doble con la MISMA firma: info/warn/err, impl Into<Stri
 y el `Cargo.toml` del scratch espeja el bloque `[target.'cfg(target_os = "windows")'.dependencies]`
 del proyecto. Con eso, lo que se chequea **es** el código que va al binario.
 
-**Dos ajustes al espejar, verificados en la Fase 3 (2026-07-21):** (1) **sacar `winreg`** del bloque
-windows — displays no lo usa, y `winreg` arrastra `windows-sys → windows_x86_64_gnu`, cuyo
-build-script **pide `dlltool`** (ausente acá); con winreg adentro la rama Windows del scratch muere en
-ese build-script antes de tocar el código de displays. (`windows 0.60` es raw-dylib/`windows-link` y
-`cargo check` no linkea, así que ese sí pasa sin `dlltool`.) (2) **agregar `anyhow`** a
-`[dependencies]`: lo usa `json_store.rs`, que entra por `#[path]`.
+**Ajustes al espejar:** (1) **agregar `anyhow`** a `[dependencies]`: lo usa `json_store.rs`, que entra por
+`#[path]`. (2) **`winreg`** — hasta la Fase 3, displays NO lo usaba y se lo sacaba del bloque windows del
+scratch; **desde la Fase 4 (2026-07-27) SÍ va**: `acciones.rs` lo usa para resolver ejecutables por App Paths.
+Verificado empíricamente que hoy compila en el scratch (`winreg 0.55` → `windows-sys 0.59` →
+`windows_x86_64_gnu 0.52.6`, sin pedir `dlltool` — `cargo check` no linkea y esas import libs vienen
+prebuilt). La advertencia vieja de que "winreg mata el scratch por `dlltool`" quedó desactualizada; con
+`winreg` en el bloque windows, ambas ramas (Windows y Linux) del harness dan verde. (3) **features**: espejar
+las del proyecto, incluida `Win32_Media_Audio_Endpoints` que sumó la Fase 4 para el volumen.
 
 Las dos ramas de `cfg`, las dos verificables local:
 
@@ -455,3 +457,44 @@ diff contra el donante siga siendo auditable. Ninguno cambia comportamiento obse
 
 Arreglo de fondo si alguna vez se quiere el gate local completo: instalar los binutils de mingw-w64
 (para tener `dlltool.exe`) **o** las C++ Build Tools de Visual Studio.
+
+## ADR-014 — Fase 4 "perfiles como escenas": acciones atadas al commit, sin shell, y el motor sigue libre de Tauri
+
+**Contexto**: al aplicar un perfil-escena, hay que lanzar apps/URIs y fijar el volumen; al cambiar de
+perfil, correr la SALIDA de la escena anterior. Toca datos del usuario (`displays.json`) y el punto de
+integración más delicado (cuándo corren las acciones).
+
+**Decisiones**:
+
+1. **Las acciones corren SOLO al COMMITEAR el cambio**, nunca al aplicar. En las vías inmediatas
+   (`aplicar_perfil_directo` commit; rama `None` de `cargar_perfil`) corren ahí; en la vía con red corren en
+   `confirm`. Si el video se auto-revierte (timeout / revert manual / `NoPudoRevertir`), **no corre ninguna
+   acción**. Molde: el `audio_previo` de la Fase 3, pero con DOS slots — `escena_activa` (la escena
+   committeada, para saber qué SALIDA correr al cambiar) y `escena_pendiente` (la que espera confirmación).
+   **Por qué es seguro sin leaks**: `apply_profile`/`apply_layout`/`toggle` todos llaman
+   `ensure_no_pending_confirmation` ⇒ **no se pueden apilar dos confirmaciones**, así que `escena_pendiente`
+   siempre corresponde al pending vivo y se consume en `confirm` o se descarta en revert/timeout. Alternativa
+   descartada (correr al apply): dejaría Steam abierto sobre un layout que se revirtió.
+
+2. **Nunca shell.** `Lanzar { destino, args }` pasa los args **EN LISTA** por `std::process::Command`
+   (`.exe`, con `CREATE_NO_WINDOW` + resolución por App Paths del registro para nombres pelados) o, si el
+   destino es una URI (`steam://…`) o un `.lnk`, por `ShellExecuteW` verbo `"open"` (que `Command` no puede
+   lanzar). Cero concatenación de un string de comando ⇒ cero inyección tipo BatBadBut. Es la máquina del
+   propio usuario y no se expone por red (la app es solo-LAN), pero la disciplina es dura igual.
+
+3. **`ShellExecuteW` (crate `windows`), NO `tauri-plugin-opener`.** El spec ofrecía las dos; se eligió el
+   crate `windows` para que `src/displays/` **siga sin mencionar a Tauri** y se type-checkee entero en el
+   crate scratch del gate local (ADR del gate). El opener habría metido el stack de Tauri en un submódulo de
+   displays, rompiendo esa propiedad. Consecuencia: `acciones.rs` sumó `winreg` al scratch (ver la nota del
+   gate) y la feature `Win32_Media_Audio_Endpoints` (para `IAudioEndpointVolume` del volumen).
+
+4. **Steam por URI directa** (`steam://open/bigpicture`, `steam://rungameid/<id>`, `steam://close/bigpicture`),
+   no por `steam.exe -start` resuelto del registro como sugería el spec: más simple, sin dependencia del
+   registro, y anda con Steam abierto o cerrado. ⚠ `steam://close/bigpicture` **NO está confirmado en
+   Windows** (solo Linux/SteamOS) — es el asterisco a verificar E2E; si no cierra, plan B `Alt+Enter` o cierre
+   manual. Chrome se guarda como `Lanzar { "chrome.exe", […] }` y el motor resuelve la ruta por App Paths en
+   runtime (así el preset anda sin pedir la ruta completa).
+
+**Estado**: implementado y releaseado como prerelease `v1.5.0-beta.1` (2026-07-27). Verificado local (28 tests
+vendor, harness Win/Linux verde, E2E frontend) + build CI verde. En hardware: volumen + Big Picture OK; el
+resto de los criterios (Chrome, salida de escena, auto-revert) pendientes de probar antes del release final.
