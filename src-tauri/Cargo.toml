@@ -132,6 +132,12 @@ windows = { version = "0.60", features = [
   "Win32_Devices_FunctionDiscovery",
   "Win32_System_Com_StructuredStorage",
   "Win32_System_Variant",
+  # Displays v2, Fase 4 (acciones por perfil): IAudioEndpointVolume para la
+  # acción "Volumen" (fijar el nivel de la salida por default). Sub-feature de
+  # Media_Audio que hay que activar aparte. El lanzamiento de apps/URIs NO usa
+  # Win32 (va por std::process::Command + tauri-plugin-opener), así que no suma
+  # más features de Shell (Win32_UI_Shell ya estaba declarada de antes).
+  "Win32_Media_Audio_Endpoints",
 ] }
 
 # Mobile-only plugins (Android / iOS)

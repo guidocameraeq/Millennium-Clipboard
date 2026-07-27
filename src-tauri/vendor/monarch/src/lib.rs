@@ -8,8 +8,8 @@ pub use backend::{DisplayBackend, MockBackend, Win32DisplayBackend};
 pub use error::ManagerError;
 pub use manager::MonarchDisplayManager;
 pub use model::{
-    AppConfig, AppSettings, AudioTarget, DisplayFingerprint, DisplayId, DisplayInfo, Layout,
-    OutputConfig, Position, Profile, Resolution, DEFAULT_DISPLAY_TOGGLE_SHORTCUT_BASE,
-    DEFAULT_PROFILE_SHORTCUT_BASE,
+    Accion, AppConfig, AppSettings, AudioTarget, DisplayFingerprint, DisplayId, DisplayInfo,
+    Layout, OutputConfig, PerfilAcciones, Position, Profile, Resolution,
+    DEFAULT_DISPLAY_TOGGLE_SHORTCUT_BASE, DEFAULT_PROFILE_SHORTCUT_BASE,
 };
 pub use store::{ConfigStore, FileConfigStore, MemoryConfigStore};

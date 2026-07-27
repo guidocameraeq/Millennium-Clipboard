@@ -1644,6 +1644,49 @@ async fn displays_clear_profile_audio(
     }
 }
 
+/// Asigna las acciones (entrada/salida) de un perfil-escena (Fase 4). Listas
+/// vacías = perfil sin escena. Devuelve la lista al día.
+#[tauri::command]
+async fn displays_set_profile_actions(
+    app: tauri::AppHandle,
+    name: String,
+    entrada: Vec<displays::ActionView>,
+    salida: Vec<displays::ActionView>,
+) -> Result<Vec<displays::ProfileView>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let estado = estado_displays(&app).ok_or_else(displays_no_disponible)?;
+        return tokio::task::spawn_blocking(move || estado.asignar_acciones(&name, entrada, salida))
+            .await
+            .map_err(|e| format!("displays: la tarea de acciones se cayó: {e}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (&app, &name, &entrada, &salida);
+        Err(displays_no_disponible())
+    }
+}
+
+/// Quita todas las acciones de un perfil, vuelve a "sin escena" (Fase 4).
+#[tauri::command]
+async fn displays_clear_profile_actions(
+    app: tauri::AppHandle,
+    name: String,
+) -> Result<Vec<displays::ProfileView>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let estado = estado_displays(&app).ok_or_else(displays_no_disponible)?;
+        return tokio::task::spawn_blocking(move || estado.limpiar_acciones(&name))
+            .await
+            .map_err(|e| format!("displays: la tarea de acciones se cayó: {e}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (&app, &name);
+        Err(displays_no_disponible())
+    }
+}
+
 #[tauri::command]
 fn record_frontend_log(level: String, msg: String) {
     match level.as_str() {
@@ -2278,6 +2321,8 @@ pub fn run() {
             displays_list_audio_outputs,
             displays_set_profile_audio,
             displays_clear_profile_audio,
+            displays_set_profile_actions,
+            displays_clear_profile_actions,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

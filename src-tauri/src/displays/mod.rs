@@ -39,6 +39,8 @@
 use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "windows")]
+mod acciones;
+#[cfg(target_os = "windows")]
 #[allow(dead_code)] // helpers de color/wallpaper que solo usa una rama del apply
 mod apply;
 #[cfg(target_os = "windows")]
@@ -155,6 +157,10 @@ pub struct ProfileView {
     /// La salida de audio asignada a este perfil (Displays v2, Fase 3), o `None`
     /// si está en "No tocar el audio". Se guarda en `profile_audio` por nombre.
     pub audio: Option<AudioView>,
+    /// Las acciones (entrada/salida) del perfil-escena (Displays v2, Fase 4).
+    /// Ambas listas vacías = perfil sin acciones. Se guardan en `profile_actions`
+    /// por **nombre** de perfil.
+    pub actions: ProfileActionsView,
 }
 
 /// La salida de audio de un perfil, plana, para cruzar al frontend (Displays v2,
@@ -168,6 +174,34 @@ pub struct AudioView {
     pub endpoint_id: String,
     /// Etiqueta linda para la UI (nombre del dispositivo).
     pub friendly_name: String,
+}
+
+/// Una acción de un perfil-escena, plana, para cruzar al frontend (Displays v2,
+/// Fase 4). Espeja `monarch::Accion` (mismo tag `"tipo"`) pero vive en la parte
+/// **ungateada** del módulo: se nombra en cualquier plataforma (la firma de los
+/// comandos tiene que compilar en Android), mientras que el vendor `monarch` es
+/// windows-only. Viaja en los dos sentidos: sale en `ProfileView` y entra en el
+/// comando `displays_set_profile_actions`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "tipo", rename_all = "snake_case")]
+pub enum ActionView {
+    Lanzar {
+        destino: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
+    Volumen {
+        nivel: u8,
+    },
+}
+
+/// Las acciones (entrada/salida) de un perfil-escena, planas, para el frontend
+/// (Displays v2, Fase 4). Ambas listas vacías = perfil sin acciones.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileActionsView {
+    pub entrada: Vec<ActionView>,
+    pub salida: Vec<ActionView>,
 }
 
 /// Los ajustes de displays que el frontend puede editar.
@@ -461,17 +495,18 @@ mod estado {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    use monarch::{AudioTarget, Layout, MonarchDisplayManager, Profile};
+    use monarch::{Accion, AudioTarget, Layout, MonarchDisplayManager, PerfilAcciones, Profile};
 
+    use super::acciones;
     use super::audio;
     use super::backend::SystemDisplayBackend;
     use super::ids::{format_display_id, parse_display_id};
     use super::store::MillenniumConfigStore;
     use super::watchdog::{self, Desenlace};
     use super::{
-        diagnostics, mark_can_detach, AudioView, DisplayView, DisplaysSnapshot, Emisor, PendingView,
-        PosicionView, ProfileView, SettingsView, EVENTO_AUDIO, EVENTO_CAMBIO, EVENTO_CONFIRMACION,
-        FORCE_MOCK_ENV,
+        diagnostics, mark_can_detach, ActionView, AudioView, DisplayView, DisplaysSnapshot, Emisor,
+        PendingView, PosicionView, ProfileActionsView, ProfileView, SettingsView, EVENTO_AUDIO,
+        EVENTO_CAMBIO, EVENTO_CONFIRMACION, FORCE_MOCK_ENV,
     };
 
     type Manager = MonarchDisplayManager<SystemDisplayBackend, MillenniumConfigStore>;
@@ -503,6 +538,18 @@ mod estado {
         /// interleaving que meta acá el previo de otro apply. (Ver `watchdog.rs`,
         /// "Un watchdog viejo no puede pisar un apply nuevo".)
         audio_previo: Mutex<Option<audio::AudioPrevio>>,
+        /// La escena (perfil) actualmente puesta y **committeada** (Displays v2,
+        /// Fase 4). Sirve para correr su SALIDA cuando se pasa a otra escena
+        /// (modelo "ida y vuelta"). Nace `None`: al reiniciar la app NO se corre la
+        /// limpieza de lo que hubiera quedado abierto (aceptado por Guido).
+        escena_activa: Mutex<Option<String>>,
+        /// La escena que se aplicó **con red** y espera confirmación. Se consume en
+        /// `confirm` (ahí recién queda committeada y corre su ciclo) o se descarta
+        /// en revert/timeout SIN correr nada. Mismo molde y misma justificación de
+        /// "sin etiqueta de generación" que `audio_previo`: el manager sostiene UNA
+        /// sola confirmación viva a la vez, así que este slot siempre corresponde
+        /// al pending vivo (o es `None`).
+        escena_pendiente: Mutex<Option<String>>,
     }
 
     /// El handle que se guarda en Tauri y se clona hacia los hilos.
@@ -532,6 +579,8 @@ mod estado {
             emisor,
             mock,
             audio_previo: Mutex::new(None),
+            escena_activa: Mutex::new(None),
+            escena_pendiente: Mutex::new(None),
         }));
 
         // La ventana oculta cablea DOS reacciones distintas:
@@ -740,6 +789,9 @@ mod estado {
             }
             // El usuario aceptó: el audio nuevo se queda, ya no hay rollback.
             self.olvidar_audio_previo();
+            // Recién ACÁ el cambio con red queda committeado ⇒ correr el ciclo de la
+            // escena que estaba pendiente (SALIDA anterior + ENTRADA nueva).
+            self.confirmar_escena_pendiente();
             diagnostics::log("confirm:el_usuario_confirmo");
             self.avisar_confirmacion(serde_json::json!({ "kind": "confirmed" }));
             self.avisar_cambio();
@@ -754,6 +806,9 @@ mod estado {
             }
             // El video volvió: el audio también (el perfil es una unidad).
             self.restaurar_audio_previo();
+            // El cambio NO se committeó ⇒ ninguna acción debe correr: descartar la
+            // escena pendiente (criterio 7).
+            self.descartar_escena_pendiente();
             diagnostics::log("revert:a_pedido_del_usuario");
             self.avisar_confirmacion(serde_json::json!({
                 "kind": "reverted",
@@ -834,14 +889,15 @@ mod estado {
         pub fn listar_perfiles(&self) -> Result<Vec<ProfileView>, String> {
             let guard = self.0.manager.lock().map_err(|_| envenenado())?;
             let perfiles = guard.list_profiles();
-            // El atajo y la salida de audio de cada perfil viven en `AppSettings`
-            // (por nombre), no en el `Profile`; se cruzan acá para la fila.
+            // El atajo, la salida de audio y las acciones de cada perfil viven en
+            // `AppSettings` (por nombre), no en el `Profile`; se cruzan acá.
             let atajos = guard.settings().profile_shortcuts.clone();
             let audios = guard.settings().profile_audio.clone();
+            let acciones = guard.settings().profile_actions.clone();
             drop(guard);
             Ok(perfiles
                 .iter()
-                .map(|p| vista_de_perfil(p, &atajos, &audios))
+                .map(|p| vista_de_perfil(p, &atajos, &audios, &acciones))
                 .collect())
         }
 
@@ -876,6 +932,10 @@ mod estado {
                 if ajustes.profile_audio.remove(nombre).is_some() {
                     cambio = true;
                 }
+                // Ídem las acciones (Fase 4): no dejar escena huérfana.
+                if ajustes.profile_actions.remove(nombre).is_some() {
+                    cambio = true;
+                }
                 if ajustes.startup_profile_name.as_deref() == Some(nombre) {
                     ajustes.startup_profile_name = None;
                     cambio = true;
@@ -884,6 +944,9 @@ mod estado {
                     guard.update_settings(ajustes).map_err(|e| e.to_string())?;
                 }
             }
+            // Si el perfil borrado era la escena activa/pendiente, olvidar ese
+            // estado (fuera del lock del manager: toca otros mutex).
+            self.olvidar_escena_si_es(nombre);
             diagnostics::log("perfil:borrado");
             self.listar_perfiles()
         }
@@ -957,6 +1020,9 @@ mod estado {
                 // queda directo (no hay rollback de audio en esta rama).
                 None => {
                     self.aplicar_audio_de_perfil(nombre, false);
+                    // Commit inmediato ⇒ el ciclo de escena corre ACÁ (después de la
+                    // foto y el audio): SALIDA de la escena anterior + ENTRADA de esta.
+                    self.correr_ciclo_de_escena(nombre);
                     diagnostics::log("perfil:cargado:sin_cambios");
                     self.avisar_cambio();
                     self.snapshot()
@@ -965,6 +1031,9 @@ mod estado {
                 // que el watchdog lo devuelva si nadie confirma el cambio.
                 Some(plazo) => {
                     self.aplicar_audio_de_perfil(nombre, true);
+                    // Con red: las acciones NO corren todavía. Se dejan pendientes y
+                    // corren en `confirm` (si el cambio se auto-revierte, no corren).
+                    self.marcar_escena_pendiente(nombre);
                     self.aplicar_con_red(plazo)
                 }
             }
@@ -1019,6 +1088,8 @@ mod estado {
                     // se aplica y se queda; sin auto-revert de video, no hay previo
                     // que capturar (hay_red=false).
                     self.aplicar_audio_de_perfil(nombre, false);
+                    // Commit inmediato ⇒ el ciclo de escena corre ACÁ.
+                    self.correr_ciclo_de_escena(nombre);
                     diagnostics::log("perfil:aplicado_directo");
                     self.avisar_cambio();
                     Ok(())
@@ -1029,6 +1100,9 @@ mod estado {
                 // SÍ puede auto-revertirse ⇒ capturar el audio previo (hay_red=true).
                 Some(plazo) => {
                     self.aplicar_audio_de_perfil(nombre, true);
+                    // Cae a la red ⇒ el video puede auto-revertirse: las acciones
+                    // quedan pendientes y corren en `confirm`, no acá.
+                    self.marcar_escena_pendiente(nombre);
                     self.aplicar_con_red(plazo).map(|_| ())
                 }
             }
@@ -1239,6 +1313,8 @@ mod estado {
                 Desenlace::Revertido => {
                     // El watchdog ya revirtió el VIDEO; devolver también el audio.
                     self.restaurar_audio_previo();
+                    // No se committeó ⇒ ninguna acción corre (criterio 7).
+                    self.descartar_escena_pendiente();
                     crate::runtime_log::warn(
                         "[displays] nadie confirmó el cambio: se revirtió solo",
                     );
@@ -1256,6 +1332,10 @@ mod estado {
                     // El VIDEO quedó como está (no se pudo revertir) ⇒ el audio
                     // nuevo también se queda; descartar el previo (nada que revertir).
                     self.olvidar_audio_previo();
+                    // El usuario NO confirmó (el watchdog falló al revertir): estado
+                    // degradado, no un commit querido ⇒ NO correr acciones; descartar
+                    // la escena pendiente. Queda a mano resolver el video.
+                    self.descartar_escena_pendiente();
                     crate::runtime_log::err(format!(
                         "[displays] NO se pudo revertir solo: {motivo}. La pantalla quedó como está; revertí a mano."
                     ));
@@ -1398,6 +1478,98 @@ mod estado {
             }
         }
 
+        // --- ciclo de escena (Fase 4) ---------------------------------------
+
+        /// Corre el ciclo de escena al **committear** el cambio al perfil `nombre`:
+        /// (1) la SALIDA de la escena anterior (si había otra distinta), (2) la
+        /// ENTRADA del perfil nuevo, (3) marca `nombre` como escena activa. Va
+        /// SIEMPRE después de la foto y del audio (el orden del spec), y solo desde
+        /// las vías committeadas (inmediata o `confirm`), NUNCA al aplicar con red.
+        ///
+        /// Best-effort: el lock del manager se toma solo para clonar el mapa de
+        /// acciones y se suelta antes de ejecutar (lanzar procesos / COM puede
+        /// tardar; regla de locks del stack). Una acción que falla se loguea y
+        /// sigue; el video/audio ya aplicados nunca se revierten por esto.
+        fn correr_ciclo_de_escena(&self, nombre: &str) {
+            let por_perfil = {
+                let Ok(guard) = self.0.manager.lock() else {
+                    return;
+                };
+                guard.settings().profile_actions.clone()
+            };
+            let anterior = self.0.escena_activa.lock().ok().and_then(|g| g.clone());
+            let salida_previa: Vec<Accion> = match &anterior {
+                Some(prev) if prev != nombre => por_perfil
+                    .get(prev)
+                    .map(|a| a.salida.clone())
+                    .unwrap_or_default(),
+                _ => Vec::new(),
+            };
+            let entrada: Vec<Accion> = por_perfil
+                .get(nombre)
+                .map(|a| a.entrada.clone())
+                .unwrap_or_default();
+            // Primero la SALIDA de la escena anterior, después la ENTRADA de la
+            // nueva. Sin locks tomados.
+            if !salida_previa.is_empty() {
+                acciones::ejecutar(&salida_previa);
+            }
+            if !entrada.is_empty() {
+                acciones::ejecutar(&entrada);
+            }
+            // La nueva escena queda activa aunque no tenga acciones: así su SALIDA
+            // futura (si se la agregan) tiene contra qué correr, y no se re-dispara
+            // la salida de la anterior en el próximo cambio.
+            if let Ok(mut slot) = self.0.escena_activa.lock() {
+                *slot = Some(nombre.to_string());
+            }
+        }
+
+        /// Marca que la escena `nombre` se aplicó **con red** y espera confirmación.
+        /// Se consume en `confirm` o se descarta en revert/timeout.
+        fn marcar_escena_pendiente(&self, nombre: &str) {
+            if let Ok(mut slot) = self.0.escena_pendiente.lock() {
+                *slot = Some(nombre.to_string());
+            }
+        }
+
+        /// En `confirm`: el cambio con red recién ahí queda committeado ⇒ correr el
+        /// ciclo de la escena que estaba pendiente (si la había).
+        fn confirmar_escena_pendiente(&self) {
+            let pendiente = match self.0.escena_pendiente.lock() {
+                Ok(mut slot) => slot.take(),
+                Err(_) => None,
+            };
+            if let Some(nombre) = pendiente {
+                self.correr_ciclo_de_escena(&nombre);
+            }
+        }
+
+        /// En revert / timeout / no-op: descartar la escena pendiente SIN correr
+        /// nada. Si el cambio no se committeó, NINGUNA acción debe correr (criterio
+        /// 7: no se abre Steam si el video se revirtió).
+        fn descartar_escena_pendiente(&self) {
+            if let Ok(mut slot) = self.0.escena_pendiente.lock() {
+                *slot = None;
+            }
+        }
+
+        /// Al borrar un perfil: si era la escena activa o la pendiente, olvidar ese
+        /// estado para no dejar un nombre colgado apuntando a un perfil que ya no
+        /// existe.
+        fn olvidar_escena_si_es(&self, nombre: &str) {
+            if let Ok(mut slot) = self.0.escena_activa.lock() {
+                if slot.as_deref() == Some(nombre) {
+                    *slot = None;
+                }
+            }
+            if let Ok(mut slot) = self.0.escena_pendiente.lock() {
+                if slot.as_deref() == Some(nombre) {
+                    *slot = None;
+                }
+            }
+        }
+
         // --- audio por perfil: comandos --------------------------------------
 
         /// Lista las salidas de audio activas para el dropdown "Sonido a:".
@@ -1441,6 +1613,50 @@ mod estado {
             diagnostics::log("audio:limpiado");
             self.listar_perfiles()
         }
+
+        // --- acciones por perfil: comandos (Fase 4) --------------------------
+
+        /// Asigna las acciones (entrada/salida) de un perfil-escena, persistiéndolas
+        /// en `profile_actions`. Mismo patrón seguro que `asignar_audio`: clonar
+        /// ajustes, tocar solo lo propio y `update_settings` (que preserva el resto
+        /// intacto — la trampa #1 la blinda el vendor). Si ambas listas quedan
+        /// vacías, se quita la entrada (perfil sin escena) en vez de guardar dos
+        /// listas vacías. Devuelve la lista al día.
+        pub fn asignar_acciones(
+            &self,
+            nombre: &str,
+            entrada: Vec<ActionView>,
+            salida: Vec<ActionView>,
+        ) -> Result<Vec<ProfileView>, String> {
+            {
+                let mut guard = self.0.manager.lock().map_err(|_| envenenado())?;
+                let mut ajustes = guard.settings().clone();
+                let entrada: Vec<Accion> = entrada.iter().map(view_a_accion).collect();
+                let salida: Vec<Accion> = salida.iter().map(view_a_accion).collect();
+                if entrada.is_empty() && salida.is_empty() {
+                    ajustes.profile_actions.remove(nombre);
+                } else {
+                    ajustes
+                        .profile_actions
+                        .insert(nombre.to_string(), PerfilAcciones { entrada, salida });
+                }
+                guard.update_settings(ajustes).map_err(|e| e.to_string())?;
+            }
+            diagnostics::log("acciones:asignadas");
+            self.listar_perfiles()
+        }
+
+        /// Quita todas las acciones de un perfil (vuelve a "sin escena").
+        pub fn limpiar_acciones(&self, nombre: &str) -> Result<Vec<ProfileView>, String> {
+            {
+                let mut guard = self.0.manager.lock().map_err(|_| envenenado())?;
+                let mut ajustes = guard.settings().clone();
+                ajustes.profile_actions.remove(nombre);
+                guard.update_settings(ajustes).map_err(|e| e.to_string())?;
+            }
+            diagnostics::log("acciones:limpiadas");
+            self.listar_perfiles()
+        }
     }
 
     fn envenenado() -> String {
@@ -1456,6 +1672,7 @@ mod estado {
         perfil: &Profile,
         atajos: &BTreeMap<String, String>,
         audios: &BTreeMap<String, AudioTarget>,
+        acciones_por_perfil: &BTreeMap<String, PerfilAcciones>,
     ) -> ProfileView {
         let activos: Vec<_> = perfil.layout.outputs.iter().filter(|o| o.enabled).collect();
         let summary = if activos.is_empty() {
@@ -1478,6 +1695,10 @@ mod estado {
             summary,
             shortcut: atajos.get(&perfil.name).cloned(),
             audio: audios.get(&perfil.name).map(a_audio_view),
+            actions: acciones_por_perfil
+                .get(&perfil.name)
+                .map(a_actions_view)
+                .unwrap_or_default(),
         }
     }
 
@@ -1486,6 +1707,39 @@ mod estado {
         AudioView {
             endpoint_id: t.endpoint_id.clone(),
             friendly_name: t.friendly_name.clone(),
+        }
+    }
+
+    /// `PerfilAcciones` (vendor) → `ProfileActionsView` (DTO plano al frontend).
+    fn a_actions_view(a: &PerfilAcciones) -> ProfileActionsView {
+        ProfileActionsView {
+            entrada: a.entrada.iter().map(accion_a_view).collect(),
+            salida: a.salida.iter().map(accion_a_view).collect(),
+        }
+    }
+
+    /// `Accion` (vendor) → `ActionView` (DTO plano).
+    fn accion_a_view(a: &Accion) -> ActionView {
+        match a {
+            Accion::Lanzar { destino, args } => ActionView::Lanzar {
+                destino: destino.clone(),
+                args: args.clone(),
+            },
+            Accion::Volumen { nivel } => ActionView::Volumen { nivel: *nivel },
+        }
+    }
+
+    /// `ActionView` (del frontend) → `Accion` (vendor). Sanea de paso: recorta el
+    /// destino y clampea el volumen a 0–100.
+    fn view_a_accion(v: &ActionView) -> Accion {
+        match v {
+            ActionView::Lanzar { destino, args } => Accion::Lanzar {
+                destino: destino.trim().to_string(),
+                args: args.clone(),
+            },
+            ActionView::Volumen { nivel } => Accion::Volumen {
+                nivel: (*nivel).min(100),
+            },
         }
     }
 

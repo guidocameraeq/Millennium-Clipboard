@@ -107,6 +107,37 @@ pub struct AudioTarget {
     pub friendly_name: String,
 }
 
+/// Una acción que dispara un perfil-escena (Displays v2, Fase 4).
+///
+/// Etiquetado por el campo `tipo` (internally tagged) para poder sumar variantes
+/// nuevas sin romper los stores viejos. JSON: `{"tipo":"lanzar","destino":"…",
+/// "args":["…"]}` o `{"tipo":"volumen","nivel":40}`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "tipo", rename_all = "snake_case")]
+pub enum Accion {
+    /// Lanzar un `.exe` (con args EN LISTA, sin shell), una URI de protocolo
+    /// (`steam://…`) o un `.lnk`. El dispatch por tipo de destino lo hace el
+    /// motor de acciones; acá es solo el dato. `args` es opcional en el JSON.
+    Lanzar {
+        destino: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
+    /// Fijar el volumen (0–100) de la salida de audio por default actual.
+    Volumen { nivel: u8 },
+}
+
+/// Las acciones de un perfil-escena (Displays v2, Fase 4): las de ENTRADA corren
+/// al aplicar/confirmar el perfil; las de SALIDA corren cuando se pasa a OTRO
+/// perfil (modelo "ida y vuelta"). Ambas listas vacías = perfil sin acciones,
+/// idéntico a como se comportaba antes de la Fase 4.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PerfilAcciones {
+    pub entrada: Vec<Accion>,
+    pub salida: Vec<Accion>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
@@ -124,6 +155,11 @@ pub struct AppSettings {
     /// entrada = ese perfil está en "No tocar el audio". Nace vacío en stores
     /// viejos gracias al `#[serde(default)]` a nivel struct.
     pub profile_audio: BTreeMap<String, AudioTarget>,
+    /// Acciones por perfil-escena (Displays v2, Fase 4), keyed por **nombre** de
+    /// perfil — mismo lugar y patrón que `profile_audio`. Sin entrada = perfil
+    /// sin acciones (como antes de la Fase 4). Nace vacío en stores viejos por el
+    /// `#[serde(default)]` a nivel struct.
+    pub profile_actions: BTreeMap<String, PerfilAcciones>,
 }
 
 impl Default for AppSettings {
@@ -138,6 +174,7 @@ impl Default for AppSettings {
             profile_shortcuts: BTreeMap::new(),
             display_toggle_shortcuts: BTreeMap::new(),
             profile_audio: BTreeMap::new(),
+            profile_actions: BTreeMap::new(),
         }
     }
 }

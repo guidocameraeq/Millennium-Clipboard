@@ -2035,7 +2035,27 @@
     li.className = 'displays-profile-item';
     li.dataset.name = p.name;
     // Template ESTATICO; los datos entran por setText (mismo patron que las filas
-    // de monitores y de peers: nunca innerHTML con strings del backend).
+    // de monitores y de peers: nunca innerHTML con strings del backend). El editor
+    // de escena (Fase 4) tambien es 100% estatico: los chips y los inputs se
+    // llenan despues por createElement/textContent, nunca por interpolacion.
+    // `which`/`label` son literales fijos, asi que la interpolacion es segura.
+    const sceneCol = (which, label) => `
+            <div class="displays-scene-col" data-list="${which}">
+              <div class="displays-scene-col-head">${label}</div>
+              <ul class="displays-scene-chips"></ul>
+              <div class="displays-scene-add">
+                <select class="displays-setting-select displays-scene-preset">
+                  <option value="">＋ acción…</option>
+                  <option value="bigpicture">🎮 Big Picture</option>
+                  <option value="game">🎮 Juego de Steam…</option>
+                  <option value="chrome">🍿 Chrome (cuenta + link)…</option>
+                  <option value="close_bp">⏹ Cerrar Big Picture</option>
+                  <option value="volume">🔊 Volumen…</option>
+                  <option value="custom">⚙ Comando…</option>
+                </select>
+                <div class="displays-scene-form" hidden></div>
+              </div>
+            </div>`;
     li.innerHTML = `
       <div class="displays-profile-info">
         <div class="displays-profile-name-text"></div>
@@ -2043,6 +2063,13 @@
         <div class="displays-profile-audio">
           <label class="displays-profile-audio-label">Sonido a:</label>
           <select class="displays-setting-select displays-profile-audio-select"></select>
+        </div>
+        <div class="displays-profile-scene">
+          <button class="displays-scene-toggle" type="button">🎬 escena…</button>
+          <div class="displays-scene-editor" hidden>
+            ${sceneCol('entrada', 'Al entrar')}
+            ${sceneCol('salida', 'Al salir')}
+          </div>
         </div>
       </div>
       <div class="displays-profile-actions">
@@ -2104,6 +2131,39 @@
       if (document.activeElement !== audioSel) populateAudioSelect(audioSel, p);
       audioSel.disabled = busy || pending;
     }
+
+    // Displays v2, Fase 4: editor de escena (acciones de entrada/salida). El
+    // estado abierto/cerrado se recuerda en sceneEditorOpen para sobrevivir al
+    // re-render por diff. Los chips se rearman desde p.actions (backend = verdad).
+    const scene = li.querySelector('.displays-profile-scene');
+    if (scene) {
+      const editor = scene.querySelector('.displays-scene-editor');
+      if (editor) editor.hidden = !sceneEditorOpen.has(p.name);
+      const toggle = scene.querySelector('.displays-scene-toggle');
+      const n = countActions(p);
+      if (toggle) {
+        toggle.textContent = n ? `🎬 escena (${n})` : '🎬 escena…';
+        toggle.classList.toggle('has-scene', n > 0);
+        toggle.disabled = busy || pending;
+        toggle.title = 'Acciones que dispara este perfil al aplicarlo (y su limpieza al salir).';
+      }
+      scene.querySelectorAll('.displays-scene-col').forEach((col) => {
+        const which = col.dataset.list;
+        const acciones = (p.actions && Array.isArray(p.actions[which])) ? p.actions[which] : [];
+        const ul = col.querySelector('.displays-scene-chips');
+        if (ul) renderSceneChips(ul, acciones, busy || pending);
+        const sel = col.querySelector('.displays-scene-preset');
+        if (sel && document.activeElement !== sel) sel.disabled = busy || pending;
+      });
+    }
+  }
+
+  // Cuántas acciones tiene el perfil (entrada + salida), para el contador del toggle.
+  function countActions(p) {
+    const a = (p && p.actions) ? p.actions : {};
+    const e = Array.isArray(a.entrada) ? a.entrada.length : 0;
+    const s = Array.isArray(a.salida) ? a.salida.length : 0;
+    return e + s;
   }
 
   // Puebla un <select> "Sonido a:" con No tocar + las salidas activas. Todo por
@@ -2214,6 +2274,282 @@
       state.displaysBusy = false;
       renderProfiles();
     }
+  }
+
+  // ── Displays v2, Fase 4: editor de escena (acciones por perfil) ──────────
+
+  // Qué editores de escena están abiertos (por nombre de perfil). Sobrevive al
+  // re-render por diff: como shortcutCaptureName, es estado de UI local.
+  const sceneEditorOpen = new Set();
+
+  // Etiqueta legible de una acción, para el chip. SIEMPRE por textContent (el
+  // destino puede venir del backend / de lo que tipeó el usuario: nunca innerHTML).
+  function actionLabel(a) {
+    if (!a || typeof a !== 'object') return '?';
+    if (a.tipo === 'volumen') return `🔊 Volumen ${a.nivel}%`;
+    if (a.tipo === 'lanzar') {
+      const d = String(a.destino || '');
+      const low = d.toLowerCase();
+      if (low.includes('steam://open/bigpicture')) return '🎮 Big Picture';
+      if (low.includes('steam://close/bigpicture')) return '⏹ Cerrar Big Picture';
+      const game = low.match(/steam:\/\/rungameid\/(\d+)/);
+      if (game) return `🎮 Juego ${game[1]}`;
+      if (low.includes('chrome')) {
+        const args = Array.isArray(a.args) ? a.args : [];
+        const pd = args.find((x) => typeof x === 'string' && x.startsWith('--profile-directory='));
+        const carpeta = pd ? pd.slice('--profile-directory='.length) : '';
+        return carpeta ? `🍿 Chrome · ${carpeta}` : '🍿 Chrome';
+      }
+      const base = d.split(/[\\/]/).pop() || d;
+      return `▶ ${base}`;
+    }
+    return '?';
+  }
+
+  function mkChipBtn(txt, chipAction, title, disabled) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'displays-scene-chip-btn';
+    b.dataset.chipAction = chipAction;
+    b.textContent = txt;
+    b.title = title;
+    if (disabled) b.disabled = true;
+    return b;
+  }
+
+  // Rearma los chips de una columna desde la lista de acciones (backend = verdad).
+  function renderSceneChips(ul, acciones, locked) {
+    ul.replaceChildren();
+    if (!acciones.length) {
+      const li = document.createElement('li');
+      li.className = 'displays-scene-empty';
+      li.textContent = '(nada)';
+      ul.appendChild(li);
+      return;
+    }
+    acciones.forEach((a, idx) => {
+      const li = document.createElement('li');
+      li.className = 'displays-scene-chip';
+      li.dataset.index = String(idx);
+      const label = document.createElement('span');
+      label.className = 'displays-scene-chip-label';
+      label.textContent = actionLabel(a);
+      li.appendChild(label);
+      li.appendChild(mkChipBtn('↑', 'up', 'Subir', locked || idx === 0));
+      li.appendChild(mkChipBtn('↓', 'down', 'Bajar', locked || idx === acciones.length - 1));
+      li.appendChild(mkChipBtn('✕', 'remove', 'Quitar', locked));
+      ul.appendChild(li);
+    });
+  }
+
+  // Guarda las dos listas de un perfil (entrada + salida). Mismo patrón que
+  // setProfileAudioFlow: bloquea, invoca, re-renderiza desde la respuesta.
+  async function setProfileActionsFlow(name, entrada, salida) {
+    if (state.displaysBusy) return;
+    state.displaysBusy = true;
+    renderProfiles();
+    try {
+      const profiles = await invoke('displays_set_profile_actions', { name, entrada, salida });
+      state.displaysProfiles = Array.isArray(profiles) ? profiles : [];
+      setStatus(`DISPLAYS · "${name}": escena actualizada`, { force: true });
+    } catch (err) {
+      showDisplaysError(err);
+    } finally {
+      state.displaysBusy = false;
+      renderProfiles();
+    }
+  }
+
+  // Copia mutable de las acciones actuales del perfil (desde el estado, que es la
+  // última respuesta del backend). Se edita y se manda entero de vuelta.
+  function currentProfileActions(name) {
+    const p = (state.displaysProfiles || []).find((x) => x.name === name);
+    const a = (p && p.actions) ? p.actions : {};
+    return {
+      entrada: Array.isArray(a.entrada) ? a.entrada.slice() : [],
+      salida: Array.isArray(a.salida) ? a.salida.slice() : [],
+    };
+  }
+
+  function addSceneAction(name, which, accion) {
+    if (!accion) return;
+    const cur = currentProfileActions(name);
+    if (!Array.isArray(cur[which])) return;
+    cur[which].push(accion);
+    setProfileActionsFlow(name, cur.entrada, cur.salida);
+  }
+
+  function removeSceneAction(name, which, index) {
+    const cur = currentProfileActions(name);
+    if (!Array.isArray(cur[which]) || index < 0 || index >= cur[which].length) return;
+    cur[which].splice(index, 1);
+    setProfileActionsFlow(name, cur.entrada, cur.salida);
+  }
+
+  function moveSceneAction(name, which, index, delta) {
+    const cur = currentProfileActions(name);
+    const arr = cur[which];
+    if (!Array.isArray(arr)) return;
+    const j = index + delta;
+    if (j < 0 || j >= arr.length) return;
+    const tmp = arr[index]; arr[index] = arr[j]; arr[j] = tmp;
+    setProfileActionsFlow(name, cur.entrada, cur.salida);
+  }
+
+  // Un preset elegido en el <select>: los sin-parámetros se agregan directo; los
+  // que piden datos abren un formulario inline en la columna.
+  function handleScenePreset(li, col, preset) {
+    const name = li.dataset.name;
+    const which = col.dataset.list;
+    if (preset === 'bigpicture') {
+      addSceneAction(name, which, { tipo: 'lanzar', destino: 'steam://open/bigpicture', args: [] });
+      return;
+    }
+    if (preset === 'close_bp') {
+      addSceneAction(name, which, { tipo: 'lanzar', destino: 'steam://close/bigpicture', args: [] });
+      return;
+    }
+    showSceneForm(col, preset);
+  }
+
+  function showSceneForm(col, preset) {
+    const form = col.querySelector('.displays-scene-form');
+    if (!form) return;
+    form.replaceChildren();
+    form.hidden = false;
+    form.dataset.preset = preset;
+    const addInput = (ph, kind) => {
+      const inp = document.createElement(kind === 'area' ? 'textarea' : 'input');
+      if (kind === 'num') { inp.type = 'number'; inp.min = '0'; inp.max = '100'; }
+      else if (kind !== 'area') inp.type = 'text';
+      inp.className = 'displays-scene-input';
+      inp.placeholder = ph;
+      form.appendChild(inp);
+      return inp;
+    };
+    if (preset === 'game') addInput('ID del juego (nº de steam://rungameid)', 'text');
+    else if (preset === 'chrome') {
+      addInput('carpeta de la cuenta (Default, Profile 1…)', 'text');
+      addInput('link (https://…)', 'text');
+    } else if (preset === 'volume') addInput('nivel 0–100', 'num');
+    else if (preset === 'custom') {
+      addInput('programa (.exe / steam://… / .lnk)', 'text');
+      addInput('argumentos (uno por línea)', 'area');
+    }
+    const row = document.createElement('div');
+    row.className = 'displays-scene-form-row';
+    const ok = document.createElement('button');
+    ok.type = 'button';
+    ok.className = 'modal-btn small accept displays-scene-form-ok';
+    ok.textContent = '＋ agregar';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'modal-btn small displays-scene-form-cancel';
+    cancel.textContent = '✕';
+    row.appendChild(ok);
+    row.appendChild(cancel);
+    form.appendChild(row);
+    const first = form.querySelector('.displays-scene-input');
+    if (first) first.focus();
+  }
+
+  function hideSceneForm(col) {
+    const form = col.querySelector('.displays-scene-form');
+    if (!form) return;
+    form.hidden = true;
+    form.replaceChildren();
+    delete form.dataset.preset;
+  }
+
+  function submitSceneForm(li, col) {
+    const form = col.querySelector('.displays-scene-form');
+    if (!form) return;
+    const preset = form.dataset.preset;
+    const inputs = Array.from(form.querySelectorAll('.displays-scene-input'));
+    const accion = buildPresetAction(preset, inputs);
+    if (!accion) return; // faltó un dato: el aviso lo dio buildPresetAction
+    hideSceneForm(col);
+    addSceneAction(li.dataset.name, col.dataset.list, accion);
+  }
+
+  function buildPresetAction(preset, inputs) {
+    const val = (i) => (inputs[i] ? String(inputs[i].value || '').trim() : '');
+    const warn = (msg) => setStatus(`DISPLAYS · ${msg}`, { priority: 'warn', ttl: 3500 });
+    if (preset === 'game') {
+      const id = val(0).replace(/[^0-9]/g, '');
+      if (!id) { warn('poné el ID del juego'); return null; }
+      return { tipo: 'lanzar', destino: `steam://rungameid/${id}`, args: [] };
+    }
+    if (preset === 'chrome') {
+      const carpeta = val(0);
+      const url = val(1);
+      if (!url) { warn('poné el link'); return null; }
+      const args = [];
+      if (carpeta) args.push(`--profile-directory=${carpeta}`);
+      args.push('--new-window', '--start-fullscreen', url);
+      return { tipo: 'lanzar', destino: 'chrome.exe', args };
+    }
+    if (preset === 'volume') {
+      let n = parseInt(val(0), 10);
+      if (isNaN(n)) { warn('poné un nivel 0–100'); return null; }
+      n = Math.max(0, Math.min(100, n));
+      return { tipo: 'volumen', nivel: n };
+    }
+    if (preset === 'custom') {
+      const destino = val(0);
+      if (!destino) { warn('poné el programa o la URI'); return null; }
+      const raw = inputs[1] ? String(inputs[1].value || '') : '';
+      const args = raw.split('\n').map((s) => s.trim()).filter(Boolean);
+      return { tipo: 'lanzar', destino, args };
+    }
+    return null;
+  }
+
+  function toggleScene(li, name) {
+    const editor = li.querySelector('.displays-scene-editor');
+    if (!editor) return;
+    const abrir = editor.hidden;
+    editor.hidden = !abrir;
+    if (abrir) sceneEditorOpen.add(name);
+    else sceneEditorOpen.delete(name);
+  }
+
+  // Maneja un clic dentro del editor de escena. Devuelve true si lo consumió.
+  function handleSceneClick(el, li, name) {
+    const toggle = el.closest('.displays-scene-toggle');
+    if (toggle) {
+      if (!toggle.disabled) toggleScene(li, name);
+      return true;
+    }
+    const chipBtn = el.closest('.displays-scene-chip-btn');
+    if (chipBtn) {
+      if (!chipBtn.disabled) {
+        const chip = chipBtn.closest('.displays-scene-chip');
+        const col = chipBtn.closest('.displays-scene-col');
+        if (chip && col) {
+          const idx = parseInt(chip.dataset.index, 10);
+          const which = col.dataset.list;
+          const act = chipBtn.dataset.chipAction;
+          if (act === 'remove') removeSceneAction(name, which, idx);
+          else if (act === 'up') moveSceneAction(name, which, idx, -1);
+          else if (act === 'down') moveSceneAction(name, which, idx, 1);
+        }
+      }
+      return true;
+    }
+    const okBtn = el.closest('.displays-scene-form-ok');
+    if (okBtn) {
+      const col = okBtn.closest('.displays-scene-col');
+      if (col) submitSceneForm(li, col);
+      return true;
+    }
+    const cancelBtn = el.closest('.displays-scene-form-cancel');
+    if (cancelBtn) {
+      const col = cancelBtn.closest('.displays-scene-col');
+      if (col) hideSceneForm(col);
+      return true;
+    }
+    return false;
   }
 
   // El banner de confirmacion se reusa para pisar y para borrar. Tus perfiles son
@@ -2866,6 +3202,9 @@
       const li = el.closest('.displays-profile-item');
       const name = li && li.dataset ? li.dataset.name : null;
       if (!name) return;
+      // Fase 4: el editor de escena tiene sus propios botones (toggle, chips,
+      // form). Si el clic fue en uno de ellos, lo consume y no sigue.
+      if (handleSceneClick(el, li, name)) return;
       const loadBtn = el.closest('.displays-profile-load');
       const delBtn = el.closest('.displays-profile-delete');
       const updateBtn = el.closest('.displays-profile-update');
@@ -2875,13 +3214,22 @@
       else if (updateBtn && !updateBtn.disabled) updateProfileFlow(name);
       else if (scBtn && !scBtn.disabled) startShortcutCapture(name);
     });
-    // Los <select> emiten 'change', no 'click': listener aparte para el audio.
+    // Los <select> emiten 'change', no 'click': listener aparte para el audio y
+    // para el preset de escena (Fase 4).
     displaysProfilesList.addEventListener('change', (e) => {
       const el = e.target;
-      if (!el || !el.classList || !el.classList.contains('displays-profile-audio-select')) return;
+      if (!el || !el.classList) return;
       const li = el.closest && el.closest('.displays-profile-item');
       const name = li && li.dataset ? li.dataset.name : null;
-      if (name) setProfileAudioFlow(name, el.value);
+      if (!name) return;
+      if (el.classList.contains('displays-profile-audio-select')) {
+        setProfileAudioFlow(name, el.value);
+      } else if (el.classList.contains('displays-scene-preset')) {
+        const col = el.closest('.displays-scene-col');
+        const preset = el.value;
+        el.value = ''; // resetear el select al placeholder
+        if (col && preset) handleScenePreset(li, col, preset);
+      }
     });
   }
   if (displaysSettingsSaveBtn) {

@@ -467,6 +467,10 @@ where
             // NUNCA `Default::default()` ni `BTreeMap::new()`, o cada guardado de
             // ajustes/atajos vaciaría en silencio TODAS las salidas de audio.
             profile_audio: settings.profile_audio,
+            // TRAMPA #1 también para la Fase 4: las acciones por perfil se copian
+            // TAL CUAL. Si acá se pusiera `BTreeMap::new()`, cada guardado de
+            // ajustes/atajos/audio borraría en silencio TODAS las escenas.
+            profile_actions: settings.profile_actions,
         };
         self.persist_config()
     }
@@ -879,7 +883,7 @@ fn unique_unused_candidates_by_target_id<'a>(
 mod tests {
     use super::*;
     use crate::{
-        model::{AudioTarget, OutputConfig, Position, Resolution},
+        model::{Accion, AudioTarget, OutputConfig, PerfilAcciones, Position, Resolution},
         MemoryConfigStore, MockBackend,
     };
 
@@ -1965,5 +1969,107 @@ mod tests {
             back.settings.profile_audio.get("TV").unwrap().endpoint_id,
             "{endpoint-id}"
         );
+    }
+
+    // --- Displays v2, Fase 4: acciones por perfil (escenas) -----------------
+
+    #[test]
+    fn update_settings_preserves_profile_actions() {
+        // Trampa #1 (Fase 4): update_settings re-arma AppSettings campo por campo.
+        // Guardar CUALQUIER ajuste NO debe vaciar las acciones por perfil.
+        let (mut manager, _backend, _store) = build_manager();
+
+        let mut settings = manager.settings().clone();
+        settings.profile_actions.insert(
+            "Jugar".to_string(),
+            PerfilAcciones {
+                entrada: vec![
+                    Accion::Lanzar {
+                        destino: "steam.exe".to_string(),
+                        args: vec!["-start".to_string(), "steam://open/bigpicture".to_string()],
+                    },
+                    Accion::Volumen { nivel: 40 },
+                ],
+                salida: vec![Accion::Lanzar {
+                    destino: "steam://close/bigpicture".to_string(),
+                    args: vec![],
+                }],
+            },
+        );
+        manager.update_settings(settings).unwrap();
+        assert_eq!(
+            manager.settings().profile_actions.len(),
+            1,
+            "update_settings descartó las acciones recién asignadas"
+        );
+
+        // Cambiar OTRO ajuste (perfil de arranque) y guardar: las acciones DEBEN
+        // seguir intactas (regresión que blinda la trampa #1 para la Fase 4).
+        let mut settings = manager.settings().clone();
+        settings.startup_profile_name = Some("Jugar".to_string());
+        manager.update_settings(settings).unwrap();
+
+        let acciones = manager.settings().profile_actions.get("Jugar");
+        assert!(
+            acciones.is_some(),
+            "trampa #1: cambiar un ajuste vació profile_actions"
+        );
+        assert_eq!(acciones.unwrap().entrada.len(), 2);
+        assert_eq!(acciones.unwrap().salida.len(), 1);
+        assert_eq!(
+            manager.settings().startup_profile_name.as_deref(),
+            Some("Jugar")
+        );
+    }
+
+    #[test]
+    fn config_without_profile_actions_loads_with_empty_map() {
+        // Regresión (criterio 1): un displays.json de v1.4.0 NO tiene la clave
+        // profile_actions; debe cargar igual, con el mapa vacío, sin perder nada.
+        let json = r#"{
+            "profiles": [{ "name": "dual", "layout": { "outputs": [] } }],
+            "settings": {
+                "revert_timeout_secs": 8,
+                "profile_shortcuts": { "dual": "Ctrl+Shift+1" }
+            }
+        }"#;
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+        assert!(
+            config.settings.profile_actions.is_empty(),
+            "profile_actions debe nacer vacío en un store viejo"
+        );
+        assert_eq!(config.settings.revert_timeout_secs, 8);
+        assert_eq!(config.profiles.len(), 1);
+    }
+
+    #[test]
+    fn profile_actions_survive_json_round_trip() {
+        // Ida y vuelta por JSON: las acciones persisten y se releen idénticas,
+        // con el tag serde ("tipo") y los args opcionales.
+        let mut config = AppConfig::default();
+        config.settings.profile_actions.insert(
+            "VerPelis".to_string(),
+            PerfilAcciones {
+                entrada: vec![Accion::Lanzar {
+                    destino: "chrome.exe".to_string(),
+                    args: vec!["--profile-directory=Default".to_string()],
+                }],
+                salida: vec![],
+            },
+        );
+        let json = serde_json::to_string(&config).unwrap();
+        let back: AppConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(config, back);
+        // Un `lanzar` sin `args` en el JSON debe deserializar con la lista vacía.
+        let one: PerfilAcciones =
+            serde_json::from_str(r#"{"entrada":[{"tipo":"lanzar","destino":"x.exe"}],"salida":[]}"#)
+                .unwrap();
+        match &one.entrada[0] {
+            Accion::Lanzar { destino, args } => {
+                assert_eq!(destino, "x.exe");
+                assert!(args.is_empty(), "args omitido debe caer en Vec vacío");
+            }
+            _ => panic!("esperaba Lanzar"),
+        }
     }
 }
