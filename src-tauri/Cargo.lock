@@ -2632,7 +2632,7 @@ dependencies = [
 
 [[package]]
 name = "millennium-clipboard"
-version = "1.5.0-beta.2"
+version = "1.5.1"
 dependencies = [
  "anyhow",
  "arboard",
