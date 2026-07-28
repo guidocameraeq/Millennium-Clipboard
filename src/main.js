@@ -127,12 +127,17 @@
   const incomingAcceptBtn = document.getElementById('incoming-accept');
   const incomingRejectBtn = document.getElementById('incoming-reject');
 
-  const settingsModal = document.getElementById('settings-modal');
+  // SPEC-shell: el viejo #settings-modal se partió en dos paneles. Los ids de los
+  // CONTROLES no cambian (los handlers de guardado están atados por id), solo hay
+  // dos contenedores y dos botones de cerrar.
+  const appSettingsModal = document.getElementById('app-settings-modal');
+  const clipboardSettingsModal = document.getElementById('clipboard-settings-modal');
   const settingsDownloadDir = document.getElementById('settings-download-dir');
   const settingsPickDir = document.getElementById('settings-pick-dir');
   const settingsAutoAccept = document.getElementById('settings-auto-accept');
   const settingsAutoAcceptLabel = document.getElementById('settings-auto-accept-label');
-  const settingsCloseBtn = document.getElementById('settings-close');
+  const appSettingsCloseBtn = document.getElementById('app-settings-close');
+  const clipboardSettingsCloseBtn = document.getElementById('clipboard-settings-close');
   const settingsNotifications = document.getElementById('settings-notifications');
   const settingsNotificationsLabel = document.getElementById('settings-notifications-label');
   const settingsAutostart = document.getElementById('settings-autostart');
@@ -1094,7 +1099,9 @@
       } else if (action === 'qr') {
         openQrModal();
       } else if (action === 'settings') {
-        openSettingsModal();
+        openClipboardSettingsModal();
+      } else if (action === 'app-settings') {
+        openAppSettingsModal();
       } else if (action === 'section-clipboard') {
         switchSection('clipboard');
       } else if (action === 'section-displays') {
@@ -1231,24 +1238,24 @@
     }
   });
 
-  // ---------- Settings modal -----------------------------------------------
-  async function openSettingsModal() {
-    if (!state.settings) {
-      try {
-        state.settings = await invoke('get_settings');
-      } catch (err) {
-        setStatus(`ERR settings · ${err}`);
-        return;
-      }
+  // ---------- Settings modals (SPEC-shell: App + Clipboard) ----------------
+  // Los ajustes viven en el MISMO store; solo se re-ubicaron en dos paneles. Un
+  // helper carga el store una vez (cacheado en state.settings), y cada open
+  // rellena sólo lo suyo. La persistencia (invoke al backend) no cambió.
+  async function ensureSettings() {
+    if (state.settings) return true;
+    try {
+      state.settings = await invoke('get_settings');
+      return true;
+    } catch (err) {
+      setStatus(`ERR settings · ${err}`);
+      return false;
     }
-    settingsDownloadDir.textContent = state.settings.downloadDir;
-    settingsAutoAccept.checked = state.settings.autoAcceptFavorites;
-    settingsAutoAcceptLabel.textContent = state.settings.autoAcceptFavorites ? 'ON' : 'OFF';
-    if (settingsNotifications) {
-      const notifOn = state.settings.notificationsEnabled !== false;
-      settingsNotifications.checked = notifOn;
-      settingsNotificationsLabel.textContent = notifOn ? 'ON' : 'OFF';
-    }
+  }
+
+  // ⚙ APP: apariencia (FX) + arranque/bandeja (desktop-only) + actualizador.
+  async function openAppSettingsModal() {
+    if (!(await ensureSettings())) return;
     if (settingsAutostart) {
       const v = !!state.settings.startWithWindows;
       settingsAutostart.checked = v;
@@ -1271,15 +1278,34 @@
     settingsApplyUpdate.textContent = /android/i.test(navigator.userAgent)
       ? '▸ DOWNLOAD & INSTALL'
       : '▸ DOWNLOAD & RESTART';
-    settingsModal.hidden = false;
-    focusFirstControl(settingsModal);
+    appSettingsModal.hidden = false;
+    focusFirstControl(appSettingsModal);
   }
 
-  function closeSettingsModal() {
-    settingsModal.hidden = true;
+  // AJUSTES de Clipboard: carpeta de descargas + auto-aceptar + notificaciones.
+  async function openClipboardSettingsModal() {
+    if (!(await ensureSettings())) return;
+    settingsDownloadDir.textContent = state.settings.downloadDir;
+    settingsAutoAccept.checked = state.settings.autoAcceptFavorites;
+    settingsAutoAcceptLabel.textContent = state.settings.autoAcceptFavorites ? 'ON' : 'OFF';
+    if (settingsNotifications) {
+      const notifOn = state.settings.notificationsEnabled !== false;
+      settingsNotifications.checked = notifOn;
+      settingsNotificationsLabel.textContent = notifOn ? 'ON' : 'OFF';
+    }
+    clipboardSettingsModal.hidden = false;
+    focusFirstControl(clipboardSettingsModal);
   }
 
-  settingsCloseBtn.addEventListener('click', closeSettingsModal);
+  function closeAppSettingsModal() {
+    appSettingsModal.hidden = true;
+  }
+  function closeClipboardSettingsModal() {
+    clipboardSettingsModal.hidden = true;
+  }
+
+  appSettingsCloseBtn.addEventListener('click', closeAppSettingsModal);
+  clipboardSettingsCloseBtn.addEventListener('click', closeClipboardSettingsModal);
 
   // ---------- Runtime log modal --------------------------------------------
   const logModal = document.getElementById('log-modal');
@@ -3281,7 +3307,8 @@
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       let modalClosed = false;
-      if (!settingsModal.hidden) { closeSettingsModal(); modalClosed = true; }
+      if (!appSettingsModal.hidden) { closeAppSettingsModal(); modalClosed = true; }
+      if (!clipboardSettingsModal.hidden) { closeClipboardSettingsModal(); modalClosed = true; }
       if (!incomingModal.hidden) { closeIncomingModal(); modalClosed = true; }
       if (!addPeerModal.hidden) { closeAddPeerModal(); modalClosed = true; }
       if (!peerDetailsModal.hidden) { closePeerDetailsModal(); modalClosed = true; }
@@ -3442,8 +3469,11 @@
       setStatus(`ERR icon · ${err}`);
     }
   });
-  settingsModal.addEventListener('click', (e) => {
-    if (e.target === settingsModal) closeSettingsModal();
+  appSettingsModal.addEventListener('click', (e) => {
+    if (e.target === appSettingsModal) closeAppSettingsModal();
+  });
+  clipboardSettingsModal.addEventListener('click', (e) => {
+    if (e.target === clipboardSettingsModal) closeClipboardSettingsModal();
   });
   incomingModal.addEventListener('click', (e) => {
     if (e.target === incomingModal) {

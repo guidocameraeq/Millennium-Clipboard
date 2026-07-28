@@ -468,29 +468,28 @@
     </div>
   </div>
 
-  <!-- Settings modal -->
-  <div class="modal-backdrop" id="settings-modal" hidden>
+  <!-- Ajustes de la APP (SPEC-shell "dos apps en una"). Lo que pinta todo el
+       programa, no una app puntual: apariencia, arranque con Windows, bandeja y
+       actualizador. Se abre con el botón ⚙ APP del top bar
+       (data-action="app-settings"). Es el mismo molde .settings-modal-wide; los
+       ids de los controles NO cambian (los handlers de guardado están atados por
+       id, no al modal). Chrome neutro: no vira con la app. -->
+  <div class="modal-backdrop" id="app-settings-modal" hidden>
     <div class="modal settings-modal-wide">
       <div class="card-corners">
         <span></span><span></span><span></span><span></span>
       </div>
       <header class="modal-head">
         <span class="modal-glyph">⚙</span>
-        <span class="modal-title">SETTINGS</span>
+        <span class="modal-title">APP SETTINGS</span>
       </header>
       <div class="modal-body settings-body">
 
-        <!-- GENERAL & INTERFACE — available on every platform; disabling the
-             decorative FX is the cheap-GPU / battery-saver mode. -->
+        <!-- APARIENCIA — cross-platform: el FX pinta TODA la pantalla, por eso
+             vive acá (app general) y no en Clipboard. Apagarlo = modo
+             GPU-barata / ahorro de batería. NO es .desktop-only. -->
         <details class="settings-group" open>
-          <summary>▸ GENERAL</summary>
-          <div class="settings-row">
-            <span class="settings-label">DOWNLOAD FOLDER</span>
-            <div class="settings-control">
-              <span class="settings-value mono" id="settings-download-dir">—</span>
-              <button class="modal-btn small" id="settings-pick-dir">▸ CHANGE</button>
-            </div>
-          </div>
+          <summary>▸ APARIENCIA</summary>
           <div class="settings-row">
             <span class="settings-label">VISUAL FX (GRID / SCANLINE)</span>
             <div class="settings-control">
@@ -498,33 +497,6 @@
                 <input type="checkbox" id="settings-fx" />
                 <span class="sound-track"><span class="sound-thumb"></span></span>
                 <span class="settings-value mono" id="settings-fx-label">ON</span>
-              </label>
-            </div>
-          </div>
-        </details>
-
-        <!-- TRANSFERS & NOTIFICATIONS — desktop-only. On Android the OS shows an
-             accept prompt anyway and uses native OS toasts, so both toggles
-             would do nothing on mobile. -->
-        <details class="settings-group desktop-only">
-          <summary>▸ TRANSFERS &amp; NOTIFICATIONS</summary>
-          <div class="settings-row">
-            <span class="settings-label">AUTO-ACCEPT FROM FAVORITES</span>
-            <div class="settings-control">
-              <label class="sound-toggle">
-                <input type="checkbox" id="settings-auto-accept" />
-                <span class="sound-track"><span class="sound-thumb"></span></span>
-                <span class="settings-value mono" id="settings-auto-accept-label">OFF</span>
-              </label>
-            </div>
-          </div>
-          <div class="settings-row">
-            <span class="settings-label">DESKTOP NOTIFICATIONS</span>
-            <div class="settings-control">
-              <label class="sound-toggle">
-                <input type="checkbox" id="settings-notifications" />
-                <span class="sound-track"><span class="sound-thumb"></span></span>
-                <span class="settings-value mono" id="settings-notifications-label">ON</span>
               </label>
             </div>
           </div>
@@ -578,7 +550,67 @@
         </details>
       </div>
       <div class="modal-actions">
-        <button class="modal-btn accept" id="settings-close">✓ CLOSE</button>
+        <button class="modal-btn accept" id="app-settings-close">✓ CLOSE</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Ajustes de CLIPBOARD (SPEC-shell). Lo propio del portapapeles: carpeta de
+       descargas, auto-aceptar de favoritos, notificaciones. Se abre con AJUSTES
+       de la barra de Clipboard (data-action="settings"). Chrome cyan (Clipboard);
+       hereda el color de la app activa por --app-accent en su scope. -->
+  <div class="modal-backdrop" id="clipboard-settings-modal" hidden>
+    <div class="modal settings-modal-wide">
+      <div class="card-corners">
+        <span></span><span></span><span></span><span></span>
+      </div>
+      <header class="modal-head">
+        <span class="modal-glyph">▦</span>
+        <span class="modal-title">CLIPBOARD SETTINGS</span>
+      </header>
+      <div class="modal-body settings-body">
+
+        <!-- DOWNLOADS — cross-platform. -->
+        <details class="settings-group" open>
+          <summary>▸ DOWNLOADS</summary>
+          <div class="settings-row">
+            <span class="settings-label">DOWNLOAD FOLDER</span>
+            <div class="settings-control">
+              <span class="settings-value mono" id="settings-download-dir">—</span>
+              <button class="modal-btn small" id="settings-pick-dir">▸ CHANGE</button>
+            </div>
+          </div>
+        </details>
+
+        <!-- TRANSFERS & NOTIFICATIONS — desktop-only. On Android the OS shows an
+             accept prompt anyway and uses native OS toasts, so both toggles
+             would do nothing on mobile. -->
+        <details class="settings-group desktop-only" open>
+          <summary>▸ TRANSFERS &amp; NOTIFICATIONS</summary>
+          <div class="settings-row">
+            <span class="settings-label">AUTO-ACCEPT FROM FAVORITES</span>
+            <div class="settings-control">
+              <label class="sound-toggle">
+                <input type="checkbox" id="settings-auto-accept" />
+                <span class="sound-track"><span class="sound-thumb"></span></span>
+                <span class="settings-value mono" id="settings-auto-accept-label">OFF</span>
+              </label>
+            </div>
+          </div>
+          <div class="settings-row">
+            <span class="settings-label">DESKTOP NOTIFICATIONS</span>
+            <div class="settings-control">
+              <label class="sound-toggle">
+                <input type="checkbox" id="settings-notifications" />
+                <span class="sound-track"><span class="sound-thumb"></span></span>
+                <span class="settings-value mono" id="settings-notifications-label">ON</span>
+              </label>
+            </div>
+          </div>
+        </details>
+      </div>
+      <div class="modal-actions">
+        <button class="modal-btn accept" id="clipboard-settings-close">✓ CLOSE</button>
       </div>
     </div>
   </div>
