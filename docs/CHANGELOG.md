@@ -2,6 +2,24 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
+## 2026-07-28 — Diseño: rediseño del esqueleto "dos apps en una" → **SPEC-shell-dos-apps.md (READY)**
+
+Sesión de diseño, **cero código de la app**. Se diseñó separar CLIPBOARD y DISPLAYS como dos apps dentro de un
+programa: **switch grande arriba** (reemplaza los botoncitos CLIP|DISP y el "← CLIPBOARD"), **un color por app**
+(Clipboard cyan / Displays violeta `#b45cff`; magenta = "lo elegido" en Displays), **barra por app** (Clipboard
+absorbe SCAN·QR·LOG·AJUSTES), estética de profundidad, y **ajustes en tres cajones** (App general / Clipboard /
+Displays). Se exploraron 3 direcciones internas con un workflow (diseño + crítica adversaria WIG) antes del pivot
+de Guido al marco top-level. Maqueta clickeable publicada como artifact y verificada con mock de `__TAURI__` +
+Playwright. El spec pasó por el subagente `redteam-spec` (5 huecos reales corregidos: token `--app-accent`
+inexistente / 222 cyan hardcodeados, plomería a nivel-modal del settings, reuso NO trivial de `switchSection`,
+riesgo de perder `.hud-btn`, `.desktop-only`/banners/magenta). **Aprobado por Guido → READY**; se construye en un
+chat nuevo. No toca backend, protocolo, ni el render por diff.
+
+### Added
+- **`docs/SPEC-shell-dos-apps.md`** (SPEC delta, READY): AGREGA / MODIFICA / NO SE TOCA del rediseño del esqueleto,
+  con el mecanismo de color acotado (`--app-accent` default cyan → violeta solo en Displays; retinte scopeado al
+  chrome nuevo + bloque Displays, no a toda la hoja) y criterios de aceptación con la regresión primero.
+
 ## 2026-07-27 (tarde) — Displays v2 Fase 4 "perfiles como escenas": IMPLEMENTADA + prerelease **v1.5.0-beta.1**
 
 Construida la Fase 4 entera siguiendo el spec (ahora archivado). Al aplicar un perfil, además de mover

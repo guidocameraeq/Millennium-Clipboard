@@ -2,7 +2,17 @@
 
 > ÚNICA fuente de pendientes del proyecto. Completado → SE BORRA (la historia vive en CHANGELOG y git). Header de 1 línea, sin narrativa de sesión.
 
-2026-07-27 — ver SESSION_HANDOFF.md
+2026-07-28 — ver SESSION_HANDOFF.md
+
+## 🟣 Rediseño "dos apps en una" — SPEC READY, a construir en chat nuevo
+- [ ] **Ejecutar `docs/SPEC-shell-dos-apps.md` (READY, aprobado 2026-07-28, pasó red-team).** Separar CLIPBOARD y
+  DISPLAYS como dos apps: switch grande arriba (reemplaza CLIP|DISP y "← CLIPBOARD"), un color por app (cyan /
+  violeta `#b45cff`), barra por app (SCAN·QR·LOG·AJUSTES dentro de Clipboard), profundidad, ajustes en 3 cajones
+  (⚙ APP / Clipboard / Displays). SOLO frontend (`src/index.html`, `src/styles.css`, `src/main.js`); respetar el
+  NO SE TOCA (backend, render por diff, protocolo, escapado, otros modales, banners, store). **Chat nuevo**:
+  `inicio — ejecutá el spec docs/SPEC-shell-dos-apps.md (está READY)`. Verificar visual con mock `__TAURI__` +
+  Playwright y confirmar look en un beta del CI. Maqueta de referencia: artifact `fd10323e-…` (ver HANDOFF).
+  **Rama**: se apoya en el frontend con Fase 4 → branchar desde `feat/displays-v2-fase4` o desde `main` post-merge.
 
 ## 🔵 Displays (SPEC-displays — misión activa; roadmap de fases en `docs/SPEC-displays.md`)
 - [ ] **Fase 3 — sub-checks físicos que faltan** (el núcleo ya se verificó en hardware el 2026-07-21: perfiles, lienzo, auto-revert, updater — ver CHANGELOG). Faltan, de paso en el próximo uso: (a) **cambiar el plazo del auto-revert desde AJUSTES** y ver que el próximo cambio lo use; (b) **enchufar/desenchufar** algo y ver la LISTA actualizarse **sola, sin apretar REFRESH** (el watcher `WM_DISPLAYCHANGE`); (c) **regresión**: transferencia/clipboard siguen igual y **CPU en reposo ~0% en el Task Manager**. Con estos, el SPEC-displays queda COMPLETO y se archiva.
