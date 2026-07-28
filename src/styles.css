@@ -247,11 +247,13 @@ html, body {
   background: linear-gradient(180deg,
     rgba(0, 240, 255, 0.06) 0%,
     rgba(0, 240, 255, 0.02) 100%);
-  border: 1px solid var(--neon-cyan-soft);
-  border-bottom-color: var(--neon-cyan-glow);
+  /* SPEC-shell: el marco del top bar vira con la app (cyan⇄violeta) vía
+     --app-accent. Por defecto = cyan (idéntico a hoy); solo cambia en Displays. */
+  border: 1px solid var(--app-accent-soft);
+  border-bottom-color: var(--app-accent-glow);
   box-shadow:
-    0 0 24px rgba(0, 240, 255, 0.06),
-    inset 0 -1px 0 var(--neon-cyan-glow);
+    0 0 24px var(--app-accent-soft),
+    inset 0 -1px 0 var(--app-accent-glow);
   position: relative;
 }
 
@@ -261,8 +263,8 @@ html, body {
   position: absolute;
   width: 12px;
   height: 12px;
-  border: 1px solid var(--neon-cyan);
-  box-shadow: 0 0 8px var(--neon-cyan-glow);
+  border: 1px solid var(--app-accent);
+  box-shadow: 0 0 8px var(--app-accent-glow);
 }
 .hud::before { top: -1px; left: -1px; border-right: none; border-bottom: none; }
 .hud::after  { top: -1px; right: -1px; border-left: none; border-bottom: none; }
@@ -358,14 +360,17 @@ html, body {
 }
 
 .hud-btn-glyph {
-  color: var(--neon-cyan);
-  text-shadow: 0 0 8px var(--neon-cyan-glow);
+  /* SPEC-shell: los glyphs de la barra viran con la app (--app-accent). El de
+     ⚙ APP se neutraliza aparte (.app-settings-btn) y los del switch llevan color
+     fijo por segmento (.app-switch), ambos con más especificidad. */
+  color: var(--app-accent);
+  text-shadow: 0 0 8px var(--app-accent-glow);
 }
 
 .hud-btn:hover {
-  border-color: var(--neon-cyan);
-  box-shadow: 0 0 16px var(--neon-cyan-glow), inset 0 0 12px rgba(0, 240, 255, 0.08);
-  color: var(--neon-cyan);
+  border-color: var(--app-accent);
+  box-shadow: 0 0 16px var(--app-accent-glow), inset 0 0 12px var(--app-accent-soft);
+  color: var(--app-accent);
 }
 
 .hud-btn:active {
@@ -1248,7 +1253,8 @@ html, body {
   gap: 24px;
   padding: 8px 16px;
   background: rgba(0, 240, 255, 0.04);
-  border: 1px solid var(--neon-cyan-soft);
+  /* SPEC-shell: la franja de estado es chrome → su borde vira con la app. */
+  border: 1px solid var(--app-accent-soft);
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 2px;
@@ -1270,7 +1276,7 @@ html, body {
 
 .status-text { color: var(--text-bright); }
 .status-key  { color: var(--text-dim); letter-spacing: 3px; }
-.status-val  { color: var(--neon-cyan); }
+.status-val  { color: var(--app-accent); } /* SPEC-shell: acento de la franja vira con la app */
 
 /* Sound toggle (custom switch) */
 .sound-toggle {
@@ -2956,7 +2962,7 @@ html.fx-off .status-item .status-dot { animation: none !important; }
   border: 1px solid var(--neon-cyan);
   box-shadow:
     0 0 48px var(--neon-cyan-glow),
-    inset 0 0 24px rgba(0, 240, 255, 0.06);
+    inset 0 0 24px var(--neon-cyan-soft); /* SPEC-shell: token en vez de cyan crudo → vira con la app */
 }
 
 .displays-list {
@@ -3541,7 +3547,7 @@ textarea.displays-scene-input {
   gap: 2px;
   padding: 4px;
   overflow: hidden;
-  background: rgba(0, 240, 255, 0.10);
+  background: var(--neon-cyan-soft); /* SPEC-shell: token → vira con la app */
   border: 1px solid var(--neon-cyan);
   color: var(--text-bright);
   cursor: grab;
@@ -3550,13 +3556,13 @@ textarea.displays-scene-input {
 }
 
 .displays-canvas-monitor:hover {
-  box-shadow: 0 0 8px rgba(0, 240, 255, 0.35);
+  box-shadow: 0 0 8px var(--neon-cyan-glow); /* SPEC-shell: token → vira con la app */
 }
 
 .displays-canvas-monitor.is-dragging {
   cursor: grabbing;
   z-index: 5;
-  box-shadow: 0 0 12px rgba(0, 240, 255, 0.55);
+  box-shadow: 0 0 12px var(--neon-cyan-glow); /* SPEC-shell: token → vira con la app */
 }
 
 .displays-canvas-monitor.is-primary {
@@ -3585,4 +3591,149 @@ textarea.displays-scene-input {
   gap: 8px;
   justify-content: flex-end;
   margin-top: 12px;
+}
+
+/* ==========================================================================
+   SHELL "DOS APPS EN UNA" (SPEC-shell) — switch héroe, barras por app,
+   tematización de Displays. Todo chrome NUEVO: usa --app-accent (cyan por
+   defecto, violeta en Displays vía body[data-app]).
+   ========================================================================== */
+
+/* --- Top bar: hud + barras por app, apilados ------------------------------ */
+.topbar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+/* El switch va al centro del hud; logo a la izquierda, ⚙ APP a la derecha. Se
+   fijan las columnas para que, cuando el switch está oculto (Android), ⚙ APP no
+   se corra al centro. */
+.hud-left  { grid-column: 1; }
+.hud-right { grid-column: 3; }
+
+/* --- Switch héroe CLIPBOARD / DISPLAYS ------------------------------------ */
+/* Conserva id/clase hud-sections (el reveal de Android y hudSectionBtns siguen
+   andando). "Vidrio profundo": pozo hundido (inset) + segmento activo que flota
+   y prende en SU color. Cada segmento con color fijo por --seg (aunque apagado).
+   Gana en especificidad al .hud-section-btn.is-active cyan de más arriba. */
+.app-switch {
+  display: flex;
+  gap: 0;
+  padding: 4px;
+  background: rgba(3, 6, 16, 0.72);
+  border: 1px solid var(--app-accent-soft);
+  box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.6);
+}
+.app-switch .hud-section-btn[data-section="clipboard"] {
+  --seg: var(--neon-cyan);
+  --seg-glow: var(--neon-cyan-glow);
+  --seg-soft: var(--neon-cyan-soft);
+}
+.app-switch .hud-section-btn[data-section="displays"] {
+  --seg: #b45cff;
+  --seg-glow: rgba(180, 92, 255, 0.5);
+  --seg-soft: rgba(180, 92, 255, 0.16);
+}
+.app-switch .hud-section-btn {
+  padding: 10px 26px;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-mute);
+  transition: color 0.18s ease-out, background 0.18s ease-out, box-shadow 0.18s ease-out;
+}
+.app-switch .hud-section-btn .hud-btn-glyph {
+  color: var(--seg);
+  text-shadow: 0 0 8px var(--seg-glow);
+  opacity: 0.85;
+}
+.app-switch .hud-section-btn:hover {
+  color: var(--text-bright);
+  border-color: var(--seg-soft);
+}
+.app-switch .hud-section-btn.is-active {
+  color: var(--seg);
+  background: linear-gradient(180deg, var(--bg-card-hi), rgba(10, 16, 34, 0.6));
+  border-color: var(--seg);
+  box-shadow: 0 0 18px var(--seg-glow), inset 0 1px 0 rgba(230, 251, 255, 0.08);
+  text-shadow: 0 0 12px var(--seg-glow);
+}
+.app-switch .hud-section-btn.is-active .hud-btn-glyph { opacity: 1; }
+
+/* --- Barras de herramientas por app --------------------------------------- */
+/* Solo una visible; swap por body[data-app] (mismo dato que tiñe el marco). En
+   el boot (sin data-app) se ve Clipboard. */
+.app-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 14px;
+  background: rgba(4, 8, 20, 0.45);
+  border: 1px solid var(--app-accent-soft);
+}
+.app-toolbar[data-bar="displays"] { display: none; }
+body[data-app="displays"] .app-toolbar[data-bar="clipboard"] { display: none; }
+body[data-app="displays"] .app-toolbar[data-bar="displays"] { display: flex; }
+
+.toolbar-actions { display: flex; align-items: center; gap: 8px; }
+.toolbar-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  letter-spacing: 2px;
+  color: var(--text-mute);
+}
+.toolbar-status .hud-btn-glyph {
+  color: var(--app-accent);
+  text-shadow: 0 0 8px var(--app-accent-glow);
+}
+.toolbar-status #displays-count { color: var(--text-bright); }
+
+/* --- ⚙ APP: botón neutro (ni cyan ni violeta) ----------------------------- */
+.hud-btn.app-settings-btn .hud-btn-glyph {
+  color: var(--text-mute);
+  text-shadow: none;
+}
+.hud-btn.app-settings-btn:hover {
+  border-color: var(--text-mute);
+  color: var(--text-bright);
+  box-shadow: none;
+}
+.hud-btn.app-settings-btn:hover .hud-btn-glyph { color: var(--text-bright); }
+
+/* --- Tematización de Displays: cyan → violeta, scopeada a #displays-section -- */
+/* Las custom properties heredan por posición en el DOM: redefinir --neon-cyan*
+   acá vira TODO lo que usa esos tokens dentro de la sección (incluido lo que
+   reusa de .modal-*/.card-corners) sin reescribir regla por regla. Fuera de la
+   sección, --neon-cyan queda intacto → Clipboard y los demás modales siguen
+   cyan. El banner #displays-pending (ámbar) vive en #app-banners, fuera de este
+   scope: no lo alcanza. */
+#displays-section {
+  --neon-cyan: var(--app-accent);
+  --neon-cyan-dim: var(--app-accent-dim);
+  --neon-cyan-glow: var(--app-accent-glow);
+  --neon-cyan-soft: var(--app-accent-soft);
+}
+/* Los .modal-btn que Displays reusa tienen fondos con cyan CRUDO (no token):
+   overrides scopeados para que también viren. */
+#displays-section .modal-btn:hover { background: var(--app-accent-soft); }
+#displays-section .modal-btn.accept { box-shadow: inset 0 0 12px var(--app-accent-soft); }
+#displays-section .modal-btn.accept:hover { background: var(--app-accent-soft); }
+
+/* --- Accesibilidad del chrome nuevo (criterio #8) ------------------------- */
+.hud-btn:focus-visible {
+  outline: 2px solid var(--app-accent);
+  outline-offset: 2px;
+}
+.app-switch .hud-section-btn:focus-visible { outline-color: var(--seg); }
+.hud-btn.app-settings-btn:focus-visible { outline-color: var(--text-mute); }
+
+@media (prefers-reduced-motion: reduce) {
+  .app-switch .hud-section-btn,
+  .hud-btn { transition: none; }
 }
