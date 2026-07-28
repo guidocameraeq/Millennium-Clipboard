@@ -3123,7 +3123,11 @@
     if (clipboardSectionEl) clipboardSectionEl.hidden = showDisplays;
     if (displaysSectionEl) displaysSectionEl.hidden = !showDisplays;
     hudSectionBtns.forEach((b) => {
-      b.classList.toggle('is-active', b.dataset.section === section);
+      const active = b.dataset.section === section;
+      b.classList.toggle('is-active', active);
+      // role="tab" del switch → mantener aria-selected en sync para lectores de
+      // pantalla (SPEC-shell: si no, anuncian "pestaña" pero nunca "seleccionada").
+      b.setAttribute('aria-selected', active ? 'true' : 'false');
     });
     if (showDisplays) enterDisplaysSection();
     else leaveDisplaysSection();

@@ -2052,6 +2052,25 @@ html.is-mobile .hud-btn-glyph { font-size: 14px !important; margin-right: 0 !imp
    resto. El :not([hidden]) es clave: sin él, este !important le ganaría al
    .hud-sections[hidden]{display:none} y en Android reaparecerían los botones. */
 html.is-mobile .hud-sections:not([hidden]) { display: contents !important; }
+/* SPEC-shell: el switch héroe CONSERVA la clase vieja hud-sections, pero ya NO es
+   el wrapper chico CLIP|DISP dentro de .hud-right — es el eje central del hud, con
+   su "pozo de vidrio". Las dos reglas is-mobile de arriba (el display:contents que
+   disolvía el wrapper viejo, y el .hud-btn column/9px) lo desarmarían. Se re-afirma
+   su caja y sus segmentos. Sólo aplica a un desktop NO-Android con la ventana
+   angosta o táctil (en Android el switch queda [hidden] y esto no lo toca). Mismo
+   peso que la regla de arriba pero va después → gana; los segmentos usan !important
+   para vencer al .hud-btn de mobile (que también es !important). */
+html.is-mobile .app-switch:not([hidden]) {
+  display: flex !important;
+  width: 100% !important;
+}
+html.is-mobile .app-switch .hud-section-btn {
+  flex: 1 1 0 !important;
+  flex-direction: row !important;
+  padding: 10px 12px !important;
+  font-size: 12px !important;
+  min-height: 44px !important;
+}
 
 html.is-mobile .grid {
   display: flex !important;
@@ -3724,6 +3743,12 @@ body[data-app="displays"] .app-toolbar[data-bar="displays"] { display: flex; }
 #displays-section .modal-btn:hover { background: var(--app-accent-soft); }
 #displays-section .modal-btn.accept { box-shadow: inset 0 0 12px var(--app-accent-soft); }
 #displays-section .modal-btn.accept:hover { background: var(--app-accent-soft); }
+/* El único sound-toggle dentro de la sección (atajos, pestaña AJUSTES) tiene el
+   relleno del riel con cyan CRUDO (no token, styles.css .sound-track base + :checked)
+   → el override de tokens no lo alcanza. Se vira el relleno aparte para que el
+   control quede 100% violeta (borde/thumb/glow ya viran por token). */
+#displays-section .sound-track,
+#displays-section .sound-toggle input:checked + .sound-track { background: var(--app-accent-soft); }
 
 /* --- Accesibilidad del chrome nuevo (criterio #8) ------------------------- */
 .hud-btn:focus-visible {

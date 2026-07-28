@@ -43,11 +43,11 @@
              (displaysEnabled, userAgent — NO .desktop-only, que se activa también
              por ventana angosta); en Android queda oculto → app solo-Clipboard. -->
         <div class="hud-sections app-switch" id="hud-sections" hidden role="tablist" aria-label="Cambiar de app">
-          <button class="hud-btn hud-section-btn is-active" type="button" role="tab"
+          <button class="hud-btn hud-section-btn is-active" type="button" role="tab" aria-selected="true"
                   data-action="section-clipboard" data-section="clipboard" title="Portapapeles">
             <span class="hud-btn-glyph">▦</span>CLIPBOARD
           </button>
-          <button class="hud-btn hud-section-btn" type="button" role="tab" id="hud-displays-btn"
+          <button class="hud-btn hud-section-btn" type="button" role="tab" aria-selected="false" id="hud-displays-btn"
                   data-action="section-displays" data-section="displays" title="Monitores conectados">
             <span class="hud-btn-glyph">▤</span>DISPLAYS
           </button>
