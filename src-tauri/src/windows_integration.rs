@@ -18,7 +18,7 @@
 use std::path::Path;
 
 const AUMID: &str = "com.guidocameraeq.millennium";
-const DISPLAY_NAME: &str = "Millennium Clipboard";
+const DISPLAY_NAME: &str = "Millennium";
 
 /// Register the AUMID so Windows treats this portable .exe as a
 /// "real" app for the purposes of toast notifications.

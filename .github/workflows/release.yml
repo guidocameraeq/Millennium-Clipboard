@@ -165,7 +165,7 @@ jobs:
           EOF
 
           gh release create "$TAG" "$EXE" \
-            --title "Millennium Clipboard $TAG" \
+            --title "Millennium $TAG" \
             --notes-file notes.md \
             $PRERELEASE
 

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Millennium Clipboard",
+  "productName": "Millennium",
   "version": "1.5.0-beta.2",
   "identifier": "com.guidocameraeq.millennium",
   "build": {
@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Millennium Clipboard // GRID",
+        "title": "Millennium // GRID",
         "width": 1080,
         "height": 720,
         "minWidth": 720,
