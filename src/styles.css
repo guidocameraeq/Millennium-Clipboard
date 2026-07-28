@@ -3707,12 +3707,12 @@ body[data-app="displays"] .app-toolbar[data-bar="displays"] { display: flex; }
 .hud-btn.app-settings-btn:hover .hud-btn-glyph { color: var(--text-bright); }
 
 /* --- Tematización de Displays: cyan → violeta, scopeada a #displays-section -- */
-/* Las custom properties heredan por posición en el DOM: redefinir --neon-cyan*
-   acá vira TODO lo que usa esos tokens dentro de la sección (incluido lo que
-   reusa de .modal-*/.card-corners) sin reescribir regla por regla. Fuera de la
-   sección, --neon-cyan queda intacto → Clipboard y los demás modales siguen
-   cyan. El banner #displays-pending (ámbar) vive en #app-banners, fuera de este
-   scope: no lo alcanza. */
+/* Las custom properties heredan por posición en el DOM: redefinir los tokens
+   --neon-cyan acá vira TODO lo que los usa dentro de la sección (incluido lo que
+   reusa de las clases modal y card-corners) sin reescribir regla por regla.
+   Fuera de la sección, --neon-cyan queda intacto → Clipboard y los demás modales
+   siguen cyan. El banner #displays-pending (ámbar) vive en #app-banners, fuera
+   de este scope: no lo alcanza. */
 #displays-section {
   --neon-cyan: var(--app-accent);
   --neon-cyan-dim: var(--app-accent-dim);
