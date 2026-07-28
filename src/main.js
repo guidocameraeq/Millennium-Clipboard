@@ -1106,6 +1106,10 @@
         switchSection('clipboard');
       } else if (action === 'section-displays') {
         switchSection('displays');
+      } else if (action === 'displays-refresh') {
+        // REFRESH de la barra de Displays (antes era un listener directo del
+        // botón dentro de la sección; movido al top bar por el SPEC-shell).
+        await loadDisplays();
       }
     });
   });
@@ -1647,7 +1651,10 @@
   const displaysEmpty = document.getElementById('displays-empty');
   const displaysMockWarning = document.getElementById('displays-mock-warning');
   const displaysRefreshBtn = document.getElementById('displays-refresh');
-  const displaysCloseBtn = document.getElementById('displays-close');
+  // #displays-close se eliminó (SPEC-shell): el switch del top bar cumple "volver
+  // a Clipboard". REFRESH pasó a la barra de Displays y se maneja por el dispatch
+  // genérico de .hud-btn (data-action="displays-refresh"); displaysRefreshBtn se
+  // conserva solo para el foco al entrar a la sección (enterDisplaysSection).
   const displaysPendingBar = document.getElementById('displays-pending');
   const displaysPendingText = document.getElementById('displays-pending-text');
   const displaysConfirmBtn = document.getElementById('displays-confirm');
@@ -3167,13 +3174,9 @@
     cancelShortcutCapture();
   }
 
-  if (displaysCloseBtn) displaysCloseBtn.addEventListener('click', () => switchSection('clipboard'));
-  if (displaysRefreshBtn) {
-    displaysRefreshBtn.addEventListener('click', async () => {
-      blip(880, 0.06);
-      await loadDisplays();
-    });
-  }
+  // #displays-close ya no existe (switch) y REFRESH se maneja por el dispatch
+  // genérico de .hud-btn (data-action="displays-refresh", más abajo el blip ya lo
+  // hace ese handler). Acá quedan solo CONFIRMAR/REVERTIR del banner global.
   if (displaysConfirmBtn) {
     displaysConfirmBtn.addEventListener('click', () => {
       blip(1100, 0.05);

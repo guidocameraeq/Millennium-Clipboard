@@ -25,55 +25,91 @@
 
   <div class="app">
     <!-- TOP HUD ============================================================ -->
-    <header class="hud">
-      <div class="hud-left">
-        <div class="logo">
-          <span class="logo-mark">◣◢</span>
-          <span class="logo-text">MILLENNIUM</span>
-          <span class="logo-sub">CLIPBOARD // <span id="hud-version">v0.0</span></span>
+    <div class="topbar">
+      <header class="hud">
+        <div class="hud-left">
+          <div class="logo">
+            <span class="logo-mark">◣◢</span>
+            <span class="logo-text">MILLENNIUM</span>
+            <span class="logo-sub">CLIPBOARD // <span id="hud-version">v0.0</span></span>
+          </div>
         </div>
-      </div>
-      <div class="hud-center">
-        <div class="hud-stat">
-          <span class="hud-label">HOST</span>
-          <span class="hud-value" id="hud-host">—</span>
-        </div>
-        <div class="hud-stat">
-          <span class="hud-label">NODE</span>
-          <span class="hud-value mono" id="hud-ip">—</span>
-        </div>
-      </div>
-      <div class="hud-right">
-        <button class="hud-btn" data-action="refresh" title="Rescan network">
-          <span class="hud-btn-glyph">↻</span>SCAN
-        </button>
-        <button class="hud-btn" data-action="history" title="Past transfers">
-          <span class="hud-btn-glyph">≡</span>LOG
-        </button>
-        <button class="hud-btn" data-action="qr" title="QR pairing">
-          <span class="hud-btn-glyph">▣</span>QR
-        </button>
-        <!-- Pestañas de nivel superior CLIPBOARD | DISPLAYS (Displays v2 Fase 2).
-             Absorben el viejo botón DISP: navegan de sección, no abren un modal.
-             Arranca hidden y lo revela main.js solo fuera de Android (el módulo de
-             monitores es Windows-only): en Android el grupo entero desaparece y la
-             app queda solo-clipboard, sin pestaña muerta. userAgent, NO
-             .desktop-only — esa clase depende de html.is-mobile, que pre.js activa
-             también por ancho<=900 o pantalla táctil, así que una ventana angosta
-             en Windows perdería las pestañas. -->
-        <div class="hud-sections" id="hud-sections" hidden>
-          <button class="hud-btn hud-section-btn is-active" data-action="section-clipboard" data-section="clipboard" title="Portapapeles">
-            <span class="hud-btn-glyph">▦</span>CLIP
+
+        <!-- Switch héroe "dos apps en una" (SPEC-shell). Reemplaza los botoncitos
+             CLIP|DISP y el viejo "← CLIPBOARD". Conserva id="hud-sections" y, por
+             segmento, las TRES cosas que lo hacen andar: .hud-btn (el click es
+             por-elemento, main.js ~1079), data-action (el dispatch) y data-section
+             (el resaltado del activo). main.js lo revela solo fuera de Android
+             (displaysEnabled, userAgent — NO .desktop-only, que se activa también
+             por ventana angosta); en Android queda oculto → app solo-Clipboard. -->
+        <div class="hud-sections app-switch" id="hud-sections" hidden role="tablist" aria-label="Cambiar de app">
+          <button class="hud-btn hud-section-btn is-active" type="button" role="tab"
+                  data-action="section-clipboard" data-section="clipboard" title="Portapapeles">
+            <span class="hud-btn-glyph">▦</span>CLIPBOARD
           </button>
-          <button class="hud-btn hud-section-btn" data-action="section-displays" data-section="displays" id="hud-displays-btn" title="Monitores conectados">
-            <span class="hud-btn-glyph">▤</span>DISP
+          <button class="hud-btn hud-section-btn" type="button" role="tab" id="hud-displays-btn"
+                  data-action="section-displays" data-section="displays" title="Monitores conectados">
+            <span class="hud-btn-glyph">▤</span>DISPLAYS
           </button>
         </div>
-        <button class="hud-btn" data-action="settings" title="Settings">
-          <span class="hud-btn-glyph">⚙</span>CONF
-        </button>
+
+        <div class="hud-right">
+          <!-- ⚙ APP: ajustes de la app (neutro, ni cyan ni violeta). -->
+          <button class="hud-btn app-settings-btn" data-action="app-settings"
+                  title="Ajustes de la app — actualizador, arranque, apariencia">
+            <span class="hud-btn-glyph">⚙</span>APP
+          </button>
+        </div>
+      </header>
+
+      <!-- Barra de herramientas POR APP (SPEC-shell). Solo una se ve a la vez; el
+           swap es puro CSS por body[data-app] (mismo dato que tiñe el marco), así
+           no puede desincronizarse del color ni necesita JS extra. En el boot (sin
+           data-app) se ve la de Clipboard. -->
+      <div class="app-toolbars">
+        <!-- CLIPBOARD: identidad de red (HOST/NODE) + acciones del portapapeles. -->
+        <div class="app-toolbar" data-bar="clipboard">
+          <div class="hud-center">
+            <div class="hud-stat">
+              <span class="hud-label">HOST</span>
+              <span class="hud-value" id="hud-host">—</span>
+            </div>
+            <div class="hud-stat">
+              <span class="hud-label">NODE</span>
+              <span class="hud-value mono" id="hud-ip">—</span>
+            </div>
+          </div>
+          <div class="toolbar-actions">
+            <button class="hud-btn" data-action="refresh" title="Rescan network">
+              <span class="hud-btn-glyph">↻</span>SCAN
+            </button>
+            <button class="hud-btn" data-action="history" title="Past transfers">
+              <span class="hud-btn-glyph">≡</span>LOG
+            </button>
+            <button class="hud-btn" data-action="qr" title="QR pairing">
+              <span class="hud-btn-glyph">▣</span>QR
+            </button>
+            <button class="hud-btn" data-action="settings" title="Ajustes de Clipboard">
+              <span class="hud-btn-glyph">⚙</span>CONF
+            </button>
+          </div>
+        </div>
+
+        <!-- DISPLAYS: contador de monitores + REFRESH (movidos desde adentro de la
+             sección; conservan su id, el JS los referencia por id). -->
+        <div class="app-toolbar" data-bar="displays">
+          <div class="toolbar-status mono">
+            <span class="hud-btn-glyph">▤</span>
+            <span id="displays-count">—</span>
+          </div>
+          <div class="toolbar-actions">
+            <button class="hud-btn" id="displays-refresh" data-action="displays-refresh" title="Releer monitores">
+              <span class="hud-btn-glyph">↻</span>REFRESH
+            </button>
+          </div>
+        </div>
       </div>
-    </header>
+    </div>
 
     <!-- MAIN GRID (sección CLIPBOARD) ====================================== -->
     <main class="grid" id="clipboard-section">
@@ -199,7 +235,8 @@
         <header class="modal-head">
           <span class="modal-glyph">▤</span>
           <span class="modal-title">DISPLAYS</span>
-          <span class="mono" id="displays-count" style="margin-left:auto;font-size:10px;opacity:0.6">—</span>
+          <!-- El contador (#displays-count) se movió a la barra de Displays del
+               top bar (SPEC-shell). Su id no cambió; el JS lo sigue tomando por id. -->
         </header>
         <!-- Pestañas. Las acciones viven abajo, FUERA de los panes. -->
         <nav class="displays-tabs" id="displays-tabs" role="tablist">
@@ -287,10 +324,9 @@
             </div>
           </div>
         </div>
-        <div class="modal-actions">
-          <button class="modal-btn small" id="displays-refresh">↻ REFRESH</button>
-          <button class="modal-btn accept" id="displays-close">← CLIPBOARD</button>
-        </div>
+        <!-- Las acciones de marco (REFRESH + volver) se fueron al top bar
+             (SPEC-shell): REFRESH vive en la barra de Displays y el switch cumple
+             lo que hacía "← CLIPBOARD". Por eso ya no hay .modal-actions acá. -->
       </div>
     </section>
 
