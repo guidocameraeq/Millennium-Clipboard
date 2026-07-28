@@ -3080,6 +3080,12 @@
     if (section === 'displays' && !displaysEnabled) return; // Android: no existe
     if (state.section === section) return;                  // ya estás ahí
     state.section = section;
+    // Color por app (SPEC-shell): marca el acento activo en <body> → el chrome y
+    // el bloque Displays viran cyan⇄violeta por CSS (var(--app-accent)). El boot
+    // no pasa por acá (early-return), pero no hace falta: sin data-app, :root ya
+    // da cyan (Clipboard). Al volver a 'clipboard', data-app deja de matchear la
+    // regla violeta y cae al cyan de :root.
+    document.body.dataset.app = section;
     const showDisplays = section === 'displays';
     if (clipboardSectionEl) clipboardSectionEl.hidden = showDisplays;
     if (displaysSectionEl) displaysSectionEl.hidden = !showDisplays;

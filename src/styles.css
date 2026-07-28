@@ -49,6 +49,17 @@
   --neon-cyan-glow: rgba(0, 240, 255, 0.55);
   --neon-cyan-soft: rgba(0, 240, 255, 0.12);
 
+  /* Color por app (SPEC-shell "dos apps en una"). Token semántico del acento
+     activo. Por DEFECTO = cyan: el boot arranca teñido de Clipboard sin que el
+     JS tenga que setear nada (switchSection no corre al arrancar). Solo la app
+     Displays lo redefine a violeta (regla body[data-app="displays"] abajo). Lo
+     usa SOLO el chrome nuevo (switch, barras por app, marco) y el bloque de
+     reglas de Displays; los 222 --neon-cyan del resto de la hoja NO se tocan. */
+  --app-accent: var(--neon-cyan);
+  --app-accent-dim: var(--neon-cyan-dim);
+  --app-accent-glow: var(--neon-cyan-glow);
+  --app-accent-soft: var(--neon-cyan-soft);
+
   --neon-magenta: #ff2bd6;
   --neon-magenta-glow: rgba(255, 43, 214, 0.45);
 
@@ -68,6 +79,19 @@
   --font-logo: 'Audiowide', 'Orbitron', sans-serif;
   --font-mono: 'JetBrains Mono', 'Share Tech Mono', 'Consolas', monospace;
   --font-tech: 'Share Tech Mono', 'JetBrains Mono', monospace;
+}
+
+/* La app Displays vira el acento a violeta. #b45cff pasa AA (≈5.7:1) como texto
+   sobre los fondos oscuros de Displays, así que sirve de acento completo (texto,
+   bordes y glow). El magenta (--neon-magenta) sigue marcando "lo elegido" DENTRO
+   de Displays; esto es solo el color del marco. La franja del resto de la app
+   (Clipboard, modales generales, banners) queda en cyan porque no usa
+   --app-accent. */
+body[data-app="displays"] {
+  --app-accent: #b45cff;
+  --app-accent-dim: #7a3db8;
+  --app-accent-glow: rgba(180, 92, 255, 0.5);
+  --app-accent-soft: rgba(180, 92, 255, 0.14);
 }
 
 * { box-sizing: border-box; }
