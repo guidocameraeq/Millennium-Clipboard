@@ -1,6 +1,6 @@
 # SPEC: "Dos apps en una" — marco Clipboard ⇄ Displays — Millennium Clipboard
 Rediseña el esqueleto de la app: un switch grande arriba separa Clipboard y Displays como dos apps, cada una con su color y su barra; los ajustes se parten en tres cajones. Solo frontend (HTML/CSS/JS de chrome), cero backend.
-- Estado: READY (aprobado por Guido 2026-07-28; pasó red-team)
+- Estado: **IMPLEMENTADA 2026-07-28** (frontend completo, verificado con Playwright + review adversario; prerelease `v1.5.0-beta.2` para que Guido lo pruebe por el updater). Archivada. El release FINAL + merge a `main` quedan pendientes de que la beta ande bien.
 - Fecha: 2026-07-28
 
 ## Por qué (el dolor)

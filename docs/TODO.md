@@ -4,15 +4,18 @@
 
 2026-07-28 — ver SESSION_HANDOFF.md
 
-## 🟣 Rediseño "dos apps en una" — SPEC READY, a construir en chat nuevo
-- [ ] **Ejecutar `docs/SPEC-shell-dos-apps.md` (READY, aprobado 2026-07-28, pasó red-team).** Separar CLIPBOARD y
-  DISPLAYS como dos apps: switch grande arriba (reemplaza CLIP|DISP y "← CLIPBOARD"), un color por app (cyan /
-  violeta `#b45cff`), barra por app (SCAN·QR·LOG·AJUSTES dentro de Clipboard), profundidad, ajustes en 3 cajones
-  (⚙ APP / Clipboard / Displays). SOLO frontend (`src/index.html`, `src/styles.css`, `src/main.js`); respetar el
-  NO SE TOCA (backend, render por diff, protocolo, escapado, otros modales, banners, store). **Chat nuevo**:
-  `inicio — ejecutá el spec docs/SPEC-shell-dos-apps.md (está READY)`. Verificar visual con mock `__TAURI__` +
-  Playwright y confirmar look en un beta del CI. Maqueta de referencia: artifact `fd10323e-…` (ver HANDOFF).
-  **Rama**: se apoya en el frontend con Fase 4 → branchar desde `feat/displays-v2-fase4` o desde `main` post-merge.
+## 🟣 Shell "dos apps en una" — IMPLEMENTADO; probando beta `v1.5.0-beta.2`
+
+> Construido y verificado (SPEC archivado, ver CHANGELOG). Rama `feat/shell-dos-apps` (sale de `feat/displays-v2-fase4`), NO mergeada. La beta incluye Fase 4.
+
+- [ ] **Guido prueba la beta `v1.5.0-beta.2` por el updater.** ⚠️ **Antes de mirar**: cerrar la app del todo +
+  borrar `%LOCALAPPDATA%\com.guidocameraeq.millennium\EBWebView` + reabrir (bug de caché del WebView2, ver 🟠) —
+  si no, ve la UI VIEJA y parece que el update no aplicó. Mirar: el **switch grande** y que el marco vire
+  cyan⇄violeta; que SCAN·LOG·QR·CONF y los **3 cajones** (⚙ APP / Clipboard / Displays) hagan lo de antes; que
+  **nada de lo de siempre se rompió** (transferir/recibir texto y archivos, favoritos, todo Displays por dentro).
+- [ ] **Si la beta anda → release final + merge a `main`.** Decidir la versión final (shell y Fase 4 conviven en
+  `feat/shell-dos-apps`; pueden converger en `v1.5.0` o separarse). Bump SIN sufijo en Cargo.toml + tauri.conf.json
+  + Cargo.lock + tag → la landing lo sirve; luego FF/merge a `main`. Si NO anda → chat nuevo, arreglar sobre la rama.
 
 ## 🔵 Displays (SPEC-displays — misión activa; roadmap de fases en `docs/SPEC-displays.md`)
 - [ ] **Fase 3 — sub-checks físicos que faltan** (el núcleo ya se verificó en hardware el 2026-07-21: perfiles, lienzo, auto-revert, updater — ver CHANGELOG). Faltan, de paso en el próximo uso: (a) **cambiar el plazo del auto-revert desde AJUSTES** y ver que el próximo cambio lo use; (b) **enchufar/desenchufar** algo y ver la LISTA actualizarse **sola, sin apretar REFRESH** (el watcher `WM_DISPLAYCHANGE`); (c) **regresión**: transferencia/clipboard siguen igual y **CPU en reposo ~0% en el Task Manager**. Con estos, el SPEC-displays queda COMPLETO y se archiva.
@@ -24,8 +27,9 @@
 
 > Fase 1 ("perfiles con superpoderes"), Fase 2 (rediseño: displays como sección) y Fase 3 (audio por
 > perfil) IMPLEMENTADAS, verificadas en hardware y releaseadas (v1.3.0 y v1.4.0); specs archivados.
-> **Fase 4 ("perfiles como escenas") IMPLEMENTADA y en prerelease `v1.5.0-beta.1`** — pendiente terminar
-> la verificación de hardware y el release final (ver los items de abajo). Ver SESSION_HANDOFF.md.
+> **Fase 4 ("perfiles como escenas") IMPLEMENTADA** — pendiente terminar la verificación de hardware y el
+> release final (ver los items de abajo). **La beta que la lleva ahora es `v1.5.0-beta.2`** (la rama del shell
+> `feat/shell-dos-apps` sale de la de Fase 4 → beta.2 = Fase 4 + shell; `beta.1` quedó superada). Ver SESSION_HANDOFF.md.
 
 - [ ] **[Más adelante] Resolución/refresh por perfil** (un perfil pone la TV en 1080p, otro en 4K).
   `OutputConfig.resolution`/`refresh_rate_mhz` ya se guardan y aplican; falta capturar/editar la

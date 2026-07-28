@@ -2,6 +2,52 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
+## 2026-07-28 (tarde) — Shell "dos apps en una": IMPLEMENTADO + prerelease **v1.5.0-beta.2**
+
+Construido el rediseño del esqueleto siguiendo `SPEC-shell-dos-apps.md` (ahora archivado). **SOLO frontend**
+(`src/index.html`, `src/styles.css`, `src/main.js`); cero cambios de código Rust, protocolo, render por diff ni
+escapado. CLIPBOARD y DISPLAYS pasan a ser dos apps con un **switch grande** arriba (reemplaza los botoncitos
+CLIP|DISP y el "← CLIPBOARD"), **un color por app** que tiñe el marco entero (cyan / violeta `#b45cff`; magenta =
+"lo elegido" en Displays), **barra por app** (Clipboard: HOST/NODE + SCAN·LOG·QR·CONF; Displays: contador +
+REFRESH) y **ajustes en tres cajones** (⚙ APP general / Clipboard / la pestaña AJUSTES de Displays). Verificado
+E2E con mock de `__TAURI__` + Playwright (los **9 criterios** del spec, 7 capturas) y pasado por un **review
+adversario** (workflow de 10 agentes, 6 dimensiones) que encontró 3 defectos reales, todos arreglados. **CI**:
+prerelease `v1.5.0-beta.2` publicada con `.exe` + digest (incluye Fase 4; el updater la ofrece sobre `beta.1`).
+**NO mergeado a `main`** — release final + merge quedan para cuando Guido pruebe la beta.
+
+### Added
+- **Token semántico `--app-accent`** (`:root`, = valor de `--neon-cyan*` → cyan por defecto): el boot arranca
+  teñido sin tocar JS. `body[data-app="displays"]` lo redefine a violeta `#b45cff`; `switchSection()` marca
+  `body.dataset.app`. Sólo lo usa el chrome nuevo (switch, barras, marco, franja) y el bloque de Displays.
+- **Switch héroe** CLIPBOARD/DISPLAYS ("Vidrio Profundo": pozo hundido + segmento activo que flota y prende en su
+  color; cada segmento con color fijo). Conserva `id=hud-sections` + `.hud-btn`/`data-action`/`data-section` por
+  segmento (el reveal de Android y `hudSectionBtns` siguen andando). `role=tab` + `aria-selected` en sync.
+- **Barras de herramientas por app** bajo el switch; swap puro CSS por `body[data-app]` (sin JS extra, no se
+  desincroniza del color). Botón neutro **⚙ APP** (ajustes de la app).
+- **Dos paneles de ajustes**: `#app-settings-modal` (apariencia/FX + arranque/bandeja desktop-only + updater) y
+  `#clipboard-settings-modal` (descargas + auto-aceptar + notificaciones desktop-only), cada uno con su plomería a
+  nivel-modal. Mismo store/backend/claves; los ajustes sólo se re-ubican.
+
+### Changed
+- **Tematización de Displays cyan→violeta** por override de tokens scopeado a `#displays-section`
+  (`--neon-cyan* := --app-accent*`), en vez de reescribir los 222 `--neon-cyan` de la hoja. Fuera de la sección
+  (Clipboard, otros modales, banners de `#app-banners`) todo queda cyan/ámbar intacto.
+- **Marco del top bar y franja de estado** viran con la app (`--app-accent`). El contador de Displays y REFRESH se
+  movieron a la barra de Displays; `#displays-count`/`#displays-refresh` conservan su id.
+
+### Removed
+- **Botón `#displays-close` ("← CLIPBOARD")**: el switch cumple la vuelta a Clipboard. REFRESH pasó del listener
+  directo al dispatch genérico de `.hud-btn` (`data-action="displays-refresh"`).
+
+### Fixed (hallazgos del review adversario)
+- **Switch desarmado en desktop angosto/táctil**: al conservar la clase vieja `hud-sections`, heredaba las reglas
+  `is-mobile` del wrapper CLIP|DISP (`display:contents` + `.hud-btn` column/9px) y perdía su caja cuando se mostraba
+  a ≤900px o con puntero táctil (no-Android). Override `is-mobile` scopeado a `.app-switch`.
+- **Sound-toggle de Displays medio cyan**: el relleno del riel usaba cyan crudo (no token) → override scopeado a
+  `#displays-section .sound-track`.
+- **`aria-selected` faltante** en el switch (`role=tab` a medias): agregado en el HTML inicial + sincronizado en
+  `switchSection`.
+
 ## 2026-07-28 — Diseño: rediseño del esqueleto "dos apps en una" → **SPEC-shell-dos-apps.md (READY)**
 
 Sesión de diseño, **cero código de la app**. Se diseñó separar CLIPBOARD y DISPLAYS como dos apps dentro de un
