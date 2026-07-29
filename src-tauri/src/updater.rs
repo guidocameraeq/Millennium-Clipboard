@@ -12,7 +12,7 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-const REPO: &str = "guidocameraeq/Millennium-Clipboard";
+const REPO: &str = "guidocameraeq/Millennium";
 
 /// Extrae el SHA-256 esperado del binario publicado en el body del release.
 /// Convención: una línea `sha256:<64 hex>` (case-insensitive) en las notas.
