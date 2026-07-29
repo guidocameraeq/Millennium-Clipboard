@@ -2,20 +2,15 @@
 
 > ÚNICA fuente de pendientes del proyecto. Completado → SE BORRA (la historia vive en CHANGELOG y git). Header de 1 línea, sin narrativa de sesión.
 
-2026-07-28 — ver SESSION_HANDOFF.md
+2026-07-29 — ver SESSION_HANDOFF.md
 
-## 🟣 Shell "dos apps en una" — IMPLEMENTADO; probando beta `v1.5.0-beta.2`
+## 🟢 Partición + rebrand + shell/Fase 4 finales — HECHO (v1.5.1 / v1.5.2)
 
-> Construido y verificado (SPEC archivado, ver CHANGELOG). Rama `feat/shell-dos-apps` (sale de `feat/displays-v2-fase4`), NO mergeada. La beta incluye Fase 4.
+> El shell "dos apps en una" y Displays Fase 4 se FINALIZARON en el release **v1.5.1** (merge a `main`); el proyecto se partió en **2 repos** (`Millennium` combo + `MillenniumClipboard`) y cada uno quedó pulido; cosmética en **v1.5.2**. Ver SESSION_HANDOFF + CHANGELOG. Specs archivados.
 
-- [ ] **Guido prueba la beta `v1.5.0-beta.2` por el updater.** ⚠️ **Antes de mirar**: cerrar la app del todo +
-  borrar `%LOCALAPPDATA%\com.guidocameraeq.millennium\EBWebView` + reabrir (bug de caché del WebView2, ver 🟠) —
-  si no, ve la UI VIEJA y parece que el update no aplicó. Mirar: el **switch grande** y que el marco vire
-  cyan⇄violeta; que SCAN·LOG·QR·CONF y los **3 cajones** (⚙ APP / Clipboard / Displays) hagan lo de antes; que
-  **nada de lo de siempre se rompió** (transferir/recibir texto y archivos, favoritos, todo Displays por dentro).
-- [ ] **Si la beta anda → release final + merge a `main`.** Decidir la versión final (shell y Fase 4 conviven en
-  `feat/shell-dos-apps`; pueden converger en `v1.5.0` o separarse). Bump SIN sufijo en Cargo.toml + tauri.conf.json
-  + Cargo.lock + tag → la landing lo sirve; luego FF/merge a `main`. Si NO anda → chat nuevo, arreglar sobre la rama.
+- [ ] **[Guido] Instalar `v1.5.2`** por el updater (le llega solo, sin descarga manual). ⚠️ Si ve el logo/UI VIEJA tras actualizar → caché del WebView2 (ver 🟠): cerrar app → borrar `%LOCALAPPDATA%\com.guidocameraeq.millennium\EBWebView` → reabrir.
+- [ ] **[Diferido] Rename de Android a "Millennium"** (`strings.xml` app_name/título, `MillenniumService.kt` notificación, nombre del `.apk` en `lib.rs`). NO viaja en el `.exe` (otra tubería de build) → hacer cuando se compile un APK nuevo. Es lo único del rebrand que falta.
+- [ ] **[Opcional, no-release]** Reemplazar la captura del showcase de la landing del combo por una real del setup de Guido · revertir el chiste "cortapapeles del conurbano" en el About del combo si lo quiere.
 
 ## 🔵 Displays (SPEC-displays — misión activa; roadmap de fases en `docs/SPEC-displays.md`)
 - [ ] **Fase 3 — sub-checks físicos que faltan** (el núcleo ya se verificó en hardware el 2026-07-21: perfiles, lienzo, auto-revert, updater — ver CHANGELOG). Faltan, de paso en el próximo uso: (a) **cambiar el plazo del auto-revert desde AJUSTES** y ver que el próximo cambio lo use; (b) **enchufar/desenchufar** algo y ver la LISTA actualizarse **sola, sin apretar REFRESH** (el watcher `WM_DISPLAYCHANGE`); (c) **regresión**: transferencia/clipboard siguen igual y **CPU en reposo ~0% en el Task Manager**. Con estos, el SPEC-displays queda COMPLETO y se archiva.
@@ -23,25 +18,20 @@
 - [ ] **El CI corre ante cualquier push a `feat/displays`, incluidos los de solo documentación** (6,5 min desperdiciados por cada `/cierre`). Agregar `paths-ignore: ['docs/**', '**.md']` al trigger de `.github/workflows/build.yml`. Chico; hacerlo de paso en la próxima sesión.
 - [ ] **CPU en reposo tras la Fase 1**: no se verificó en Task Manager. El diff no agrega poll ni timer (la enumeración corre solo al abrir el modal o apretar REFRESH) ⇒ riesgo teórico, pero sin evidencia. Chequear de paso en la próxima corrida de la app.
 
-## 🟣 Displays v2 — Fase 1+2+3 release v1.4.0 · Fase 4 en beta v1.5.0-beta.1
+## 🟣 Displays v2 — Fase 1+2+3+4 RELEASEADAS (v1.4.0 → v1.5.1 final)
 
-> Fase 1 ("perfiles con superpoderes"), Fase 2 (rediseño: displays como sección) y Fase 3 (audio por
-> perfil) IMPLEMENTADAS, verificadas en hardware y releaseadas (v1.3.0 y v1.4.0); specs archivados.
-> **Fase 4 ("perfiles como escenas") IMPLEMENTADA** — pendiente terminar la verificación de hardware y el
-> release final (ver los items de abajo). **La beta que la lleva ahora es `v1.5.0-beta.2`** (la rama del shell
-> `feat/shell-dos-apps` sale de la de Fase 4 → beta.2 = Fase 4 + shell; `beta.1` quedó superada). Ver SESSION_HANDOFF.md.
+> Fase 1 ("perfiles con superpoderes"), Fase 2 (rediseño: displays como sección), Fase 3 (audio por
+> perfil) y **Fase 4 ("perfiles como escenas")** IMPLEMENTADAS y RELEASEADAS. Fase 4 salió FINAL en **v1.5.1**
+> (junto con el shell y el rebrand a Millennium). Specs archivados. Ver SESSION_HANDOFF.md.
 
 - [ ] **[Más adelante] Resolución/refresh por perfil** (un perfil pone la TV en 1080p, otro en 4K).
   `OutputConfig.resolution`/`refresh_rate_mhz` ya se guardan y aplican; falta capturar/editar la
   resolución por perfil en la UI. No urgente (Guido lo dijo explícito).
-- [ ] **Fase 4 "perfiles como escenas" — IMPLEMENTADA + beta `v1.5.0-beta.1`; falta verificación de hardware +
-  release final.** Spec archivado en `docs/archive/SPEC-displays-v2-fase4.md`. Código completo y verificado
-  local (28 tests vendor, harness Win/Linux, E2E Playwright, build CI verde). **En hardware (Guido): volumen +
-  Big Picture OK.** FALTAN de probar en hardware antes del release final: (3) Big Picture cae **en la TV**
+- [ ] **Fase 4 — verificar en USO REAL las acciones de escena** (shipearon en `v1.5.1` SIN toda la verificación de
+  hardware). Ya OK en hardware: volumen + Big Picture. FALTAN de mirar en el uso: (3) Big Picture cae **en la TV**
   (primaria); (5) **Chrome con esa cuenta** + link; (6) la **SALIDA** cierra Big Picture al volver (⚠
-  `steam://close/bigpicture` NO confirmado en Windows — plan B `Alt+Enter` / cierre manual); (7) auto-revert →
-  **no** se abre nada. **Si pasa → release final `v1.5.0`** (bump sin sufijo en Cargo.toml + tauri.conf.json +
-  Cargo.lock, tag `v1.5.0` → la landing lo sirve) + **FF de `feat/displays-v2-fase4` a `main`**.
+  `steam://close/bigpicture` NO confirmado en Windows — plan B `Alt+Enter` / cierre manual; **la landing publicita
+  "abre tu setup", NO "lo cierra"**); (7) auto-revert → **no** se abre nada. Si algo falla, es un fix chico sobre `main`.
 - [ ] **Fase 4 — review adversarial completo NO corrido** (se cortó por límite de sesión). La parte crítica
   (gating de la escena: no se pueden apilar 2 confirmaciones ⇒ `escena_pendiente` no queda colgada) se revisó a
   mano. Correr el sweep de 5 frentes o `/code-review ultra` si se quiere el belt-and-suspenders. Chico.

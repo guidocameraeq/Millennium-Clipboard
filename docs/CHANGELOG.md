@@ -2,6 +2,24 @@
 
 > Historia permanente. `/cierre` agrega una entrada AL TOPE en cada sesión. Orden descendente estricto, sin excepciones. Nada de versiones duplicadas en otros docs.
 
+## 2026-07-29 — Partición en 2 repos + debut **Millennium v1.5.1** + cosmética **v1.5.2**
+
+Se partió el proyecto en dos productos y se pulió cada uno. Puro repo/branding/plumbing, salvo el debut (que finalizó lo que estaba en beta) y la cosmética v1.5.2 (2 líneas). **Nada de la app diaria se rompió** — se actualizó por el updater de siempre en cada paso.
+
+### Added
+- **Repo nuevo `guidocameraeq/MillenniumClipboard`**: el clipboard limpio (v1.0.0 desde `5ffdfca`, 87 commits, SIN Displays), con su updater apuntándose a sí mismo, workflows del CI portados, landing propia (gh-pages), release v1.0.0 final, README + About de clipboard.
+- **Sección Displays en la landing del combo** (violeta `#b45cff`, 6 features + showcase con captura real vía mock+Playwright), bilingüe EN/ES (paridad 67=67).
+- **ADR-003** en el hub (partición; ahora son 3 repos: Millennium, MillenniumClipboard, Monarch).
+
+### Changed
+- **Repo renombrado** `Millennium-Clipboard` → `Millennium` en GitHub (la app instalada sigue por el redirect 301 permanente). El clipboard se llevó un nombre DISTINTO (`MillenniumClipboard`) a propósito → sin puerta irreversible (validado con red-team).
+- **Rebrand visible a "Millennium"** (release **v1.5.1** final): productName, título de ventana ("Millennium // GRID"), tooltip del tray, DisplayName de notificaciones, título del release. Este release también **finalizó el shell "dos apps en una" + Displays Fase 4** (que estaban en beta) y los mergeó a `main`.
+- **README + About del combo** pasan a representar el combo (Clipboard + Displays).
+- **Cosmética v1.5.2**: `updater.rs` const → `guidocameraeq/Millennium` (directo, sin depender del redirect); logo-sub `CLIPBOARD //` → `GRID //`.
+
+### NO se tocó
+- Binario `millennium-clipboard.exe`, identifier `com.guidocameraeq.millennium`, zombie-killer, motor de transferencia, protocolo, features.
+
 ## 2026-07-28 (tarde) — Shell "dos apps en una": IMPLEMENTADO + prerelease **v1.5.0-beta.2**
 
 Construido el rediseño del esqueleto siguiendo `SPEC-shell-dos-apps.md` (ahora archivado). **SOLO frontend**
