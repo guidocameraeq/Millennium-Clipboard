@@ -3,7 +3,7 @@
 **Share text, files and your clipboard between Windows and Android on the same Wi-Fi.**
 No cloud. No accounts. Nothing ever leaves your local network.
 
-[**⬇ Download for Windows**](https://github.com/guidocameraeq/Millennium-Clipboard/releases/latest) · [**🌐 Landing**](https://guidocameraeq.github.io/Millennium-Clipboard) · Windows 10/11 &amp; Android
+[**⬇ Download for Windows**](https://github.com/guidocameraeq/Millennium/releases/latest) · [**🌐 Landing**](https://guidocameraeq.github.io/Millennium) · Windows 10/11 &amp; Android
 
 ![Millennium Clipboard](assets/screenshot.png)
 
@@ -24,7 +24,7 @@ Everything runs on your local network. There is no server in the middle and no a
 
 ## Download
 
-Grab the latest `millennium-clipboard.exe` from [**Releases**](https://github.com/guidocameraeq/Millennium-Clipboard/releases/latest) — no installer, just run it. Both devices need to be on the same Wi-Fi network.
+Grab the latest `millennium-clipboard.exe` from [**Releases**](https://github.com/guidocameraeq/Millennium/releases/latest) — no installer, just run it. Both devices need to be on the same Wi-Fi network.
 
 ## Stack
 
